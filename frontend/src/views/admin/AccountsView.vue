@@ -236,7 +236,6 @@
           </template>
           <template #cell-name="{ row, value }">
             <div class="flex flex-col">
-              <span v-if="isPaidFallback(row.extra)" class="mb-1 self-start rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200" :title="t('admin.paidFallback.accountHint')">{{ t('admin.paidFallback.paid') }}</span>
               <HelpTooltip
                 v-if="accountHomepageUrl(row)"
                 :content="accountHomepageUrl(row)"
@@ -400,14 +399,13 @@
             />
           </template>
           <template #cell-priority="{ row }">
-            <div class="flex flex-col items-start gap-1">
-              <AccountPriorityCell
-                :account="row"
-                @updated="handleAccountUpdated"
-                @error="(message: string) => appStore.showError(message)"
-              />
-              <AccountFallbackCell :account="row" @updated="handleAccountUpdated" @error="(message: string) => appStore.showError(message)" />
-            </div>
+            <AccountFallbackCell v-if="isPaidFallback(row.extra)" :account="row" />
+            <AccountPriorityCell
+              v-else
+              :account="row"
+              @updated="handleAccountUpdated"
+              @error="(message: string) => appStore.showError(message)"
+            />
           </template>
           <template #header-scheduler_score="{ column }">
             <div class="flex items-center">

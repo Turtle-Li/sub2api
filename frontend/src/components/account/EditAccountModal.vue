@@ -1780,8 +1780,8 @@
         :type="account.type"
       />
 
-      <div class="grid gap-4 sm:grid-cols-2">
-        <div>
+      <div class="grid gap-4" :class="{ 'sm:grid-cols-2': !paidFallback }">
+        <div v-if="!paidFallback">
           <label class="input-label">{{ t('admin.accounts.priority') }}</label>
           <input
             v-model.number="form.priority"

@@ -138,6 +138,7 @@ func (s *OpenAIGatewayService) ordinaryPoolUnavailableForPaidFallback(ctx contex
 		}
 		reason := openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx, account, req.Platform, req.RequestedModel, false, req.RequiredCapability)
 		runtimeUnavailable := account.Status == StatusError || reason == "model_rate_limited" || strings.HasPrefix(reason, "quota_auto_pause") ||
+			(account.IsAPIKeyOrBedrock() && account.IsQuotaExceeded()) ||
 			paidFallbackFuture(account.RateLimitResetAt) || paidFallbackFuture(account.OverloadUntil) || paidFallbackFuture(account.TempUnschedulableUntil) ||
 			s.isOpenAIAccountRequestRuntimeBlocked(account, multiModelGroupRequestedModel(ctx, account, req.RequestedModel))
 		if runtimeUnavailable {

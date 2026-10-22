@@ -12,7 +12,7 @@ export default {
     loadFailed: 'Could not load settings. Reload or try disabling paid fallback now.',
     saveFailed: 'Operation failed. Please retry.', groupsFailed: 'Could not load groups. Please reload.',
     account: 'Paid fallback account', accountHint: 'Used only when all ordinary accounts are unavailable, regardless of ordinary priority values. Recovered ordinary accounts take over. Removing this flag returns the account to the ordinary pool.',
-    keep: 'Keep existing setting', ordinary: 'Ordinary account', paid: 'Paid fallback', all: 'All requests',
+    keep: 'Keep existing setting', ordinary: 'Ordinary account', paid: 'Paid fallback', priorityLabel: 'Fallback', all: 'All requests',
     operations: 'Fallback activity and notifications', notifyEnabled: 'Enable fallback email notifications',
     notificationHint: 'Off by default; Ops alert email must also be enabled. Uses its recipients and minimum severity. The same hourly limit applies to fallback emails counted separately; 0 means unlimited. Reminders require ongoing calls. Recovery requires ordinary success and the confirmation window.',
     reminderMinutes: 'Reminder interval (minutes)', recoverySeconds: 'Recovery confirmation (seconds)',

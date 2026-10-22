@@ -380,6 +380,29 @@ describe('EditAccountModal', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('hides reserve priority and restores its value when returning to the ordinary pool', async () => {
+    const account = { ...buildAccount(), priority: 37, extra: { paid_fallback: true, custom_setting: 'preserved' } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    expect(wrapper.find('[data-tour="account-form-priority"]').exists()).toBe(false)
+    const toggle = wrapper.get('[data-testid="paid-fallback-account-field"]')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    await toggle.trigger('click')
+    expect((wrapper.get('[data-tour="account-form-priority"]').element as HTMLInputElement).value).toBe('37')
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-tour="account-form-priority"]').exists()).toBe(false)
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({
+      priority: 37,
+      extra: expect.objectContaining({ paid_fallback: false, custom_setting: 'preserved' })
+    }))
+  })
+
   it('passes existing non-identity mappings to the whitelist selector and preserves them on save', async () => {
     const account = buildAccount()
     account.credentials.model_mapping = { 'gpt-5.2': 'gpt-5.2', 'gpt-latest': 'deepseek-chat' }

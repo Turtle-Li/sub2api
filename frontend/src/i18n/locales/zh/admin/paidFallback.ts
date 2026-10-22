@@ -12,7 +12,7 @@ export default {
     loadFailed: '无法读取配置，请重新加载。仍可尝试立即关闭。',
     saveFailed: '操作失败，请重试。', groupsFailed: '无法读取分组，请重新加载。',
     account: '付费兜底账号', accountHint: '仅在普通账号全部不可用时接管，不受普通优先级数值影响。普通账号恢复后退出兜底。取消此标记后将恢复普通账号池资格。',
-    keep: '保持原设置', ordinary: '普通账号', paid: '付费兜底', all: '全部调用',
+    keep: '保持原设置', ordinary: '普通账号', paid: '付费兜底', priorityLabel: '兜底', all: '全部调用',
     operations: '兜底记录与通知', notifyEnabled: '启用兜底邮件通知',
     notificationHint: '默认关闭，需同时启用运维告警邮件。沿用其收件人和最低严重级别，每小时限额使用相同数值、兜底邮件单独计数，0 表示不限。持续调用按间隔提醒，观察到普通调用成功且满足确认窗口后通知恢复。',
     reminderMinutes: '持续提醒间隔（分钟）', recoverySeconds: '恢复确认窗口（秒）',
