@@ -46,3 +46,32 @@ Local evidence: `.omo/evidence/paid-fallback/management-ds-live-20261022.jsonl`,
 ## Rollback
 
 Use the canonical verified-image/server release helpers under the shared maintenance lock. Retained prior runtime source is `7c34b50abb400cb66fc0bb554dc15b7ba1a07879`; its image is `sub2api:auto-20261022-033505-7c34b50a`. Do not manually change Caddy or stop active containers. Keep policy/notifications off, paid markers and audit history intact. An older binary that cannot isolate reserve markers requires disabling and unbinding reserve accounts first. Do not drop the new audit tables or undo financial history.
+
+## Account UI correction and quota repair — 2026-10-23, released
+
+Source `27818a655d02ff8877e134365de9fedad276f481` is committed and pushed to own main. The owner requested removing the reserve badge beside account names and the list switch. Reserve rows now show read-only `兜底` instead of numeric priority; ordinary inline priority remains. The editor contains the reserve switch and hides numeric priority while enabled, preserving its value when switched back. Create follows the same rule.
+
+The owner explicitly requested Claude review. Initial UI review passed, but Claude identified a pre-existing omission: ordinary API-key accounts at their configured total/daily/weekly quota did not count as failure evidence, preventing reserve admission. The repair reuses `IsAPIKeyOrBedrock() && IsQuotaExceeded()` in the existing shared predicate. It changes neither quota arithmetic nor financial accounting. Both scheduler modes and HTTP/WS send guards now recognize quota exhaustion and ordinary recovery consistently. Existing R3 administrative boundaries are preserved; expiry alone was not added as a new spending trigger. That disposition is the root agent's interpretation of the existing contract, not a separate new human decision.
+
+Validation and review:
+
+- Root focused frontend142 tests, complete frontend lint and build passed. Browser fixtures verified list/editor save/reopen, preserved priority37, both bulk modes, light/dark desktop and phone layouts. No production account was edited through the browser.
+- Claude independently passed195 frontend tests and changed-file lint. It inspected the actual screenshots and approved all nine UI file hashes.
+- All16 new quota subcases failed against the original source and passed with the repair. They cover two platforms, two schedulers, three quota types, same-session ordinary recovery, post-recovery HTTP/WS refusal and recovery during audit on four transports. Root's paid-fallback service/admin tests and service race run passed; the selected handler command matched no tests.
+- Claude independently reproduced the16 failures using an old-source overlay, passed the16 repaired cases, repeated their race tests three times, and passed all38 paid-fallback service tests, adjacent quota/scheduler tests, gofmt and vet. Final verdict `REVIEW_PASS`, no blockers, all12 changed-file hashes unchanged during review.
+- Local reports: `.omo/evidence/paid-fallback/ui-claude-review-20261023.md`, `quota-claude-rereview-20261023.md`, and `UI_REVISION_20261023.md`. Task-owned review session and Vite server were stopped.
+
+Release preflight reconfirmed healthy active blue source8fec, zero restarts/OOM, accepting traffic and sole active background ownership. All five installed receiver/coordinator/blue-green/probe/maintenance-lock hashes match the repository. Active-blue authenticated models and GPT Responses both returned200. The real candidate gate remains enabled for `gpt-5.6-sol`, timeout180, using the existing root-only credential; its position is before Caddy mutation. No new Vault access or DS supplier run occurred for this revision.
+
+Manual CI [39814621982](https://github.com/Turtle-Li/sub2api/actions/runs/39814621982) completed for exact source27818a655 after delayed runner/result processing during a reported GitHub Actions incident. Unit/integration, frontend, shell, Docker bind-mount and release-helper jobs passed. The only failure is the previously accepted unchanged G704 at `model_protocol_catalog.go:236`, exactly one gosec issue. No suppression or new exception was introduced.
+
+Production workflow [39816978237](https://github.com/Turtle-Li/sub2api/actions/runs/39816978237) succeeded for source27818a655, AWS target, build_only=false. No main advance occurred during the verified-image build. Actual receiver evidence is `/var/log/sub2api-release/gha-20261022-095721-27818a65-1052491`:
+
+- Archive SHA256 `86079bca67323150aa88e40abc5fc81e3d9b9ee41bae787bd265ea7f1efa6e05`,87084917 bytes; host-loaded image ID `sha256:357ab442f193af9ba66ccdaadca13619b873f2f9822952f4af4dec2ae2776062`.
+- Green image `sub2api:auto-20261022-095722-27818a65` is healthy, accepting and the sole active background owner, zero restarts/OOM. Caddy's startup and active views were verified to select only green.
+- `switch.log` lines6–7: candidate-green actual GPT models/Responses200 after `2026-10-22T09:57:51-07:00` (October23 00:57:51 CST). Caddy switching starts at line27 at00:57:57 CST and commits at line42 at00:57:59 CST. The GPT request therefore passed before traffic changed.
+- Old blue8fec connections drained5→2→0. The canonical monitor stopped it only after zero connections, at01:00:08 CST; no manual stop or override was used. This compatible8fec image is the retained rollback target for the new revision.
+- Origin-pinned API/www health both200;217 new-runtime log lines had no panic/fatal/migration-failure match. This is bounded observation, not a universal transport guarantee.
+- The actual serving origin's `/admin/accounts` entry `/assets/index-Coao1PWu.js` loads `AccountsView-DolSVMRU.js`, which contains `account-fallback-label` and no `account-fallback-select`. Unauthenticated local CLI access to the public www admin path returned403 through Cloudflare, so this asset check used the documented origin-pinned route; authenticated public-browser access was not separately retested.
+
+No production GPT account/group was changed or fault-injected. No new DS fixture activation, Vault operation or human notification occurred. Existing policy/notification settings were preserved. Roll back this revision only through the canonical lock-owning helper to retained8fec, preserving account markers and audit history. The earlier7c34 rollback record above describes the historical management release, not the preferred rollback for this correction.
