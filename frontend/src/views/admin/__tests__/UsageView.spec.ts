@@ -41,6 +41,9 @@ const messages: Record<string, string> = {
 	'usage.upstreamModelMismatch': 'Upstream model mismatch',
 	'common.yes': 'Yes',
 	'common.no': 'No',
+	'admin.paidFallback.title': 'Paid fallback',
+	'admin.paidFallback.paid': 'Paid',
+	'admin.paidFallback.ordinary': 'Ordinary',
 }
 
 const formatLocalDate = (date: Date): string => {
@@ -750,6 +753,7 @@ describe('admin UsageView model audit export', () => {
 				upstream_response_model: 'gpt-5.4',
 				upstream_provider: 'alibaba',
 				upstream_model_mismatch: true,
+				paid_fallback: true,
 				request_type: 'sync',
 				input_tokens: 1,
 				output_tokens: 1,
@@ -791,17 +795,34 @@ describe('admin UsageView model audit export', () => {
 		)
 
 		const headers = aoaToSheet.mock.calls[0][0][0]
-		expect(headers.slice(4, 8)).toEqual([
+		expect(headers[4]).toBe('Paid fallback')
+		expect(headers.slice(5, 9)).toEqual([
 			'Requested model',
 			'Sent upstream model',
 			'Upstream response model',
 			'Upstream model mismatch',
 		])
 		// 实际上游渠道紧随模型审计四列，导出与表格列保持一致
-		expect(headers[8]).toBe('Actual upstream')
+		expect(headers[9]).toBe('Actual upstream')
 		const row = sheetAddAoa.mock.calls[0][1][0]
-		expect(row.slice(4, 8)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
-		expect(row[8]).toBe('alibaba')
+		expect(row[4]).toBe('Paid')
+		expect(row.slice(5, 9)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
+		expect(row[9]).toBe('alibaba')
 		expect(saveAs).toHaveBeenCalledTimes(1)
+	})
+
+	it.each([true, false])('propagates paid_fallback=%s to list, stats, charts and export', async paid => {
+		const wrapper = mountRouteFilteredUsageView()
+		await flushPromises()
+		const vm = wrapper.vm as unknown as { filters: { paid_fallback: boolean | null }; applyFilters: () => void; exportToExcel: () => Promise<void> }
+		vm.filters.paid_fallback = paid
+		vm.applyFilters()
+		vi.advanceTimersByTime(120)
+		await flushPromises()
+		expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ paid_fallback: paid }), expect.anything())
+		expect(getStats).toHaveBeenLastCalledWith(expect.objectContaining({ paid_fallback: paid }))
+		expect(getSnapshotV2).toHaveBeenLastCalledWith(expect.objectContaining({ paid_fallback: paid }))
+		await vm.exportToExcel()
+		expect(exportList).toHaveBeenLastCalledWith(expect.objectContaining({ paid_fallback: paid }), expect.anything())
 	})
 })

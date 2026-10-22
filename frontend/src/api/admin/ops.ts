@@ -366,6 +366,8 @@ export async function getUserConcurrencyStats(): Promise<OpsUserConcurrencyStats
 }
 
 export interface PlatformAvailability {
+  paid_total?: number
+  paid_available?: number
   platform: string
   total_accounts: number
   available_count: number
@@ -374,6 +376,8 @@ export interface PlatformAvailability {
 }
 
 export interface GroupAvailability {
+  paid_total?: number
+  paid_available?: number
   group_id: number
   group_name: string
   platform: string
@@ -384,6 +388,7 @@ export interface GroupAvailability {
 }
 
 export interface AccountAvailability {
+  paid_fallback?: boolean
   account_id: number
   account_name: string
   platform: string

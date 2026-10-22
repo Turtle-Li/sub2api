@@ -246,6 +246,7 @@ const breakdownFilters = computed(() => {
   if (filters.value.account_id) f.account_id = filters.value.account_id
   if (filters.value.group_id) f.group_id = filters.value.group_id
   if (filters.value.request_type != null) f.request_type = filters.value.request_type
+  if (filters.value.paid_fallback != null) f.paid_fallback = filters.value.paid_fallback
   if (filters.value.native_compaction_v2 != null) f.native_compaction_v2 = filters.value.native_compaction_v2
   if (filters.value.billing_type != null) f.billing_type = filters.value.billing_type
   return f
@@ -452,6 +453,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
       group_id: filters.value.group_id,
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
+      paid_fallback: filters.value.paid_fallback,
       native_compaction_v2: filters.value.native_compaction_v2,
       billing_type: filters.value.billing_type,
 	  upstream_model_mismatch: filters.value.upstream_model_mismatch,
@@ -503,6 +505,7 @@ const loadChartData = async () => {
       group_id: filters.value.group_id,
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
+      paid_fallback: filters.value.paid_fallback,
       native_compaction_v2: filters.value.native_compaction_v2,
       billing_type: filters.value.billing_type,
 	  upstream_model_mismatch: filters.value.upstream_model_mismatch,
@@ -580,7 +583,7 @@ const exportToExcel = async () => {
     const XLSX = await import('xlsx')
     const headers = [
       t('usage.time'), t('admin.usage.user'), t('usage.apiKeyFilter'),
-      t('admin.usage.account'), t('usage.requestedModel'), t('usage.sentUpstreamModel'), t('usage.upstreamResponseModel'), t('usage.upstreamModelMismatch'), t('usage.upstreamProvider'), t('usage.requestedReasoningEffort'), t('usage.reasoningEffort'), t('admin.usage.group'),
+      t('admin.usage.account'), t('admin.paidFallback.title'), t('usage.requestedModel'), t('usage.sentUpstreamModel'), t('usage.upstreamResponseModel'), t('usage.upstreamModelMismatch'), t('usage.upstreamProvider'), t('usage.requestedReasoningEffort'), t('usage.reasoningEffort'), t('admin.usage.group'),
       t('usage.inboundEndpoint'), t('usage.upstreamEndpoint'),
       t('usage.type'),
       t('admin.usage.inputTokens'), t('admin.usage.outputTokens'),
@@ -599,7 +602,7 @@ const exportToExcel = async () => {
       )
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
       const rows = (res.items || []).map((log: AdminUsageLog) => [
-        log.created_at, log.user?.email || '', log.api_key?.name || '', log.account?.name || '', log.model,
+        log.created_at, log.user?.email || '', log.api_key?.name || '', log.account?.name || '', t(log.paid_fallback ? 'admin.paidFallback.paid' : 'admin.paidFallback.ordinary'), log.model,
         log.upstream_model || log.model, log.upstream_response_model || '', log.upstream_model_mismatch == null ? '' : t(log.upstream_model_mismatch ? 'common.yes' : 'common.no'), log.upstream_provider || '', formatReasoningEffort(log.reasoning_effort), formatReasoningEffort(log.upstream_reasoning_effort || log.reasoning_effort), log.group?.name || '',
         log.inbound_endpoint || '', log.upstream_endpoint || '', getRequestTypeLabel(log),
         log.input_tokens, log.output_tokens, log.cache_read_tokens, log.cache_creation_tokens,

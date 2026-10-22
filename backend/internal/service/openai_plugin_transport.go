@@ -1,14 +1,47 @@
 package service
 
-import "net/http"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+)
 
 func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 	s.pluginManager = manager
 }
 
+func (s *OpenAIGatewayService) doOpenAIModelUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if permit, _ := request.Context().Value(paidFallbackPermitKey{}).(*paidFallbackPermit); permit != nil && request.GetBody != nil {
+		body, err := request.GetBody()
+		if err != nil {
+			return nil, errors.New("paid fallback upstream model unavailable")
+		}
+		var value struct {
+			Model string `json:"model"`
+		}
+		err = json.NewDecoder(body).Decode(&value)
+		_ = body.Close()
+		if err != nil {
+			return nil, errors.New("paid fallback upstream model unavailable")
+		}
+		request = request.WithContext(context.WithValue(request.Context(), paidFallbackUpstreamModelKey{}, value.Model))
+	}
+	request = request.WithContext(WithPaidFallbackModelSend(request.Context()))
+	return s.doOpenAIUpstream(request, proxyURL, account)
+}
+
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, _ string, account *Account) (*http.Response, error) {
+	if permit, _ := request.Context().Value(paidFallbackPermitKey{}).(*paidFallbackPermit); permit != nil {
+		if account.ID != permit.accountID || !permit.settings.paidFallbackAllowed(WithPaidFallbackAPIKey(request.Context(), permit.apiKeyID), &permit.groupID) {
+			return nil, errors.New("paid fallback admission revoked")
+		}
+	}
+	if account.IsPaidFallback() && s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account) {
+		return nil, errors.New("paid fallback requires an auditable upstream transport; OAuth plugin dispatch is unsupported")
+	}
 	resolvedProxyURL, err := ResolveAccountProxyURL(account)
 	if err != nil {
 		return nil, err

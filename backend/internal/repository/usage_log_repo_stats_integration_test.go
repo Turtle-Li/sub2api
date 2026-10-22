@@ -8,10 +8,58 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsageLogPaidFallbackHistoryFilters(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	client := tx.Client()
+	repo := newUsageLogRepositoryWithSQL(client, tx)
+	user := mustCreateUser(t, client, &service.User{Email: "paid-history@test.invalid"})
+	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "test-paid-history", Name: "history"})
+	account := mustCreateAccount(t, client, &service.Account{Name: "history", Extra: map[string]any{service.PaidFallbackExtraKey: true}})
+	group := mustCreateGroup(t, client, &service.Group{Name: "paid-history", Platform: "openai"})
+	now := time.Now().UTC()
+	requested := "public-ds"
+	cost, rate := 2.0, 3.0
+	for _, paid := range []bool{true, false} {
+		_, err := repo.Create(ctx, &service.UsageLog{UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, GroupID: &group.ID, Model: "mapped-ds", RequestedModel: requested, PaidFallback: paid, InputTokens: 1, OutputTokens: 2, AccountStatsCost: &cost, AccountRateMultiplier: &rate, CreatedAt: now})
+		require.NoError(t, err)
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE accounts SET extra = '{}'::jsonb WHERE id = $1", account.ID)
+	require.NoError(t, err)
+	start, end := now.Add(-time.Hour), now.Add(time.Hour)
+	for _, paid := range []bool{true, false} {
+		filters := usagestats.UsageLogFilters{UserID: user.ID, PaidFallback: &paid, StartTime: &start, EndTime: &end, ExactTotal: true}
+		rows, page, err := repo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 1}, filters)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), page.Total)
+		require.Len(t, rows, 1)
+		require.Equal(t, paid, rows[0].PaidFallback)
+		stats, err := repo.GetStatsWithFilters(ctx, filters)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), stats.TotalRequests)
+		require.NotNil(t, stats.TotalAccountCost)
+		require.InDelta(t, 6.0, *stats.TotalAccountCost, 0.00001)
+		trend, err := repo.GetUsageTrendWithUsageFilters(ctx, start, end, "hour", filters)
+		require.NoError(t, err)
+		require.Len(t, trend, 1)
+		require.Equal(t, int64(1), trend[0].Requests)
+		models, err := repo.GetModelStatsWithUsageFiltersBySource(ctx, start, end, filters, usagestats.ModelSourceRequested)
+		require.NoError(t, err)
+		require.Len(t, models, 1)
+		require.Equal(t, "public-ds", models[0].Model)
+		require.Equal(t, int64(1), models[0].Requests)
+		groups, err := repo.GetGroupStatsWithUsageFilters(ctx, start, end, filters)
+		require.NoError(t, err)
+		require.Len(t, groups, 1)
+		require.Equal(t, int64(1), groups[0].Requests)
+	}
+}
 
 func TestUsageLog_UpstreamModelMismatchFilterAndPartialIndex(t *testing.T) {
 	ctx := context.Background()

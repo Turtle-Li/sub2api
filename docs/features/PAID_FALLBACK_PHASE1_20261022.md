@@ -1,5 +1,7 @@
 # Paid fallback accounts, phase 1
 
+2026-10-22 用户纠正后的当前合同：兜底按分组选定并适用于组内所有认证用户，不再选择 API Key。普通账号恢复优先于兜底粘性；无法迁移的上游状态须重新建立会话，不能继续付费发送。下文一期上线与七项矩阵是历史证据，其中双白名单和保持付费连续状态的行为已被纠正。当前管理、通知和验收以 `PAID_FALLBACK_MANAGEMENT_20261022.md` 为准。
+
 Task: paid-fallback-phase1-20261022. Type: feature. Priority: availability with explicit paid admission. Baseline: fork/main `08c54a9d1b325645e315537bcedb33c103dad132`.
 
 The owner approved phase 1 and requires validation without disturbing customer traffic. HTTP and WebSocket use one account policy. Existing connections keep their account; no live connection or provider-owned response state is migrated.
@@ -7,10 +9,10 @@ The owner approved phase 1 and requires validation without disturbing customer t
 ## Contract
 
 - R1 / AC1: `accounts.extra.paid_fallback=true` marks a paid reserve. It is excluded from ordinary selection even when the feature is disabled. Existing accounts default to ordinary. Invalid non-false markers fail closed. Generic account edits must preserve an omitted marker.
-- R2 / AC2: An administrator enables an explicit group and API-key allowlist. Missing, invalid or unavailable settings deny paid admission. Initial supported group platforms are OpenAI and DeepSeek. Both scheduler modes and HTTP/WS share this policy.
+- R2 / AC2: An administrator enables selected groups for every authenticated user in those groups. There is no API-key allowlist. Missing, invalid or unavailable settings deny paid admission. Initial supported group platforms are OpenAI and DeepSeek. Both scheduler modes and HTTP/WS share this policy.
 - R3 / AC3: Try ordinary accounts first, including their wait plan. Only evidence of ordinary upstream failure or runtime unavailability permits the paid pass. Busy capacity, unknown exclusions, profit rejection, unsupported model/endpoint/transport, channel restrictions, invalid requests and dependency errors do not authorize spending.
 - R4 / AC4: Paid selection retains group/model/capability/privacy/quota constraints. Only the profit margin gate may be exempted, after explicit paid admission. Recheck authorization after waiting and at WS turn boundaries. A disabled policy stops new work; already transmitted streams may finish.
-- R5 / AC5: Ordinary recovery wins over paid session affinity for new stateless requests/connections. Non-replayable continuation state is not moved to another account. The normal retry cap permits at most one additional paid selection when ordinary candidates are exhausted, never a new ordinary retry cycle. Existing bounded same-account and protocol retries remain in effect; this is not a limit of one transport attempt or one billable operation.
+- R5 / AC5: Ordinary recovery wins over paid session affinity, including later turns on existing connections. Non-replayable continuation state is not moved to another account: reject new paid sends and require a fresh request with full history. The normal retry cap permits at most one additional paid selection when ordinary candidates are exhausted, never a new ordinary retry cycle. Existing bounded same-account and protocol retries remain in effect; this is not a limit of one transport attempt or one billable operation.
 - R6 / AC6: Persist paid usage attribution at request time with existing account cost snapshots. Customer charges are unchanged. Failed attempts without provider usage have unknown cost and must not be reported as free. Operational events distinguish selection, forwarding and measured usage.
 - R7 / AC7: Local fake upstreams cover GPT and DeepSeek, both scheduler modes, failure/recovery, busy pools, kill switch, isolation and stateful continuation. A later live smoke uses a new exclusive DeepSeek group, new test key and unshared upstream accounts; production/customer fault injection is prohibited.
 
@@ -41,7 +43,7 @@ Local implementation and verification are authorized. No production deployment, 
 ### 实际范围
 
 - 账号标记：`accounts.extra.paid_fallback`。缺省或布尔值 `false` 为普通账号，其余已存在的值（包括错误类型和 `null`）均隔离到付费池。普通账号编辑若未提交此字段，数据库合并保留原标记。影子账号不能以普通身份借用已标记的母账号凭据；需要参与付费兜底的影子账号也必须显式标记。
-- 策略配置：`paid_fallback_settings`，使用现有管理员鉴权。仅在全局开关开启、分组与认证 Key 同时命中白名单时允许选择付费账号。缺少配置、损坏配置和依赖读取失败均拒绝付费调用。
+- 策略配置：`paid_fallback_settings`，使用现有管理员鉴权。仅在全局开关开启且分组已选中时，对组内全部认证用户允许付费兜底。缺少配置、损坏配置和依赖读取失败均拒绝付费调用。
 - 调度：OpenAI、DeepSeek 文本兼容链路，兼容高级与旧调度器。先执行普通池的选择和等待；普通账号运行故障、限流或运行冷却等造成池不可用时再尝试付费池。并发满载继续原等待计划。手工禁用、请求不合法、毛利拒绝、模型或传输不兼容等不会成为付费理由。
 - 转发：保留分组、模型、端点能力、隐私、配额、通道和传输检查。付费授权只豁免毛利比较，不接受非法成本倍率。等待结束重新校验账号与策略；真实 HTTP 发出前再次读取付费开关。
 - HTTP 与 WS：是同一种账号策略，不需要用户分开配置。HTTP 每次请求选择账号，WS 在建连时选择账号，在后续轮次检查授权；原有连接不迁移，携带 `previous_response_id` 的继续请求保持原账号绑定。普通池恢复后，新的无状态请求和新连接优先普通账号。DeepSeek 的 HTTP 验收可覆盖共用调度策略，具体账号仍须原生支持所选传输协议。
@@ -56,13 +58,13 @@ Local implementation and verification are authorized. No production deployment, 
 | 方法和路径 | 用途 | 请求体 |
 | --- | --- | --- |
 | `GET /api/v1/admin/settings/paid-fallback` | 查询当前策略 | 无 |
-| `PUT /api/v1/admin/settings/paid-fallback` | 替换完整策略 | `enabled`、`group_ids`、`api_key_ids` |
+| `PUT /api/v1/admin/settings/paid-fallback` | 替换完整策略 | `enabled`、`group_ids` |
 | `PUT /api/v1/admin/accounts/:id/paid-fallback` | 设置账号类别 | `{"enabled":true}` 或 `{"enabled":false}` |
 
-策略示例，`7`、`11` 只是占位 ID，实际操作时必须换成新建测试分组和专用测试 Key 的 ID：
+策略示例，`7` 只是占位 ID，受控验收时必须换成独立测试分组的 ID；测试 Key 仅用于登录该组，不是策略配置项：
 
 ```json
-{"enabled":true,"group_ids":[7],"api_key_ids":[11]}
+{"enabled":true,"group_ids":[7]}
 ```
 
 紧急关闭应更新策略为 `enabled:false`，可以保留白名单便于后续恢复。**不要通过清除账号标记关闭兜底**：清除标记会让该账号回到普通池。标记接口关闭表示“改成普通账号”，不表示“停止调用”。

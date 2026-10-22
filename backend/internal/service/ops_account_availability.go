@@ -74,14 +74,21 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 				}
 			}
 			p := platform[acc.Platform]
-			p.TotalAccounts++
-			if isAvailable {
+			if acc.IsPaidFallback() {
+				p.PaidTotal++
+				if isAvailable {
+					p.PaidAvailable++
+				}
+			} else {
+				p.TotalAccounts++
+			}
+			if isAvailable && !acc.IsPaidFallback() {
 				p.AvailableCount++
 			}
-			if isRateLimited {
+			if isRateLimited && !acc.IsPaidFallback() {
 				p.RateLimitCount++
 			}
-			if hasError {
+			if hasError && !acc.IsPaidFallback() {
 				p.ErrorCount++
 			}
 		}
@@ -98,14 +105,21 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 				}
 			}
 			g := group[grp.ID]
-			g.TotalAccounts++
-			if isAvailable {
+			if acc.IsPaidFallback() {
+				g.PaidTotal++
+				if isAvailable {
+					g.PaidAvailable++
+				}
+			} else {
+				g.TotalAccounts++
+			}
+			if isAvailable && !acc.IsPaidFallback() {
 				g.AvailableCount++
 			}
-			if isRateLimited {
+			if isRateLimited && !acc.IsPaidFallback() {
 				g.RateLimitCount++
 			}
-			if hasError {
+			if hasError && !acc.IsPaidFallback() {
 				g.ErrorCount++
 			}
 		}
@@ -118,12 +132,13 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 		}
 
 		item := &AccountAvailability{
-			AccountID:   acc.ID,
-			AccountName: acc.Name,
-			Platform:    acc.Platform,
-			GroupID:     displayGroupID,
-			GroupName:   displayGroupName,
-			Status:      acc.Status,
+			PaidFallback: acc.IsPaidFallback(),
+			AccountID:    acc.ID,
+			AccountName:  acc.Name,
+			Platform:     acc.Platform,
+			GroupID:      displayGroupID,
+			GroupName:    displayGroupName,
+			Status:       acc.Status,
 
 			IsAvailable:   isAvailable,
 			IsRateLimited: isRateLimited,

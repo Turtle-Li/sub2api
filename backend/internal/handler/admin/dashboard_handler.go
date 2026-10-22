@@ -267,13 +267,19 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
 		return
 	}
+	paidFallback, err := parseOptionalBoolDashboardFilter(c, "paid_fallback")
+	if err != nil {
+		response.BadRequest(c, "Invalid paid_fallback value, use true or false")
+		return
+	}
+
 	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
 	if err != nil {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
 
-	trend, hit, err := h.getUsageTrendCached(c.Request.Context(), startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
+	trend, hit, err := h.getUsageTrendCached(c.Request.Context(), startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch, paidFallback)
 	if err != nil {
 		response.Error(c, 500, "Failed to get usage trend")
 		return
@@ -359,13 +365,19 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
 		return
 	}
+	paidFallback, err := parseOptionalBoolDashboardFilter(c, "paid_fallback")
+	if err != nil {
+		response.BadRequest(c, "Invalid paid_fallback value, use true or false")
+		return
+	}
+
 	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
 	if err != nil {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
 
-	stats, hit, err := h.getModelStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
+	stats, hit, err := h.getModelStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch, paidFallback)
 	if err != nil {
 		response.Error(c, 500, "Failed to get model statistics")
 		return
@@ -441,13 +453,19 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
 		return
 	}
+	paidFallback, err := parseOptionalBoolDashboardFilter(c, "paid_fallback")
+	if err != nil {
+		response.BadRequest(c, "Invalid paid_fallback value, use true or false")
+		return
+	}
+
 	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
 	if err != nil {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
 
-	stats, hit, err := h.getGroupStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
+	stats, hit, err := h.getGroupStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch, paidFallback)
 	if err != nil {
 		response.Error(c, 500, "Failed to get group statistics")
 		return
@@ -675,6 +693,13 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 	startTime, endTime := parseTimeRange(c)
 
 	dim := usagestats.UserBreakdownDimension{}
+	paidFallback, err := parseOptionalBoolDashboardFilter(c, "paid_fallback")
+	if err != nil {
+		response.BadRequest(c, "Invalid paid_fallback value, use true or false")
+		return
+	}
+
+	dim.PaidFallback = paidFallback
 	if v := c.Query("group_id"); v != "" {
 		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
 			dim.GroupID = id

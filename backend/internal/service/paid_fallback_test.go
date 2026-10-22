@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ func (r *paidFallbackSettingRepo) Set(_ context.Context, _ string, value string)
 
 func paidFallbackTestSettings(t *testing.T) (*SettingService, *paidFallbackSettingRepo) {
 	t.Helper()
-	value, err := json.Marshal(PaidFallbackSettings{Enabled: true, GroupIDs: []int64{7}, APIKeyIDs: []int64{11}})
+	value, err := json.Marshal(PaidFallbackSettings{Enabled: true, GroupIDs: []int64{7}})
 	require.NoError(t, err)
 	repo := &paidFallbackSettingRepo{value: string(value)}
 	return NewSettingService(repo, nil), repo
@@ -48,6 +49,8 @@ func TestPaidFallbackScopeAndKillSwitch(t *testing.T) {
 	ctx := WithPaidFallbackAPIKey(context.Background(), 11)
 	group := int64(7)
 	require.True(t, settings.paidFallbackAllowed(ctx, &group))
+	require.True(t, settings.paidFallbackAllowed(WithPaidFallbackAPIKey(ctx, 999), &group))
+	require.False(t, settings.paidFallbackAllowed(ctx, nil))
 	require.False(t, settings.paidFallbackAllowed(context.Background(), &group))
 	otherGroup := int64(8)
 	require.False(t, settings.paidFallbackAllowed(ctx, &otherGroup))
@@ -57,7 +60,7 @@ func TestPaidFallbackScopeAndKillSwitch(t *testing.T) {
 	require.Empty(t, paidFallbackAdmissionFailure(ctx, paid))
 	repo.value = `{"enabled":false}`
 	require.Equal(t, "paid_fallback_disabled", paidFallbackAdmissionFailure(ctx, paid))
-	for _, value := range []string{"", "{", `{"enabled":true,"group_ids":[7]}`} {
+	for _, value := range []string{"", "{", `{"enabled":true}`, `{"enabled":true,"group_ids":[-7]}`} {
 		repo.value = value
 		require.False(t, settings.paidFallbackAllowed(ctx, &group))
 	}
@@ -84,4 +87,64 @@ func TestPaidFallbackFailureEvidence(t *testing.T) {
 	require.True(t, paidFallbackFailedAccount(ctx, 3))
 	ctx = WithPaidFallbackFailure(ctx, &Account{ID: 4, Extra: map[string]any{PaidFallbackExtraKey: true}}, 503)
 	require.False(t, paidFallbackFailedAccount(ctx, 4))
+}
+
+type paidFallbackDisableRepo struct {
+	SettingRepository
+	value   string
+	readErr error
+	writes  int
+}
+
+func (r *paidFallbackDisableRepo) GetValue(context.Context, string) (string, error) {
+	return r.value, r.readErr
+}
+
+func (r *paidFallbackDisableRepo) Set(_ context.Context, _ string, value string) error {
+	r.value = value
+	r.writes++
+	return nil
+}
+
+func TestPaidFallbackImmediateDisablePreservesValidScope(t *testing.T) {
+	repo := &paidFallbackDisableRepo{value: `{"enabled":true,"group_ids":[7,8],"api_key_ids":[11,12]}`}
+	s := NewSettingService(repo, nil)
+	saved, err := s.DisablePaidFallback(context.Background())
+	require.NoError(t, err)
+	require.False(t, saved.Enabled)
+	require.Equal(t, []int64{7, 8}, saved.GroupIDs)
+	require.NotContains(t, repo.value, "api_key_ids")
+	group := int64(7)
+	require.False(t, s.paidFallbackAllowed(WithPaidFallbackAPIKey(context.Background(), 11), &group))
+}
+
+func TestPaidFallbackLegacyKeyScopeDoesNotRestrictGroupUsers(t *testing.T) {
+	repo := &paidFallbackSettingRepo{value: `{"enabled":true,"group_ids":[7],"api_key_ids":[11]}`}
+	s := NewSettingService(repo, nil)
+	group := int64(7)
+	require.True(t, s.paidFallbackAllowed(WithPaidFallbackAPIKey(context.Background(), 12), &group))
+}
+
+func TestPaidFallbackImmediateDisableRepairsInvalidConfig(t *testing.T) {
+	for _, raw := range []string{`{`, `{"enabled":true,"group_ids":[-7],"api_key_ids":[11]}`, `{"enabled":true}`} {
+		t.Run(raw, func(t *testing.T) {
+			repo := &paidFallbackDisableRepo{value: raw}
+			s := NewSettingService(repo, nil)
+			saved, err := s.DisablePaidFallback(context.Background())
+			require.NoError(t, err)
+			require.False(t, saved.Enabled)
+			loaded, err := s.GetPaidFallbackSettings(context.Background())
+			require.NoError(t, err)
+			require.False(t, loaded.Enabled)
+		})
+	}
+}
+
+func TestPaidFallbackImmediateDisableDoesNotOverwriteOnReadFailure(t *testing.T) {
+	raw := `{"enabled":true,"group_ids":[7],"api_key_ids":[11]}`
+	repo := &paidFallbackDisableRepo{value: raw, readErr: errors.New("dependency unavailable")}
+	_, err := NewSettingService(repo, nil).DisablePaidFallback(context.Background())
+	require.Error(t, err)
+	require.Equal(t, raw, repo.value)
+	require.Zero(t, repo.writes)
 }

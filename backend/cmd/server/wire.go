@@ -130,6 +130,7 @@ func provideCleanup(
 	paymentRefundReconciliation *service.PaymentRefundReconciliationService,
 	invoiceNotifications *service.InvoiceNotificationService,
 	feishuPaymentIncidents *service.FeishuPaymentIncidentService,
+	paidFallbackOps *service.PaidFallbackOpsService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
@@ -415,6 +416,12 @@ func provideCleanup(
 			{"FeishuPaymentIncidentService", func() error {
 				if feishuPaymentIncidents != nil {
 					feishuPaymentIncidents.Stop()
+				}
+				return nil
+			}},
+			{"PaidFallbackOpsService", func() error {
+				if paidFallbackOps != nil {
+					paidFallbackOps.Stop()
 				}
 				return nil
 			}},

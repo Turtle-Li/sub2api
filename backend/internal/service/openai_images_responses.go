@@ -2186,7 +2186,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		upstreamReq.Header.Set("Accept", "text/event-stream")
 		upstreamReq.Header.Set("OpenAI-Beta", "responses=experimental")
 
-		resp, requestErr := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		resp, requestErr := s.doOpenAIModelUpstream(upstreamReq, proxyURL, account)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamTotalStart).Milliseconds())
 		if requestErr != nil {
 			return resultOnError(s.handleOpenAIUpstreamTransportError(upstreamCtx, c, account, requestErr, false))
@@ -2414,7 +2414,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthDirect(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+	resp, err := s.doOpenAIModelUpstream(upstreamReq, proxyURL, account)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())

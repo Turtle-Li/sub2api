@@ -121,6 +121,7 @@ type NotificationEmailPreviewInput struct {
 }
 
 type NotificationEmailSendInput struct {
+	BeforeSend       func(context.Context) error
 	Event            string
 	Locale           string
 	RecipientEmail   string
@@ -139,6 +140,11 @@ type NotificationEmailUnsubscribeResult struct {
 	Email string `json:"email"`
 	Done  bool   `json:"done"`
 }
+
+type notificationEmailPostSendError struct{ err error }
+
+func (e *notificationEmailPostSendError) Error() string { return e.err.Error() }
+func (e *notificationEmailPostSendError) Unwrap() error { return e.err }
 
 type notificationEmailStoredTemplate struct {
 	Subject   string    `json:"subject"`
@@ -430,7 +436,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 		return notificationEmailConfigErr(errors.New("email service is not configured"))
 	}
 	var sendErr error
-	if normalizedEvent == NotificationEmailEventInvoiceIssued || normalizedEvent == NotificationEmailEventInvoiceRejected {
+	if normalizedEvent == NotificationEmailEventInvoiceIssued || normalizedEvent == NotificationEmailEventInvoiceRejected || input.SourceType == "paid_fallback_incident" {
 		// Invoice delivery belongs to the active background generation. Read
 		// all settings before the final fence so a handoff during template,
 		// deduplication or SMTP configuration I/O cannot start a new send.
@@ -444,6 +450,14 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if input.BeforeSend != nil {
+			if err := input.BeforeSend(ctx); err != nil {
+				return err
+			}
+		}
+		if !runtimegate.SharedWorkAllowed() {
+			return context.Canceled
+		}
 		sendErr = s.emailService.SendEmailWithConfigAndAttachments(config, recipient, rendered.Subject, rendered.HTML, input.Attachments)
 	} else {
 		sendErr = s.emailService.SendEmailWithAttachments(ctx, recipient, rendered.Subject, rendered.HTML, input.Attachments)
@@ -453,6 +467,9 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	}
 	if deliveryKey != "" {
 		if err := s.settingRepo.Set(ctx, deliveryKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			if input.SourceType == "paid_fallback_incident" {
+				return &notificationEmailPostSendError{err: err}
+			}
 			return err
 		}
 	}

@@ -558,7 +558,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if buildErr != nil {
 			return nil, buildErr
 		}
-		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		upstreamReq = upstreamReq.WithContext(WithPaidFallbackBridgeTurn(upstreamReq.Context(), originalModel, turn))
+		resp, err = s.doOpenAIModelUpstream(upstreamReq, proxyURL, account)
 		if err != nil {
 			if turn == 1 {
 				return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)

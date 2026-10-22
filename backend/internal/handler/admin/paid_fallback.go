@@ -17,6 +17,37 @@ func (h *SettingHandler) GetPaidFallbackSettings(c *gin.Context) {
 	response.Success(c, settings)
 }
 
+func (h *SettingHandler) GetPaidFallbackNotifications(c *gin.Context) {
+	settings, err := h.settingService.GetPaidFallbackNotifications(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, settings)
+}
+
+func (h *SettingHandler) UpdatePaidFallbackNotifications(c *gin.Context) {
+	var settings service.PaidFallbackNotificationSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		response.BadRequest(c, "Invalid request")
+		return
+	}
+	if err := h.settingService.UpdatePaidFallbackNotifications(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, settings)
+}
+
+func (h *SettingHandler) GetPaidFallbackReport(c *gin.Context) {
+	report, err := h.settingService.PaidFallbackReport(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, report)
+}
+
 func (h *SettingHandler) UpdatePaidFallbackSettings(c *gin.Context) {
 	var settings service.PaidFallbackSettings
 	if err := c.ShouldBindJSON(&settings); err != nil {
@@ -25,6 +56,15 @@ func (h *SettingHandler) UpdatePaidFallbackSettings(c *gin.Context) {
 	}
 	if err := h.settingService.UpdatePaidFallbackSettings(c.Request.Context(), &settings); err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, settings)
+}
+
+func (h *SettingHandler) DisablePaidFallback(c *gin.Context) {
+	settings, err := h.settingService.DisablePaidFallback(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, settings)

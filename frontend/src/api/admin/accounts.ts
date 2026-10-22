@@ -246,6 +246,11 @@ export async function update(id: number, updates: UpdateAccountRequest): Promise
   return data
 }
 
+export async function setPaidFallback(id: number, enabled: boolean): Promise<{ account_id: number; enabled: boolean }> {
+  const { data } = await apiClient.put<{ account_id: number; enabled: boolean }>(`/admin/accounts/${id}/paid-fallback`, { enabled })
+  return data
+}
+
 export async function getGrokMediaEligibility(id: number): Promise<GrokMediaEligibilityState> {
   const { data } = await apiClient.get<GrokMediaEligibilityState>(
     `/admin/accounts/${id}/grok-media-eligibility`

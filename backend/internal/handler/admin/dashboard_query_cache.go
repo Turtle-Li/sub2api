@@ -28,6 +28,7 @@ type dashboardTrendCacheKey struct {
 	Model                 string `json:"model"`
 	RequestType           *int16 `json:"request_type"`
 	Stream                *bool  `json:"stream"`
+	PaidFallback          *bool  `json:"paid_fallback"`
 	NativeCompactionV2    *bool  `json:"native_compaction_v2"`
 	BillingType           *int8  `json:"billing_type"`
 	UpstreamModelMismatch *bool  `json:"upstream_model_mismatch"`
@@ -43,6 +44,7 @@ type dashboardModelGroupCacheKey struct {
 	ModelSource           string `json:"model_source,omitempty"`
 	RequestType           *int16 `json:"request_type"`
 	Stream                *bool  `json:"stream"`
+	PaidFallback          *bool  `json:"paid_fallback"`
 	NativeCompactionV2    *bool  `json:"native_compaction_v2"`
 	BillingType           *int8  `json:"billing_type"`
 	UpstreamModelMismatch *bool  `json:"upstream_model_mismatch"`
@@ -91,7 +93,12 @@ func (h *DashboardHandler) getUsageTrendCached(
 	nativeCompactionV2 *bool,
 	billingType *int8,
 	upstreamModelMismatch *bool,
+	paidFallbackFilter ...*bool,
 ) ([]usagestats.TrendDataPoint, bool, error) {
+	var paidFallback *bool
+	if len(paidFallbackFilter) > 0 {
+		paidFallback = paidFallbackFilter[0]
+	}
 	key := mustMarshalDashboardCacheKey(dashboardTrendCacheKey{
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
@@ -103,6 +110,7 @@ func (h *DashboardHandler) getUsageTrendCached(
 		Model:                 model,
 		RequestType:           requestType,
 		Stream:                stream,
+		PaidFallback:          paidFallback,
 		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
 		UpstreamModelMismatch: upstreamModelMismatch,
@@ -111,6 +119,7 @@ func (h *DashboardHandler) getUsageTrendCached(
 		return h.dashboardService.GetUsageTrendWithUsageFilters(ctx, startTime, endTime, granularity, usagestats.UsageLogFilters{
 			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
 			Model: model, RequestType: requestType, Stream: stream, NativeCompactionV2: nativeCompactionV2, BillingType: billingType,
+			PaidFallback:          paidFallback,
 			UpstreamModelMismatch: upstreamModelMismatch,
 		})
 	})
@@ -131,7 +140,12 @@ func (h *DashboardHandler) getModelStatsCached(
 	nativeCompactionV2 *bool,
 	billingType *int8,
 	upstreamModelMismatch *bool,
+	paidFallbackFilter ...*bool,
 ) ([]usagestats.ModelStat, bool, error) {
+	var paidFallback *bool
+	if len(paidFallbackFilter) > 0 {
+		paidFallback = paidFallbackFilter[0]
+	}
 	key := mustMarshalDashboardCacheKey(dashboardModelGroupCacheKey{
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
@@ -142,6 +156,7 @@ func (h *DashboardHandler) getModelStatsCached(
 		ModelSource:           usagestats.NormalizeModelSource(modelSource),
 		RequestType:           requestType,
 		Stream:                stream,
+		PaidFallback:          paidFallback,
 		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
 		UpstreamModelMismatch: upstreamModelMismatch,
@@ -150,6 +165,7 @@ func (h *DashboardHandler) getModelStatsCached(
 		return h.dashboardService.GetModelStatsWithUsageFiltersBySource(ctx, startTime, endTime, usagestats.UsageLogFilters{
 			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
 			RequestType: requestType, Stream: stream, NativeCompactionV2: nativeCompactionV2, BillingType: billingType,
+			PaidFallback:          paidFallback,
 			UpstreamModelMismatch: upstreamModelMismatch,
 		}, modelSource)
 	})
@@ -169,7 +185,12 @@ func (h *DashboardHandler) getGroupStatsCached(
 	nativeCompactionV2 *bool,
 	billingType *int8,
 	upstreamModelMismatch *bool,
+	paidFallbackFilter ...*bool,
 ) ([]usagestats.GroupStat, bool, error) {
+	var paidFallback *bool
+	if len(paidFallbackFilter) > 0 {
+		paidFallback = paidFallbackFilter[0]
+	}
 	key := mustMarshalDashboardCacheKey(dashboardModelGroupCacheKey{
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
@@ -179,6 +200,7 @@ func (h *DashboardHandler) getGroupStatsCached(
 		GroupID:               groupID,
 		RequestType:           requestType,
 		Stream:                stream,
+		PaidFallback:          paidFallback,
 		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
 		UpstreamModelMismatch: upstreamModelMismatch,
@@ -187,6 +209,7 @@ func (h *DashboardHandler) getGroupStatsCached(
 		return h.dashboardService.GetGroupStatsWithUsageFilters(ctx, startTime, endTime, usagestats.UsageLogFilters{
 			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
 			RequestType: requestType, Stream: stream, NativeCompactionV2: nativeCompactionV2, BillingType: billingType,
+			PaidFallback:          paidFallback,
 			UpstreamModelMismatch: upstreamModelMismatch,
 		})
 	})

@@ -127,6 +127,10 @@
           <Select v-model="filters.request_type" :options="requestTypeOptions" @change="emitChange" />
         </div>
 
+        <div v-if="mode !== 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
+          <label for="usage-paid-fallback" class="input-label">{{ t('admin.paidFallback.title') }}</label>
+          <Select id="usage-paid-fallback" v-model="filters.paid_fallback" :options="paidFallbackOptions" @change="emitChange" />
+        </div>
         <!-- Native compaction is independent of the transport request type. -->
         <div v-if="mode !== 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('usage.compactionFilter') }}</label>
@@ -229,6 +233,11 @@ const props = withDefaults(defineProps<Props>(), {
   mode: 'usage',
   flat: false
 })
+const paidFallbackOptions = computed(() => [
+  { value: null, label: t('admin.paidFallback.all') },
+  { value: true, label: t('admin.paidFallback.paid') },
+  { value: false, label: t('admin.paidFallback.ordinary') },
+])
 const emit = defineEmits([
   'update:modelValue',
   'change',

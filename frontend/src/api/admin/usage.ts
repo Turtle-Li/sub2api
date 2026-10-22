@@ -81,6 +81,7 @@ export interface CreateUsageCleanupTaskRequest {
 }
 
 export interface AdminUsageQueryParams extends UsageQueryParams {
+  paid_fallback?: boolean | null
   user_id?: number
   exact_total?: boolean
   billing_mode?: string
@@ -124,6 +125,7 @@ export async function getStats(params: {
   model?: string
   request_type?: UsageRequestType
   stream?: boolean
+  paid_fallback?: boolean | null
   native_compaction_v2?: boolean | null
   upstream_model_mismatch?: boolean
   period?: string

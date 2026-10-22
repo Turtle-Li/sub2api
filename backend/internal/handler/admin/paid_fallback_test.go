@@ -38,7 +38,7 @@ func TestPaidFallbackAdminSettings(t *testing.T) {
 		status int
 	}{
 		{`{"enabled":true}`, http.StatusBadRequest},
-		{`{"enabled":true,"group_ids":[7],"api_key_ids":[11]}`, http.StatusOK},
+		{`{"enabled":true,"group_ids":[7]}`, http.StatusOK},
 		{`{"enabled":false}`, http.StatusOK},
 	} {
 		recorder := httptest.NewRecorder()
@@ -52,6 +52,20 @@ func TestPaidFallbackAdminSettings(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/settings", nil))
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"enabled":false`)
+}
+
+func TestPaidFallbackAdminImmediateDisable(t *testing.T) {
+	repo := &paidFallbackAdminSettings{value: `{"enabled":true,"group_ids":[7],"api_key_ids":[11]}`}
+	h := &SettingHandler{settingService: service.NewSettingService(repo, nil)}
+	router := gin.New()
+	router.POST("/settings/paid-fallback/disable", h.DisablePaidFallback)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/settings/paid-fallback/disable", nil))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"enabled":false`)
+	require.Contains(t, recorder.Body.String(), `"group_ids":[7]`)
+	require.NotContains(t, recorder.Body.String(), `"api_key_ids"`)
+	require.Equal(t, 1, repo.writes)
 }
 
 type paidFallbackAccountAdmin struct {

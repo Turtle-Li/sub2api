@@ -82,7 +82,7 @@ func newPaidFallbackScheduler(t *testing.T, platform string, advanced bool) (*Op
 	if advanced {
 		mode = "true"
 	}
-	policy, err := json.Marshal(PaidFallbackSettings{Enabled: true, GroupIDs: []int64{7}, APIKeyIDs: []int64{11}})
+	policy, err := json.Marshal(PaidFallbackSettings{Enabled: true, GroupIDs: []int64{7}})
 	require.NoError(t, err)
 	repo := &paidFallbackSchedulerSettings{values: map[string]string{settingKeyPaidFallback: string(policy), openAIAdvancedSchedulerSettingKey: mode}}
 	settings := NewSettingService(repo, &config.Config{})
@@ -129,6 +129,7 @@ func TestPaidFallbackSchedulerFailureRecovery(t *testing.T) {
 				repo := paidFallbackTestAccountRepo(t, svc)
 				until := time.Now().Add(time.Hour)
 				repo.accounts[0].RateLimitResetAt = &until
+				ctx = WithPaidFallbackAPIKey(ctx, 999)
 				selection, err = selectPaidFallbackTestAccount(svc, ctx, platform, nil)
 				require.NoError(t, err)
 				require.EqualValues(t, 2, selection.Account.ID)
@@ -140,6 +141,9 @@ func TestPaidFallbackSchedulerFailureRecovery(t *testing.T) {
 				require.True(t, vetoed)
 				require.Equal(t, "paid_fallback_disabled", reason)
 				selection.ReleaseFunc()
+				settings.setPaidPolicy(`{"enabled":true,"group_ids":[7]}`)
+				group := int64(7)
+				require.NoError(t, svc.BindStickySession(ctx, &group, "test-session", 2))
 				repo.accounts[0].RateLimitResetAt = nil
 				selection, err = selectPaidFallbackTestAccount(svc, ctx, platform, nil)
 				require.NoError(t, err)
@@ -161,20 +165,33 @@ func TestPaidFallbackSchedulerNeedsFailureEvidence(t *testing.T) {
 	selection.ReleaseFunc()
 }
 
-func TestPaidFallbackContinuationKeepsProviderState(t *testing.T) {
-	svc, ctx, settings := newPaidFallbackScheduler(t, PlatformOpenAI, true)
-	require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, 7, "resp_paid", 2, time.Minute))
-	groupID := int64(7)
-	selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "resp_paid", "stateful", "gpt-5.4", nil, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityResponses, false, false, false)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, selection.Account.ID, "provider state stays on its original credential even after normal capacity recovers")
-	selection.ReleaseFunc()
-	settings.setPaidPolicy(`{"enabled":false}`)
-	_, _, err = svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "resp_paid", "stateful", "gpt-5.4", nil, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityResponses, false, false, false)
-	require.ErrorIs(t, err, ErrNoAvailableAccounts)
-	id, err := svc.getOpenAIWSStateStore().GetResponseAccount(ctx, 7, "resp_paid")
-	require.NoError(t, err)
-	require.EqualValues(t, 2, id)
+func TestPaidFallbackContinuationStopsAfterOrdinaryRecovery(t *testing.T) {
+	for _, advanced := range []bool{false, true} {
+		svc, ctx, settings := newPaidFallbackScheduler(t, PlatformOpenAI, advanced)
+		repo := paidFallbackTestAccountRepo(t, svc)
+		until := time.Now().Add(time.Hour)
+		repo.accounts[0].RateLimitResetAt = &until
+		require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, 7, "resp_paid", 2, time.Minute))
+		groupID := int64(7)
+		selectContinuation := func() (*AccountSelectionResult, error) {
+			selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "resp_paid", "stateful", "gpt-5.4", nil, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityResponses, false, false, false)
+			return selection, err
+		}
+		selection, err := selectContinuation()
+		require.NoError(t, err)
+		require.EqualValues(t, 2, selection.Account.ID)
+		selection.ReleaseFunc()
+		repo.accounts[0].RateLimitResetAt = nil
+		selection, err = selectContinuation()
+		require.ErrorIs(t, err, ErrPaidFallbackRestartRequired)
+		require.Nil(t, selection)
+		id, err := svc.getOpenAIWSStateStore().GetResponseAccount(ctx, 7, "resp_paid")
+		require.NoError(t, err)
+		require.EqualValues(t, 2, id, "do not transfer provider state to a different credential")
+		settings.setPaidPolicy(`{"enabled":false}`)
+		_, err = selectContinuation()
+		require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	}
 }
 
 func TestPaidFallbackContinuationMissingAccountPreservesOrdinaryRouting(t *testing.T) {

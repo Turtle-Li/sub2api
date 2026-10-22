@@ -36,8 +36,12 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 			if !paidTextRequest || !s.settingService.paidFallbackAllowed(ctx, groupID) {
 				return nil, decision, err
 			}
+			req := OpenAIAccountScheduleRequest{GroupID: groupID, Platform: NormalizeOpenAICompatiblePlatform(platform), RequestedModel: requestedModel, RequiredTransport: requiredTransport, RequiredCapability: requiredCapability}
+			if !s.ordinaryPoolUnavailableForPaidFallback(ctx, req) {
+				return nil, decision, ErrPaidFallbackRestartRequired
+			}
 			keyID, _ := ctx.Value(paidFallbackAPIKeyKey{}).(int64)
-			permit := &paidFallbackPermit{settings: s.settingService, gateway: s, request: OpenAIAccountScheduleRequest{GroupID: groupID, Platform: NormalizeOpenAICompatiblePlatform(platform), RequestedModel: requestedModel, RequiredTransport: requiredTransport, RequiredCapability: requiredCapability}, groupID: *groupID, apiKeyID: keyID, accountID: bound.ID}
+			permit := &paidFallbackPermit{settings: s.settingService, gateway: s, request: req, groupID: *groupID, apiKeyID: keyID, accountID: bound.ID}
 			previousResponseCanMove = false
 			selection, decision, err = selectPool(context.WithValue(ctx, paidFallbackPermitKey{}, permit))
 			if selection != nil && selection.Account != nil && selection.Account.ID != bound.ID {
@@ -86,6 +90,10 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 }
 
 func (s *OpenAIGatewayService) ordinaryPoolUnavailableForPaidFallback(ctx context.Context, req OpenAIAccountScheduleRequest) bool {
+	ctx = context.WithValue(ctx, paidFallbackPermitKey{}, (*paidFallbackPermit)(nil))
+	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
+	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, req.GroupID)
+	ctx = s.withOpenAIProfitControlGate(ctx, req.GroupID)
 	if s.accountRepo == nil || req.GroupID == nil || s.checkChannelPricingRestriction(ctx, req.GroupID, req.RequestedModel) {
 		return false
 	}

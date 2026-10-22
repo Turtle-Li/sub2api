@@ -1780,7 +1780,22 @@
         :type="account.type"
       />
 
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.priority') }}</label>
+          <input
+            v-model.number="form.priority"
+            type="number"
+            min="1"
+            class="input"
+            data-tour="account-form-priority"
+          />
+          <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
+        </div>
+        <PaidFallbackAccountField v-if="platformUsesGateway(account.platform, 'openai') || isPaidFallback(account.extra)" v-model="paidFallback" :can-enable="platformUsesGateway(account.platform, 'openai')" />
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
           <input v-model.number="form.concurrency" type="number" min="1" class="input"
@@ -1792,17 +1807,6 @@
             class="input" :placeholder="String(form.concurrency || 1)"
             @input="form.load_factor = (form.load_factor &amp;&amp; form.load_factor >= 1) ? form.load_factor : null" />
           <p class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
-        </div>
-        <div>
-          <label class="input-label">{{ t('admin.accounts.priority') }}</label>
-          <input
-            v-model.number="form.priority"
-            type="number"
-            min="1"
-            class="input"
-            data-tour="account-form-priority"
-          />
-          <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
@@ -3267,6 +3271,11 @@ import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import { platformUsesGateway } from '@/constants/platformCatalog'
+import { isPaidFallback } from '@/utils/paidFallback'
+import PaidFallbackAccountField from '@/components/account/PaidFallbackAccountField.vue'
+
+const paidFallback = ref(false)
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
@@ -4363,6 +4372,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.proxy_id = normalizeProxyID(newAccount.proxy_id)
   originalProxyID.value = normalizeProxyID(newAccount.proxy_id)
   form.concurrency = newAccount.concurrency
+  paidFallback.value = isPaidFallback(newAccount.extra)
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
@@ -5410,6 +5420,9 @@ const submitUpdateAccount = async (
 ) => {
   submitting.value = true
   try {
+    if (props.account && paidFallback.value !== isPaidFallback(props.account.extra)) {
+      updatePayload.extra = { ...(props.account.extra || {}), ...(updatePayload.extra as Record<string, unknown> || {}), paid_fallback: paidFallback.value }
+    }
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
     updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
     let resultAccount = updatedAccount

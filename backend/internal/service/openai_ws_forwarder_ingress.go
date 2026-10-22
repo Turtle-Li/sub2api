@@ -1055,7 +1055,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
-		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+		finishPaid, err := BeginPaidFallbackWSSend(ctx, account.ID, turn, originalModel, gjson.GetBytes(payload, "model").String(), "ws_ctx_pool")
+		if err != nil {
+			return nil, err
+		}
+		writeErr := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout())
+		finishPaid(0, writeErr)
+		if err := writeErr; err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
 				fmt.Errorf("write upstream websocket request: %w", err),

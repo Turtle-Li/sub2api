@@ -119,6 +119,7 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 type SettingService struct {
 	unifiedPaymentAppliedDigest atomic.Value // public configuration loaded at startup
 	settingRepo                 SettingRepository
+	paidFallbackOpsStore        PaidFallbackOpsStore
 	defaultSubGroupReader       DefaultSubscriptionGroupReader
 	proxyRepo                   ProxyRepository // for resolving websearch provider proxy URLs
 	cfg                         *config.Config
@@ -308,6 +309,10 @@ func NewSettingService(settingRepo SettingRepository, cfg *config.Config) *Setti
 		settingRepo: settingRepo,
 		cfg:         cfg,
 	}
+}
+
+func (s *SettingService) SetPaidFallbackOpsStore(store PaidFallbackOpsStore) {
+	s.paidFallbackOpsStore = store
 }
 
 // SetDefaultSubscriptionGroupReader injects an optional group reader for default subscription validation.

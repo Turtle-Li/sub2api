@@ -684,6 +684,10 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		adminSettings.GET("/paid-fallback", h.Admin.Setting.GetPaidFallbackSettings)
 		adminSettings.PUT("/paid-fallback", h.Admin.Setting.UpdatePaidFallbackSettings)
+		adminSettings.POST("/paid-fallback/disable", h.Admin.Setting.DisablePaidFallback)
+		adminSettings.GET("/paid-fallback/notifications", h.Admin.Setting.GetPaidFallbackNotifications)
+		adminSettings.PUT("/paid-fallback/notifications", h.Admin.Setting.UpdatePaidFallbackNotifications)
+		adminSettings.GET("/paid-fallback/report", h.Admin.Setting.GetPaidFallbackReport)
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.GET("/unified-payment-binding", h.Admin.Setting.GetUnifiedPaymentBinding)
 		adminSettings.POST("/unified-payment-binding", h.Admin.Setting.BindUnifiedPayment)

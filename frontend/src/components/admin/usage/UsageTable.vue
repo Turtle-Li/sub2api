@@ -50,6 +50,7 @@
 
         <template #cell-account="{ row }">
           <span class="text-sm text-gray-900 dark:text-white">{{ row.account?.name || '-' }}</span>
+          <span v-if="row.paid_fallback" class="ml-1 text-xs font-medium text-amber-800 dark:text-amber-200">{{ t('admin.paidFallback.paid') }}</span>
         </template>
 
         <template #cell-model="{ row }">

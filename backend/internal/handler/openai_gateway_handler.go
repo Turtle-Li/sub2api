@@ -782,6 +782,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
+			if errors.Is(err, service.ErrPaidFallbackRestartRequired) {
+				h.handleStreamingAwareError(c, http.StatusConflict, "paid_fallback_restart_required", err.Error(), streamStarted)
+				return
+			}
 			reqLog.Warn("openai.account_select_failed",
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
@@ -885,7 +889,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(service.ContextWithSelectionProfitGate(c.Request.Context(), selection), c, account, attemptBody)
+			return h.gatewayService.Forward(service.WithPaidFallbackPublicModel(service.ContextWithSelectionProfitGate(c.Request.Context(), selection), reqModel), c, account, attemptBody)
 		}()
 		var cyberBlockBodyHTTP []byte
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -1489,7 +1493,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsAnthropic(service.ContextWithSelectionProfitGate(c.Request.Context(), selection), c, account, forwardBody, promptCacheKey, defaultMappedModel)
+			return h.gatewayService.ForwardAsAnthropic(service.WithPaidFallbackPublicModel(service.ContextWithSelectionProfitGate(c.Request.Context(), selection), reqModel), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
 		var cyberBlockBodyMsg []byte
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -2990,6 +2994,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if errors.Is(err, service.ErrPaidFallbackRestartRequired) {
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "paid fallback is no longer eligible; reconnect with full conversation history")
+				return
+			}
 			if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
 			} else {
@@ -3013,7 +3021,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		// 终检、准入后绑定与后续 turn 级复核都使用选号结果携带的门（composite
 		// 等跨分组调度的门只存在于调度栈局部 ctx）；准入成功后并入连接 ctx。
-		admissionCtx := service.ContextWithSelectionProfitGate(ctx, selection)
+		admissionCtx := service.WithPaidFallbackPublicModel(service.ContextWithSelectionProfitGate(ctx, selection), reqModel)
 		accountReleaseFunc := selection.ReleaseFunc
 		if selection.Acquired {
 			// 调度器已抢槽路径同样终检：选号与抢槽之间账号倍率可能刷新。

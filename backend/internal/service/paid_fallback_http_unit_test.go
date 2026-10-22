@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -21,8 +22,53 @@ import (
 
 type paidFallbackLocalHTTP struct{ client *http.Client }
 
-func (u paidFallbackLocalHTTP) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	finish, err := BeginPaidFallbackAttempt(req.Context())
+func TestPaidFallbackHTTPModelAndAuxiliaryBoundaries(t *testing.T) {
+	attempts := make(chan PaidFallbackAttempt, 2)
+	store := &paidAttemptTestStore{
+		start:  func(_ context.Context, a PaidFallbackAttempt) error { attempts <- a; return nil },
+		finish: func(context.Context, string, string, int) error { return nil },
+	}
+	ctx, settings := paidAttemptContext(t, store)
+	ctx = context.WithValue(ctx, paidFallbackModelSendKey{}, false)
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	svc := &OpenAIGatewayService{httpUpstream: paidFallbackLocalHTTP{client: server.Client()}}
+	account := &Account{ID: 23, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Extra: map[string]any{PaidFallbackExtraKey: true}}
+	request := func() *http.Request {
+		r, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, bytes.NewBufferString(`{"model":"actual-upstream-ds"}`))
+		require.NoError(t, err)
+		return r
+	}
+	response, err := svc.doOpenAIUpstream(request(), "", account)
+	require.NoError(t, err)
+	response.Body.Close()
+	require.Empty(t, attempts, "auxiliary requests must not create model attempts")
+	r := request()
+	response, err = svc.doOpenAIModelUpstream(r, "", account)
+	require.NoError(t, err)
+	response.Body.Close()
+	a := <-attempts
+	require.Equal(t, "actual-upstream-ds", a.UpstreamModel)
+	require.Equal(t, "public-ds", a.PublicModel)
+	require.Equal(t, "forward-ds", a.ForwardModel)
+	clone, err := r.GetBody()
+	require.NoError(t, err)
+	body, err := io.ReadAll(clone)
+	clone.Close()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"actual-upstream-ds"}`, string(body))
+	settings.value = `{"enabled":false}`
+	_, err = svc.doOpenAIUpstream(request(), "", account)
+	require.Error(t, err)
+	require.EqualValues(t, 2, calls.Load())
+}
+
+func (u paidFallbackLocalHTTP) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+	finish, err := BeginPaidFallbackHTTPAttempt(req.Context(), accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +125,7 @@ func TestPaidFallbackLocalHTTPFailureRecoveryAndStop(t *testing.T) {
 				paid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { paidCalls.Add(1); reply(w, r) }))
 				defer paid.Close()
 				svc, baseCtx, settings := newPaidFallbackScheduler(t, platform, false)
+				svc.settingService.SetPaidFallbackOpsStore(&paidAttemptTestStore{start: func(context.Context, PaidFallbackAttempt) error { return nil }, finish: func(context.Context, string, string, int) error { return nil }})
 				svc.cfg = rawChatCompletionsTestConfig()
 				svc.httpUpstream = paidFallbackLocalHTTP{client: &http.Client{Timeout: time.Second}}
 				repo := paidFallbackTestAccountRepo(t, svc)
@@ -92,7 +139,7 @@ func TestPaidFallbackLocalHTTPFailureRecoveryAndStop(t *testing.T) {
 				require.NoError(t, err)
 				forward := func(ctx context.Context, selection *AccountSelectionResult) error {
 					defer selection.ReleaseFunc()
-					ctx = ContextWithSelectionProfitGate(ctx, selection)
+					ctx = WithPaidFallbackPublicModel(ContextWithSelectionProfitGate(ctx, selection), model)
 					recorder := httptest.NewRecorder()
 					c, _ := gin.CreateTestContext(recorder)
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body)).WithContext(ctx)

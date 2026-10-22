@@ -32,7 +32,7 @@ func (s *paidFallbackHandlerSettings) GetValue(_ context.Context, key string) (s
 	switch key {
 	case "paid_fallback_settings":
 		if s.enabled {
-			return `{"enabled":true,"group_ids":[7],"api_key_ids":[11]}`, nil
+			return `{"enabled":true,"group_ids":[7]}`, nil
 		}
 		return `{"enabled":false}`, nil
 	case "openai_advanced_scheduler_enabled":
@@ -79,10 +79,25 @@ func (r paidFallbackHandlerAccounts) ListAllWithFilters(_ context.Context, _, _,
 
 type paidFallbackHandlerUpstream struct {
 	service.HTTPUpstream
-	settings *paidFallbackHandlerSettings
-	revoke   bool
-	selected []int64
-	sent     int
+	settings   *paidFallbackHandlerSettings
+	revoke     bool
+	beforeSend func()
+	selected   []int64
+	sent       int
+}
+
+type paidFallbackHandlerAuditStore struct {
+	service.PaidFallbackOpsStore
+	attempts []service.PaidFallbackAttempt
+}
+
+func (s *paidFallbackHandlerAuditStore) StartAttempt(_ context.Context, attempt service.PaidFallbackAttempt) error {
+	s.attempts = append(s.attempts, attempt)
+	return nil
+}
+
+func (s *paidFallbackHandlerAuditStore) FinishAttempt(context.Context, string, string, int) error {
+	return nil
 }
 
 func (u *paidFallbackHandlerUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
@@ -92,7 +107,10 @@ func (u *paidFallbackHandlerUpstream) Do(req *http.Request, _ string, accountID 
 		u.settings.enabled = false
 		u.settings.mu.Unlock()
 	}
-	finish, err := service.BeginPaidFallbackAttempt(req.Context())
+	if u.beforeSend != nil {
+		u.beforeSend()
+	}
+	finish, err := service.BeginPaidFallbackHTTPAttempt(req.Context(), accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,17 +121,22 @@ func (u *paidFallbackHandlerUpstream) Do(req *http.Request, _ string, accountID 
 
 func TestOpenAIChatCompletionsPaidFallbackFinalSendAdmission(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, revoke := range []bool{false, true} {
-		t.Run(map[bool]string{false: "enabled", true: "revoked_after_selection"}[revoke], func(t *testing.T) {
+	for _, scenario := range []string{"enabled", "revoked_after_selection", "ordinary_recovers_after_selection"} {
+		t.Run(scenario, func(t *testing.T) {
 			settingsRepo := &paidFallbackHandlerSettings{enabled: true}
 			settings := service.NewSettingService(settingsRepo, &config.Config{})
+			audit := &paidFallbackHandlerAuditStore{}
+			settings.SetPaidFallbackOpsStore(audit)
 			until := time.Now().Add(time.Hour)
 			accounts := paidFallbackHandlerAccounts{openAIImagesFailoverAccountRepo{accounts: []service.Account{
 				{ID: 1, Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{7}, RateLimitResetAt: &until, Credentials: map[string]any{"model_mapping": map[string]any{"deepseek-v4.1-flash": "deepseek-v4.1-flash"}}},
 				{ID: 2, Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{7}, Credentials: map[string]any{"api_key": "fixture-token", "base_url": "https://fixture.invalid", "model_mapping": map[string]any{"deepseek-v4.1-flash": "deepseek-v4.1-flash"}}, Extra: map[string]any{service.PaidFallbackExtraKey: true}},
 			}}}
 			cfg := &config.Config{RunMode: config.RunModeSimple}
-			upstream := &paidFallbackHandlerUpstream{settings: settingsRepo, revoke: revoke}
+			upstream := &paidFallbackHandlerUpstream{settings: settingsRepo, revoke: scenario == "revoked_after_selection"}
+			if scenario == "ordinary_recovers_after_selection" {
+				upstream.beforeSend = func() { accounts.accounts[0].RateLimitResetAt = nil }
+			}
 			concurrency := service.NewConcurrencyService(&fakeConcurrencyCache{})
 			gateway := service.NewOpenAIGatewayService(accounts, nil, nil, nil, nil, nil, nil, cfg, nil, concurrency, nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, settings, nil)
 			billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
@@ -125,16 +148,21 @@ func TestOpenAIChatCompletionsPaidFallbackFinalSendAdmission(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hello"}]}`))
 			groupID := int64(7)
 			group := &service.Group{ID: 7, Platform: service.PlatformDeepseek, Hydrated: true}
-			ctx := context.WithValue(service.WithPaidFallbackAPIKey(c.Request.Context(), 11), ctxkey.Group, group)
+			ctx := context.WithValue(service.WithPaidFallbackAPIKey(c.Request.Context(), 999), ctxkey.Group, group)
 			c.Request = c.Request.WithContext(ctx)
-			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 11, GroupID: &groupID, Group: group, User: &service.User{ID: 100}})
+			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 999, GroupID: &groupID, Group: group, User: &service.User{ID: 100}})
 			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100})
 			handler.ChatCompletions(c)
 			require.Equal(t, []int64{2}, upstream.selected, "response: %s", rec.Body.String())
-			if revoke {
-				require.Zero(t, upstream.sent, "revoking the live policy must stop the selected paid request at the transport boundary")
+			if scenario != "enabled" {
+				require.Zero(t, upstream.sent, "policy revocation or ordinary recovery must stop the selected paid request at the transport boundary")
+				require.Empty(t, audit.attempts)
 			} else {
 				require.Equal(t, 1, upstream.sent)
+				require.Len(t, audit.attempts, 1)
+				require.Equal(t, "deepseek-v4.1-flash", audit.attempts[0].PublicModel)
+				require.Equal(t, int64(2), audit.attempts[0].AccountID)
+				require.Equal(t, int64(999), audit.attempts[0].APIKeyID)
 			}
 			require.GreaterOrEqual(t, rec.Code, http.StatusBadRequest)
 		})

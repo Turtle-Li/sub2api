@@ -149,6 +149,12 @@ func (h *UsageHandler) List(c *gin.Context) {
 		billingType = &bt
 	}
 
+	paidFallback, err := parseOptionalBoolDashboardFilter(c, "paid_fallback")
+	if err != nil {
+		response.BadRequest(c, "Invalid paid_fallback value, use true or false")
+		return
+	}
+
 	var upstreamModelMismatch *bool
 	if raw := strings.TrimSpace(c.Query("upstream_model_mismatch")); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -198,6 +204,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		ModelFilterSource:     usagestats.ModelSourceRequested,
 		RequestType:           requestType,
 		Stream:                stream,
+		PaidFallback:          paidFallback,
 		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
 		BillingMode:           billingMode,
@@ -300,6 +307,12 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		billingType = &bt
 	}
 
+	paidFallback, err := parseOptionalBoolDashboardFilter(c, "paid_fallback")
+	if err != nil {
+		response.BadRequest(c, "Invalid paid_fallback value, use true or false")
+		return
+	}
+
 	var upstreamModelMismatch *bool
 	if raw := strings.TrimSpace(c.Query("upstream_model_mismatch")); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -357,6 +370,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		ModelFilterSource:     usagestats.ModelSourceRequested,
 		RequestType:           requestType,
 		Stream:                stream,
+		PaidFallback:          paidFallback,
 		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
 		BillingMode:           billingMode,

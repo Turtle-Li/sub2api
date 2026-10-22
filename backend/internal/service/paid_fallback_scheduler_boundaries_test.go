@@ -26,13 +26,13 @@ func TestPaidFallbackBusyNormalPoolWaits(t *testing.T) {
 func TestPaidFallbackScopeModelAndDependencyDoNotTriggerSpending(t *testing.T) {
 	for _, scenario := range []string{"scope", "model", "dependency", "profit", "retry_cap", "disabled", "disabled_status"} {
 		t.Run(scenario, func(t *testing.T) {
-			svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
+			svc, ctx, settings := newPaidFallbackScheduler(t, PlatformOpenAI, false)
 			repo := paidFallbackTestAccountRepo(t, svc)
 			until := time.Now().Add(time.Hour)
 			repo.accounts[0].RateLimitResetAt = &until
 			switch scenario {
 			case "scope":
-				ctx = WithPaidFallbackAPIKey(ctx, 12)
+				settings.setPaidPolicy(`{"enabled":true,"group_ids":[8]}`)
 			case "disabled":
 				repo.accounts[0].Schedulable = false
 			case "disabled_status":

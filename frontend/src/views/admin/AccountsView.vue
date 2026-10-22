@@ -236,6 +236,7 @@
           </template>
           <template #cell-name="{ row, value }">
             <div class="flex flex-col">
+              <span v-if="isPaidFallback(row.extra)" class="mb-1 self-start rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200" :title="t('admin.paidFallback.accountHint')">{{ t('admin.paidFallback.paid') }}</span>
               <HelpTooltip
                 v-if="accountHomepageUrl(row)"
                 :content="accountHomepageUrl(row)"
@@ -399,11 +400,14 @@
             />
           </template>
           <template #cell-priority="{ row }">
-            <AccountPriorityCell
-              :account="row"
-              @updated="handleAccountUpdated"
-              @error="(message: string) => appStore.showError(message)"
-            />
+            <div class="flex flex-col items-start gap-1">
+              <AccountPriorityCell
+                :account="row"
+                @updated="handleAccountUpdated"
+                @error="(message: string) => appStore.showError(message)"
+              />
+              <AccountFallbackCell :account="row" @updated="handleAccountUpdated" @error="(message: string) => appStore.showError(message)" />
+            </div>
           </template>
           <template #header-scheduler_score="{ column }">
             <div class="flex items-center">
@@ -553,6 +557,7 @@
 </template>
 
 <script setup lang="ts">
+import { isPaidFallback } from '@/utils/paidFallback'
 import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -594,6 +599,7 @@ import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
 import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
+import AccountFallbackCell from '@/components/account/AccountFallbackCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'

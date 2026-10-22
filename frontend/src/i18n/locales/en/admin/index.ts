@@ -10,6 +10,7 @@ import promptAudit from './promptAudit'
 import plugins from './plugins'
 import modelTrace from './modelTrace'
 import clineUpstream from './clineUpstream'
+import paidFallback from './paidFallback'
 
 export default {
   ...codexTurnState,
@@ -24,4 +25,5 @@ export default {
   ...plugins,
   ...modelTrace,
   ...clineUpstream,
+  ...paidFallback,
 }

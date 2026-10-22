@@ -50,6 +50,8 @@ type UserConcurrencyInfo struct {
 
 // PlatformAvailability aggregates account availability by platform.
 type PlatformAvailability struct {
+	PaidTotal      int64  `json:"paid_total"`
+	PaidAvailable  int64  `json:"paid_available"`
 	Platform       string `json:"platform"`
 	TotalAccounts  int64  `json:"total_accounts"`
 	AvailableCount int64  `json:"available_count"`
@@ -59,6 +61,8 @@ type PlatformAvailability struct {
 
 // GroupAvailability aggregates account availability by group.
 type GroupAvailability struct {
+	PaidTotal      int64  `json:"paid_total"`
+	PaidAvailable  int64  `json:"paid_available"`
 	GroupID        int64  `json:"group_id"`
 	GroupName      string `json:"group_name"`
 	Platform       string `json:"platform"`
@@ -70,11 +74,12 @@ type GroupAvailability struct {
 
 // AccountAvailability represents current availability for a single account.
 type AccountAvailability struct {
-	AccountID   int64  `json:"account_id"`
-	AccountName string `json:"account_name"`
-	Platform    string `json:"platform"`
-	GroupID     int64  `json:"group_id"`
-	GroupName   string `json:"group_name"`
+	PaidFallback bool   `json:"paid_fallback"`
+	AccountID    int64  `json:"account_id"`
+	AccountName  string `json:"account_name"`
+	Platform     string `json:"platform"`
+	GroupID      int64  `json:"group_id"`
+	GroupName    string `json:"group_name"`
 
 	Status string `json:"status"`
 

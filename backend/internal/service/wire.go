@@ -885,8 +885,9 @@ func ProvideOpsIngressRejectAggregator(opsRepo OpsRepository, opsService *OpsSer
 }
 
 // ProvideSettingService wires SettingService with group reader and proxy repo.
-func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config) *SettingService {
+func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config, paidStore PaidFallbackOpsStore) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
+	svc.SetPaidFallbackOpsStore(paidStore)
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)
 	if err := svc.LoadForwardedClientIPSettings(context.Background()); err != nil {
@@ -1089,6 +1090,7 @@ var ProviderSet = wire.NewSet(
 	ProvidePaymentMonthlyResetCardDeliveryService,
 	ProvideInvoiceNotificationService,
 	ProvideFeishuPaymentIncidentService,
+	ProvidePaidFallbackOpsService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,
 	ProvideChannelMonitorRunner,
@@ -1183,6 +1185,12 @@ func ProvideInvoiceNotificationService(paymentSvc *PaymentService, lockCache Lea
 // gate and leader lease preserve the existing owner/standby boundary.
 func ProvideFeishuPaymentIncidentService(store FeishuPaymentIncidentStore, cfg *config.Config, lockCache LeaderLockCache, db *sql.DB) *FeishuPaymentIncidentService {
 	svc := NewFeishuPaymentIncidentService(store, NewFeishuPaymentIncidentSender(), cfg, lockCache, db)
+	svc.Start()
+	return svc
+}
+
+func ProvidePaidFallbackOpsService(store PaidFallbackOpsStore, settings *SettingService, ops *OpsService, email *NotificationEmailService) *PaidFallbackOpsService {
+	svc := NewPaidFallbackOpsService(store, settings, ops, email)
 	svc.Start()
 	return svc
 }

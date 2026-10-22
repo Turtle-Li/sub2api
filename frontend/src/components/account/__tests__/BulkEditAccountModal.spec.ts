@@ -81,6 +81,23 @@ function mountModal(extraProps: Record<string, unknown> = {}) {
 }
 
 describe('BulkEditAccountModal', () => {
+  it.each([['paid', true], ['ordinary', false]] as const)('saves the paid fallback %s change by itself', async (mode, enabled) => {
+    const wrapper = mountModal({ selectedPlatforms: ['deepseek'], selectedTypes: ['apikey'] })
+    await wrapper.get('#bulk-paid-fallback').setValue(mode)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], { extra: { paid_fallback: enabled } })
+  })
+
+  it('keeps existing fallback markers when changing another field', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['deepseek'], selectedTypes: ['apikey'] })
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledOnce()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], expect.not.objectContaining({ extra: expect.objectContaining({ paid_fallback: expect.anything() }) }))
+  })
+
   beforeEach(() => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()

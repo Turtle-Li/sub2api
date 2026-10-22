@@ -37,6 +37,7 @@ type dashboardSnapshotV2Response struct {
 }
 
 type dashboardSnapshotV2Filters struct {
+	PaidFallback          *bool
 	UserID                int64
 	APIKeyID              int64
 	AccountID             int64
@@ -50,6 +51,7 @@ type dashboardSnapshotV2Filters struct {
 }
 
 type dashboardSnapshotV2CacheKey struct {
+	PaidFallback          *bool  `json:"paid_fallback"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	Granularity           string `json:"granularity"`
@@ -107,6 +109,7 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		Model:                 filters.Model,
 		RequestType:           filters.RequestType,
 		Stream:                filters.Stream,
+		PaidFallback:          filters.PaidFallback,
 		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
@@ -192,6 +195,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			filters.PaidFallback,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get usage trend")
@@ -214,6 +218,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			filters.PaidFallback,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get model statistics")
@@ -235,6 +240,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			filters.PaidFallback,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get group statistics")
@@ -302,6 +308,13 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 		filters.Stream = &streamVal
 	}
 
+	if raw := strings.TrimSpace(c.Query("paid_fallback")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, err
+		}
+		filters.PaidFallback = &value
+	}
 	if nativeCompactionV2Str := strings.TrimSpace(c.Query("native_compaction_v2")); nativeCompactionV2Str != "" {
 		value, err := strconv.ParseBool(nativeCompactionV2Str)
 		if err != nil {

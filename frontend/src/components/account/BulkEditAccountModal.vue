@@ -6,6 +6,15 @@
     @close="handleClose"
   >
     <form id="bulk-edit-account-form" class="space-y-5" @submit.prevent="() => handleSubmit()">
+      <div>
+        <label for="bulk-paid-fallback" class="input-label">{{ t('admin.paidFallback.account') }}</label>
+        <select id="bulk-paid-fallback" v-model="paidFallbackMode" class="input">
+          <option value="keep">{{ t('admin.paidFallback.keep') }}</option>
+          <option value="paid" :disabled="!targetSelectedPlatforms.every(platform => platformUsesGateway(platform, 'openai'))">{{ t('admin.paidFallback.paid') }}</option>
+          <option value="ordinary">{{ t('admin.paidFallback.ordinary') }}</option>
+        </select>
+        <p class="input-hint">{{ t('admin.paidFallback.accountHint') }}</p>
+      </div>
       <!-- Info -->
       <div class="rounded-lg bg-blue-50 p-4 dark:bg-blue-900/20">
         <p class="text-sm text-blue-700 dark:text-blue-400">
@@ -1490,6 +1499,9 @@ import type {
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
+import { platformUsesGateway } from '@/constants/platformCatalog'
+
+const paidFallbackMode = ref<'keep' | 'paid' | 'ordinary'>('keep')
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -1938,6 +1950,9 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     return updates.extra as Record<string, unknown>
   }
 
+  if (paidFallbackMode.value !== 'keep') {
+    ensureExtra().paid_fallback = paidFallbackMode.value === 'paid'
+  }
   if (enableProxy.value) {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     updates.proxy_id = proxyId.value === null ? 0 : proxyId.value
@@ -2202,6 +2217,7 @@ const handleSubmit = async () => {
   }
 
   const hasAnyFieldEnabled =
+    paidFallbackMode.value !== 'keep' ||
     enableBaseUrl.value ||
     enableOpenAIPassthrough.value ||
     enableOpenAIFlattenNamespaces.value ||
@@ -2352,6 +2368,7 @@ watch(
   () => props.show,
   (newShow) => {
     if (!newShow) {
+      paidFallbackMode.value = 'keep'
       // Reset all enable flags
       enableBaseUrl.value = false
       enableModelRestriction.value = false

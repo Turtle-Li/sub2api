@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -358,6 +359,7 @@ func (l *openAIWSPassthroughTurnLifecycle) finishTerminalWrite(succeeded bool, o
 }
 
 type openAIWSPassthroughFirstOutputFrameConn struct {
+	beforeModelWrite  func(context.Context, []byte) (func(int, error), error)
 	inner             openaiwsv2.FrameConn
 	resolveDeadline   func(payload []byte) openAIWSPassthroughFirstOutputDeadline
 	activeReadTimeout time.Duration
@@ -461,10 +463,20 @@ func (c *openAIWSPassthroughFirstOutputFrameConn) WriteFrame(ctx context.Context
 		return errOpenAIWSConnClosed
 	}
 	generation := uint64(0)
-	if msgType == coderws.MessageText && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
+	finishPaid := func(int, error) {}
+	if (msgType == coderws.MessageText || msgType == coderws.MessageBinary) && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
+		if c.beforeModelWrite != nil {
+			var err error
+			finishPaid, err = c.beforeModelWrite(ctx, payload)
+			if err != nil {
+				return err
+			}
+		}
 		generation = c.armDeadline(payload)
 	}
-	if err := c.inner.WriteFrame(ctx, msgType, payload); err != nil {
+	writeErr := c.inner.WriteFrame(ctx, msgType, payload)
+	finishPaid(0, writeErr)
+	if err := writeErr; err != nil {
 		c.disarmDeadline(generation)
 		return err
 	}
@@ -930,7 +942,22 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
+	var paidAuditTurn atomic.Int64
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
+		beforeModelWrite: func(writeCtx context.Context, payload []byte) (func(int, error), error) {
+			public, upstream := usageMeta.turnModels("")
+			permit, _ := ctx.Value(paidFallbackPermitKey{}).(*paidFallbackPermit)
+			auditCtx := context.WithValue(writeCtx, paidFallbackPermitKey{}, permit)
+			for _, key := range []any{ctxkey.Group, ctxkey.ResolvedTargetPlatform, ctxkey.ResolvedUpstreamModel, ctxkey.RequestedPublicModel, paidFallbackFailuresKey{}} {
+				if value := ctx.Value(key); value != nil {
+					auditCtx = context.WithValue(auditCtx, key, value)
+				}
+			}
+			if inbound, ok := ctx.Value(ctxkey.ClientRequestID).(string); ok {
+				auditCtx = context.WithValue(auditCtx, ctxkey.ClientRequestID, inbound)
+			}
+			return BeginPaidFallbackWSSend(auditCtx, account.ID, int(paidAuditTurn.Add(1)), public, upstream, "ws_passthrough")
+		},
 		inner:             upstreamFrameConn,
 		activeReadTimeout: s.openAIWSPassthroughIdleTimeout(),
 		deadlineChanged:   make(chan struct{}, 1),

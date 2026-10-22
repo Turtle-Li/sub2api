@@ -507,6 +507,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if err := validatePaidFallbackExtra(input.Platform, input.Extra, nil); err != nil {
+		return nil, err
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -644,6 +647,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePaidFallbackExtra(account.Platform, input.Extra, account.Extra); err != nil {
+		return nil, err
+	}
 	if input.ProxyID != nil && account.IsOpenAIOAuthLike() && account.ParentAccountID == nil {
 		// Older clients always sent proxy_id on a full-form update.  Treat an
 		// unchanged value as an omitted field so those edits remain compatible;
@@ -742,6 +748,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	requestedProbeEnabledUpdate := input.ProbeEnabled
 	requestedRateSyncEnabledUpdate := input.RateSyncEnabled
 	if input.Extra != nil {
+		if _, explicit := normalizedExtra[PaidFallbackExtraKey]; !explicit {
+			if value, exists := account.Extra[PaidFallbackExtraKey]; exists {
+				normalizedExtra[PaidFallbackExtraKey] = value
+			}
+		}
 		requestedProbeEnabled, hasRequestedProbeEnabled := normalizedExtra[UpstreamBillingProbeEnabledExtraKey]
 		if hasRequestedProbeEnabled {
 			enabled, ok := requestedProbeEnabled.(bool)
@@ -1021,12 +1032,17 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	delete(updates, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(updates, OpenCodeGoUsageSnapshotExtraKey)
-	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
+	_, hasLongContextBilling := updates[openAILongContextBillingEnabledKey]
+	_, hasPaidFallback := updates[PaidFallbackExtraKey]
+	if hasLongContextBilling || hasPaidFallback {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
 			return err
 		}
 		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
+			return err
+		}
+		if err := validatePaidFallbackExtra(account.Platform, updates, account.Extra); err != nil {
 			return err
 		}
 	}
@@ -1090,7 +1106,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || input.Status != "" || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	_, updatesPaidFallback := input.Extra[PaidFallbackExtraKey]
+	if updatesPaidFallback || len(input.Credentials) > 0 || input.ProxyID != nil || input.Status != "" || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1101,6 +1118,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
+		}
+	}
+	if updatesPaidFallback {
+		for _, id := range input.AccountIDs {
+			account := targetsByID[id]
+			if account == nil {
+				return nil, ErrAccountNotFound
+			}
+			if err := validatePaidFallbackExtra(account.Platform, input.Extra, account.Extra); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if openAISettings.any() {

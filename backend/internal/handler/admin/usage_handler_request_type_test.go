@@ -46,6 +46,28 @@ func newAdminUsageRequestTypeTestRouter(repo *adminUsageRepoCapture) *gin.Engine
 	return router
 }
 
+func TestAdminUsagePaidFallbackFilter(t *testing.T) {
+	for _, endpoint := range []string{"/admin/usage?", "/admin/usage/stats?nocache=1&"} {
+		for _, raw := range []string{"true", "false", "invalid"} {
+			repo := &adminUsageRepoCapture{}
+			router := newAdminUsageRequestTypeTestRouter(repo)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, endpoint+"paid_fallback="+raw, nil))
+			if raw == "invalid" {
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				continue
+			}
+			require.Equal(t, http.StatusOK, rec.Code)
+			filters := repo.listFilters
+			if endpoint != "/admin/usage?" {
+				filters = repo.statsFilters
+			}
+			require.NotNil(t, filters.PaidFallback)
+			require.Equal(t, raw == "true", *filters.PaidFallback)
+		}
+	}
+}
+
 func TestAdminUsageListRequestTypePriority(t *testing.T) {
 	repo := &adminUsageRepoCapture{}
 	router := newAdminUsageRequestTypeTestRouter(repo)

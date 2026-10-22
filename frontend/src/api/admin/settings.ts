@@ -1464,6 +1464,81 @@ export async function updatePricingCurrencySettings(
   return data
 }
 
+export interface PaidFallbackSettings {
+  enabled: boolean
+  group_ids: number[]
+}
+
+export interface PaidFallbackNotificationSettings {
+  enabled: boolean
+  reminder_minutes: number
+  recovery_quiet_seconds: number
+  daily_cost_usd: number | null
+}
+
+export interface PaidFallbackAttempt {
+  id: string
+  account_id: number
+  api_key_id: number
+  group_id: number
+  public_model: string
+  forward_model: string
+  upstream_model: string
+  transport: string
+  turn: number
+  started_at: string
+  outcome: 'in_flight' | 'http_headers' | 'ws_frame_written' | 'unknown' | 'not_sent'
+  http_status: number
+}
+
+export interface PaidFallbackIncident {
+  id: string
+  group_id: number
+  public_model: string
+  generation: number
+  opened_at: string
+  last_attempt_at: string
+  resolved_at: string | null
+  attempts: number
+  unknown_cost_attempts: number
+  recorded_cost_usd: number
+}
+
+export interface PaidFallbackReport {
+  attempts: PaidFallbackAttempt[]
+  incidents: PaidFallbackIncident[]
+}
+
+export async function getPaidFallbackNotifications(): Promise<PaidFallbackNotificationSettings> {
+  const { data } = await apiClient.get<PaidFallbackNotificationSettings>('/admin/settings/paid-fallback/notifications')
+  return data
+}
+
+export async function updatePaidFallbackNotifications(value: PaidFallbackNotificationSettings): Promise<PaidFallbackNotificationSettings> {
+  const { data } = await apiClient.put<PaidFallbackNotificationSettings>('/admin/settings/paid-fallback/notifications', value)
+  return data
+}
+
+export async function getPaidFallbackReport(): Promise<PaidFallbackReport> {
+  const { data } = await apiClient.get<PaidFallbackReport>('/admin/settings/paid-fallback/report')
+  return data
+}
+
+export async function getPaidFallbackSettings(): Promise<PaidFallbackSettings> {
+  const { data } = await apiClient.get<PaidFallbackSettings>('/admin/settings/paid-fallback')
+  return data
+}
+
+export async function updatePaidFallbackSettings(settings: PaidFallbackSettings): Promise<PaidFallbackSettings> {
+  const { data } = await apiClient.put<PaidFallbackSettings>('/admin/settings/paid-fallback', settings)
+  return data
+}
+
+export async function disablePaidFallback(): Promise<PaidFallbackSettings> {
+  const { data } = await apiClient.post<PaidFallbackSettings>('/admin/settings/paid-fallback/disable')
+  return data
+}
+
 // ==================== Stream Timeout Settings ====================
 
 /**
@@ -1697,6 +1772,12 @@ export const settingsAPI = {
   updatePanelRateLimitSettings,
   getPricingCurrencySettings,
   updatePricingCurrencySettings,
+  getPaidFallbackSettings,
+  updatePaidFallbackSettings,
+  disablePaidFallback,
+  getPaidFallbackNotifications,
+  updatePaidFallbackNotifications,
+  getPaidFallbackReport,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,

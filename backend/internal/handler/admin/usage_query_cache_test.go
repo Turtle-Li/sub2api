@@ -26,3 +26,21 @@ func TestUsageStatsCacheKey_StableAndDistinct(t *testing.T) {
 	withUser.UserID = 7
 	require.NotEqual(t, k1, usageStatsCacheKey(withUser), "different user must change key")
 }
+
+func TestPaidFallbackReadCacheScopesAreDistinct(t *testing.T) {
+	paid, ordinary := true, false
+	usageKeys := map[string]bool{}
+	trendKeys := map[string]bool{}
+	modelGroupKeys := map[string]bool{}
+	snapshotKeys := map[string]bool{}
+	for _, value := range []*bool{nil, &paid, &ordinary} {
+		usageKeys[usageStatsCacheKey(usagestats.UsageLogFilters{PaidFallback: value})] = true
+		trendKeys[mustMarshalDashboardCacheKey(dashboardTrendCacheKey{PaidFallback: value})] = true
+		modelGroupKeys[mustMarshalDashboardCacheKey(dashboardModelGroupCacheKey{PaidFallback: value})] = true
+		snapshotKeys[mustMarshalDashboardCacheKey(dashboardSnapshotV2CacheKey{PaidFallback: value})] = true
+	}
+	require.Len(t, usageKeys, 3)
+	require.Len(t, trendKeys, 3)
+	require.Len(t, modelGroupKeys, 3)
+	require.Len(t, snapshotKeys, 3)
+}

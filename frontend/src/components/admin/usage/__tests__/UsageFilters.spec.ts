@@ -81,6 +81,7 @@ const defaultFilters = () => ({
   model: null,
   request_type: null,
   native_compaction_v2: null,
+  paid_fallback: null as boolean | null,
   billing_type: null,
   billing_mode: null,
 	upstream_model_mismatch: null,
@@ -285,8 +286,8 @@ describe('UsageFilters — native compaction filter', () => {
       global: { stubs: { Select: SelectStub, Teleport: true } },
     })
 
-    const compactionSelect = wrapper.findAllComponents(SelectStub).find((select: any) =>
-      (select.props('options') as Array<{ value: unknown }>).some((option) => option.value === true)
+    const compactionSelect = wrapper.findAllComponents(SelectStub).find(select =>
+      (select.props('options') as Array<{ label: string }>).some(option => option.label === 'Compaction Only')
     )
     expect(compactionSelect).toBeDefined()
     expect(compactionSelect!.props('options')).toEqual([
@@ -303,5 +304,19 @@ describe('UsageFilters — native compaction filter', () => {
 
     expect(filters.native_compaction_v2).toBe(true)
     expect(wrapper.emitted('change')).toBeTruthy()
+    const paidSelect = wrapper.findAllComponents(SelectStub).find(select =>
+      (select.props('options') as Array<{ value: unknown }>).some(option => option.value === false)
+    )
+    expect(paidSelect).toBeDefined()
+    expect(paidSelect!.props('options')).toEqual([
+      { value: null, label: 'admin.paidFallback.all' },
+      { value: true, label: 'admin.paidFallback.paid' },
+      { value: false, label: 'admin.paidFallback.ordinary' },
+    ])
+    paidSelect!.vm.$emit('update:modelValue', false)
+    paidSelect!.vm.$emit('change')
+    await wrapper.vm.$nextTick()
+    expect(filters.paid_fallback).toBe(false)
+    expect(filters.native_compaction_v2).toBe(true)
   })
 })

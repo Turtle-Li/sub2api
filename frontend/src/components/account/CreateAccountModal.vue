@@ -3238,7 +3238,22 @@
         :type="form.type"
       />
 
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.priority') }}</label>
+          <input
+            v-model.number="form.priority"
+            type="number"
+            min="1"
+            class="input"
+            data-tour="account-form-priority"
+          />
+          <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
+        </div>
+        <PaidFallbackAccountField v-if="platformUsesGateway(form.platform, 'openai')" v-model="paidFallback" :can-enable="platformUsesGateway(form.platform, 'openai')" />
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
           <input v-model.number="form.concurrency" type="number" min="1" class="input"
@@ -3250,17 +3265,6 @@
             class="input" :placeholder="String(form.concurrency || 1)"
             @input="form.load_factor = (form.load_factor &amp;&amp; form.load_factor >= 1) ? form.load_factor : null" />
           <p class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
-        </div>
-        <div>
-          <label class="input-label">{{ t('admin.accounts.priority') }}</label>
-          <input
-            v-model.number="form.priority"
-            type="number"
-            min="1"
-            class="input"
-            data-tour="account-form-priority"
-          />
-          <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
@@ -4206,7 +4210,10 @@ import {
   type OpenCodeAccountMode,
   type OpenCodeGoProtocolRule
 } from '@/components/account/credentialsBuilder'
-import { listPlatforms } from '@/constants/platformCatalog'
+import { listPlatforms, platformUsesGateway } from '@/constants/platformCatalog'
+import PaidFallbackAccountField from '@/components/account/PaidFallbackAccountField.vue'
+
+const paidFallback = ref(false)
 import {
   formatDateTimeLocalInput,
   getBrowserTimeZone,
@@ -5545,7 +5552,8 @@ const withTargetPool = <T extends { pool_id?: number | null }>(payload: T): T =>
   targetPoolId.value != null ? { ...payload, pool_id: targetPoolId.value } : payload
 
 const createAccountInTargetPool = (payload: CreateAccountRequest) =>
-  adminAPI.accounts.create(withTargetPool(payload))
+  adminAPI.accounts.create(withTargetPool(paidFallback.value && platformUsesGateway(payload.platform, 'openai')
+    ? { ...payload, extra: { ...payload.extra, paid_fallback: true } } : payload))
 
 const withAntigravityConfirmFlag = (payload: CreateAccountRequest): CreateAccountRequest => {
   if (needsMixedChannelCheck(payload.platform) && antigravityMixedChannelConfirmed.value) {
@@ -5657,6 +5665,7 @@ const resetForm = () => {
   form.load_factor = null
   form.priority = 1
   form.rate_multiplier = 1
+  paidFallback.value = false
   form.group_ids = []
   form.expires_at = null
   targetPoolId.value = null

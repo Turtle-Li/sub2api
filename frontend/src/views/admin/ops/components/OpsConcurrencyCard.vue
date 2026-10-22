@@ -49,6 +49,8 @@ const displayDimension = computed<'platform' | 'group' | 'account' | 'user'>(() 
 
 // 平台/分组汇总行数据
 interface SummaryRow {
+  paid_total: number
+  paid_available: number
   key: string
   name: string
   platform?: string
@@ -68,6 +70,7 @@ interface SummaryRow {
 
 // 账号详细行数据
 interface AccountRow {
+  paid_fallback: boolean
   key: string
   name: string
   platform: string
@@ -118,6 +121,8 @@ const platformRows = computed((): SummaryRow[] => {
     return {
       key: platform,
       name: platform.toUpperCase(),
+      paid_total: safeNumber(avail.paid_total),
+      paid_available: safeNumber(avail.paid_available),
       total_accounts: totalAccounts,
       available_accounts: availableAccounts,
       rate_limited_accounts: safeNumber(avail.rate_limit_count),
@@ -158,7 +163,9 @@ const groupRows = computed((): SummaryRow[] => {
         key: gid,
         name: String(conc.group_name || avail.group_name || `Group ${gid}`),
         platform: String(conc.platform || avail.platform || ''),
-        total_accounts: totalAccounts,
+        paid_total: safeNumber(avail.paid_total),
+      paid_available: safeNumber(avail.paid_available),
+      total_accounts: totalAccounts,
         available_accounts: availableAccounts,
         rate_limited_accounts: safeNumber(avail.rate_limit_count),
   
@@ -203,6 +210,7 @@ const accountRows = computed((): AccountRow[] => {
         max_capacity: safeNumber(conc.max_capacity),
         waiting_in_queue: safeNumber(conc.waiting_in_queue),
         load_percentage: safeNumber(conc.load_percentage),
+        paid_fallback: avail.paid_fallback || false,
         is_available: avail.is_available || false,
         is_rate_limited: avail.is_rate_limited || false,
         rate_limit_remaining_sec: avail.rate_limit_remaining_sec,
@@ -444,6 +452,7 @@ watch(
       <!-- 汇总视图（平台/分组） -->
       <div v-else-if="displayDimension === 'platform' || displayDimension === 'group'" class="custom-scrollbar max-h-[360px] flex-1 space-y-2 overflow-y-auto p-3">
         <div v-for="row in (displayRows as SummaryRow[])" :key="row.key" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-900">
+          <p v-if="row.paid_total" class="mb-2 text-xs text-amber-800 dark:text-amber-200">{{ t('admin.paidFallback.paid') }} {{ row.paid_available }}/{{ row.paid_total }} · {{ t('admin.paidFallback.ordinary') }} {{ row.available_accounts }}/{{ row.total_accounts }}</p>
           <!-- 标题行 -->
           <div class="mb-2 flex items-center justify-between gap-2">
             <div class="flex items-center gap-2">
@@ -518,6 +527,7 @@ watch(
       <!-- 账号详细视图 -->
       <div v-else class="custom-scrollbar max-h-[360px] flex-1 space-y-2 overflow-y-auto p-3">
         <div v-for="row in (displayRows as AccountRow[])" :key="row.key" class="rounded-lg bg-gray-50 p-2.5 dark:bg-dark-900">
+          <p v-if="row.paid_fallback" class="mb-1 text-xs text-amber-800 dark:text-amber-200">{{ t('admin.paidFallback.paid') }}</p>
           <!-- 账号名称和并发 -->
           <div class="mb-1.5 flex items-center justify-between gap-2">
             <div class="min-w-0 flex-1">
