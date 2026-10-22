@@ -147,7 +147,7 @@ func TestPaidFallbackDurableSendAdmission(t *testing.T) {
 					return errors.New("database unavailable")
 				}
 				if tc == "off_after_insert" {
-					repo.value = `{"enabled":false}`
+					require.NoError(t, repo.Set(ctx, settingKeyPaidFallback, `{"enabled":false}`))
 				}
 				if tc == "cancel_after_insert" {
 					cancel()
@@ -165,7 +165,7 @@ func TestPaidFallbackDurableSendAdmission(t *testing.T) {
 			account := int64(23)
 			switch tc {
 			case "off":
-				repo.value = `{"enabled":false}`
+				require.NoError(t, repo.Set(ctx, settingKeyPaidFallback, `{"enabled":false}`))
 			case "account_mismatch":
 				account = 24
 			case "canceled":
@@ -257,7 +257,7 @@ func TestPaidFallbackModelOnlyAndBridgeAudit(t *testing.T) {
 	require.Len(t, attempts, 2)
 	require.Equal(t, "turn-public-ds", attempts[1].PublicModel)
 	require.Equal(t, "turn-upstream-ds", attempts[1].UpstreamModel)
-	policy.value = `{"enabled":false}`
+	require.NoError(t, policy.Set(ctx, settingKeyPaidFallback, `{"enabled":false}`))
 	_, err = BeginPaidFallbackHTTPAttempt(aux, 23)
 	require.Error(t, err)
 	require.Len(t, attempts, 2, "auxiliary revocation must not add a model attempt")
@@ -286,7 +286,7 @@ func TestPaidFallbackPassthroughEveryModelFrame(t *testing.T) {
 			require.Equal(t, uint64(2), conn.state.generation, "every model frame arms a deadline")
 			require.Equal(t, "first-ds", attempts[0].PublicModel)
 			require.Equal(t, "next-ds", attempts[1].PublicModel)
-			repo.value = `{"enabled":false}`
+			require.NoError(t, repo.Set(ctx, settingKeyPaidFallback, `{"enabled":false}`))
 			require.Error(t, conn.WriteFrame(ctx, messageType, []byte(`{"type":"response.create","model":"third-ds"}`)))
 			require.Len(t, inner.writes, 3)
 			require.Len(t, attempts, 2)

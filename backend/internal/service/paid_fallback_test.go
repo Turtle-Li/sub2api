@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,14 +12,19 @@ import (
 
 type paidFallbackSettingRepo struct {
 	SettingRepository
+	mu    sync.RWMutex
 	value string
 	err   error
 }
 
 func (r *paidFallbackSettingRepo) GetValue(context.Context, string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.value, r.err
 }
 func (r *paidFallbackSettingRepo) Set(_ context.Context, _ string, value string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.value = value
 	return r.err
 }
@@ -58,10 +64,10 @@ func TestPaidFallbackScopeAndKillSwitch(t *testing.T) {
 	paid := &Account{ID: 23, Extra: map[string]any{PaidFallbackExtraKey: true}}
 	ctx = context.WithValue(ctx, paidFallbackPermitKey{}, permit)
 	require.Empty(t, paidFallbackAdmissionFailure(ctx, paid))
-	repo.value = `{"enabled":false}`
+	require.NoError(t, repo.Set(ctx, settingKeyPaidFallback, `{"enabled":false}`))
 	require.Equal(t, "paid_fallback_disabled", paidFallbackAdmissionFailure(ctx, paid))
 	for _, value := range []string{"", "{", `{"enabled":true}`, `{"enabled":true,"group_ids":[-7]}`} {
-		repo.value = value
+		require.NoError(t, repo.Set(ctx, settingKeyPaidFallback, value))
 		require.False(t, settings.paidFallbackAllowed(ctx, &group))
 	}
 }

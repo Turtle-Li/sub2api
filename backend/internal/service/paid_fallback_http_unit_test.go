@@ -61,7 +61,7 @@ func TestPaidFallbackHTTPModelAndAuxiliaryBoundaries(t *testing.T) {
 	clone.Close()
 	require.NoError(t, err)
 	require.JSONEq(t, `{"model":"actual-upstream-ds"}`, string(body))
-	settings.value = `{"enabled":false}`
+	require.NoError(t, settings.Set(ctx, settingKeyPaidFallback, `{"enabled":false}`))
 	_, err = svc.doOpenAIUpstream(request(), "", account)
 	require.Error(t, err)
 	require.EqualValues(t, 2, calls.Load())
