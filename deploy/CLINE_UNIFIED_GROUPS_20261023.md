@@ -1,6 +1,6 @@
 # ClinePass 统一账号与国产模型分组
 
-2026-10-23 应用配置检查点；本次未部署或重启。项目连接与生产操作边界继续以 `deploy/README.md` 为准。
+2026-10-23 应用配置检查点，2026-10-24 前端与上游 v0.2.18 已合并发布。项目连接与生产操作边界继续以 `deploy/README.md` 为准。
 
 ## 最终账号与分组
 
@@ -40,5 +40,14 @@ DeepSeek 官方当前 Pro 兼容名仍按路由公告使用 Flash 参考价；Cl
 后续固定价修正经线上配置与公开广场回读确认；现有 DeepSeek 自定义分组价不受峰谷缩放、无时段配置返回倍率 1 的单元测试通过。前端新增回归测试先出现预期失败，再修复通过：相关 59 项测试、3 项 i18n 完整性测试、类型检查、构建和目标文件 ESLint 全部通过。原生 Chrome 已打开本地前端并使用线上公开 API，核对四家人民币官方价及 DeepSeek 四条固定价行。
 
 对比未修改凭据的旧重复账号，221 除模型映射外的凭据完全一致（仅记录比较布尔值）；秘密未写入证据。完整非秘密快照与恢复边界保留在本次工作区 `review-artifacts/cline-unified-models-20261023/`。
+
+2026-10-24 发布验收：主分支提交 `b7743bf17501919e74d83546bfff4eba47dfa6a2`
+通过 [workflow39983452365](https://github.com/Turtle-Li/sub2api/actions/runs/39983452365)
+上线 v0.2.18，蓝实例健康。四组9张价卡、账号221映射与白名单、原倍率及
+DeepSeek 固定价回读通过；DeepSeek/Kimi 正向请求200，六次跨组请求404，
+MiniMax Flash 真实账号测试通过。线上入口与广场 JS 产物逐字节匹配已验证构建。
+验收时238/239已软删除，数据库历史行仍在且inactive；不恢复该并发配置状态。
+详细版本、测试、备份及浏览器验收限制见
+[合并发布记录](../docs/operations/UPSTREAM_V0218_20261023.md)。
 
 官方依据：[Cline 实时 Pass 目录](https://api.cline.bot/api/v1/ai/cline/recommended-models)、[固定 revision 的 Pass 下线说明](https://github.com/cline/cline/blob/1619168bdeb570aa233d0f0a9af1d332d83a2816/docs/getting-started/clinepass.mdx#L204-L237)、[MiniMax 国内价格](https://platform.minimax.cn/docs/pricing/overview)、[Kimi 国内价格](https://platform.kimi.com/docs/pricing/chat)、[智谱价格](https://docs.bigmodel.cn/cn/guide/start/pricing)、[DeepSeek 价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)及[路由公告](https://api-docs.deepseek.com/zh-cn/news/news260910/)。
