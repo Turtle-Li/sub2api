@@ -164,6 +164,82 @@ describe('PlazaModelPricingTable', () => {
     expect(text).not.toContain('¥')
   })
 
+  it.each(['deepseek', 'kimi', 'zhipu', 'minimax'])('%s 官方价显示人民币，实付保留钱包参考价', (platform) => {
+    const model = tokenModel({ name: `${platform}-model`, platform })
+    model.pricing = {
+      ...model.pricing!, input_price: 1e-6 / 6.75, output_price: 4e-6 / 6.75,
+      cache_write_price: null, cache_read_price: 0.02e-6 / 6.75
+    }
+    model.official_pricing = {
+      input_price: 1e-6 / 6.75, output_price: 4e-6 / 6.75,
+      cache_write_price: null, cache_read_price: 0.02e-6 / 6.75
+    }
+    const wrapper = mountTable([model], 0.5, null, {
+      pricingCurrency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
+      displayCurrency: 'CNY', displayUsdRate: 6.75
+    })
+    const cells = wrapper.findAll('tbody tr td')
+    expect(cells[1]!.text()).toBe('$0.50')
+    expect(cells[2]!.text()).toBe('$2.00')
+    expect(cells[3]!.text()).toContain('$0.01')
+    expect(cells[4]!.text()).toBe('¥1.00')
+    expect(cells[5]!.text()).toBe('¥4.00')
+    expect(cells[6]!.text()).toContain('¥0.02')
+    const headings = wrapper.findAll('thead tr:first-child th')
+    expect(headings[1]!.text()).toContain('$ / 1M tokens')
+    expect(headings[2]!.text()).toContain('¥ / 1M tokens')
+    wrapper.unmount()
+  })
+
+  it.each(['CNY', 'USD'])('国产官方价独立使用公开汇率，不跟随 %s 分组的实付展示口径', (displayCurrency) => {
+    const wrapper = mountTable([tokenModel({ platform: 'kimi' })], 0.25, null, {
+      pricingCurrency: { settlement_currency: 'CNY', usd_to_cny_rate: 7.2 },
+      displayCurrency, displayUsdRate: 1
+    })
+    const cells = wrapper.findAll('tbody tr td')
+    expect(cells[1]!.text()).toBe('$0.75')
+    expect(cells[2]!.text()).toBe('$3.75')
+    expect(cells[4]!.text()).toBe('¥21.60')
+    expect(cells[5]!.text()).toBe('¥108.00')
+    expect(cells[6]!.text()).toContain('¥43.20')
+    wrapper.unmount()
+  })
+
+  it('组合分组逐模型选择官方币种，并在官方表头披露两种币种', () => {
+    const wrapper = mountTable([
+      tokenModel({ name: 'claude-sonnet', platform: 'anthropic' }),
+      tokenModel({ name: 'kimi-k3', platform: 'kimi' })
+    ], 1, null, { displayCurrency: 'USD' })
+    const rows = wrapper.findAll('tbody tr')
+    const kimi = rows.find(row => row.text().includes('kimi-k3'))!
+    const claude = rows.find(row => row.text().includes('claude-sonnet'))!
+    expect(kimi.findAll('td')[4]!.text()).toBe('¥20.25')
+    expect(claude.findAll('td')[4]!.text()).toBe('$3.00')
+    expect(kimi.findAll('td')[1]!.text()).toBe('$3.00')
+    const officialHeading = wrapper.findAll('thead tr:first-child th')[2]!.text()
+    expect(officialHeading).toContain('¥')
+    expect(officialHeading).toContain('$')
+    wrapper.unmount()
+  })
+
+  it('国产官方阶梯和缓存价格全部使用人民币，实际阶梯保持原值', () => {
+    const model = tokenModel({ platform: 'minimax' })
+    model.official_pricing!.intervals = [{
+      min_tokens: 0, max_tokens: null, input_price: 3e-6, output_price: 15e-6,
+      cache_write_price: 3.75e-6, cache_write_1h_price: 6e-6, cache_read_price: 0.3e-6
+    }]
+    const wrapper = mountTable([model], 0.5, null, { displayCurrency: 'USD' })
+    const cells = wrapper.findAll('tbody tr td')
+    expect(cells[1]!.text()).toBe('$1.50')
+    expect(cells[4]!.text()).toContain('¥20.25')
+    expect(cells[5]!.text()).toContain('¥101.25')
+    expect(cells[6]!.text()).toContain('¥25.3125')
+    expect(cells[6]!.text()).toContain('¥40.50')
+    expect(cells[6]!.text()).toContain('¥2.025')
+    expect(cells[6]!.text()).not.toContain('$')
+    wrapper.unmount()
+  })
+
   it('shows all configured reasoning multipliers in level order', () => {
     const model = tokenModel()
     model.pricing!.reasoning_effort_multipliers = { max: 3, none: 0.5, high: 1.5 }
@@ -760,8 +836,9 @@ describe('PlazaModelPricingTable 分时计价', () => {
     expect(peakCells[1].text()).toContain('$2.88')
     expect(peakCells[7].text()).toContain('0.96x')
 
-    // 官方列不受时段影响
-    expect(nightCells[4].text()).toContain('$3.00')
+    // 国产官方列按人民币显示，不受时段影响。
+    expect(nightCells[4].text()).toContain('¥20.25')
+    expect(nightCells[4].text()).toBe(baseCells[4].text())
   })
 
   it('仅工作日生效时时段行带工作日前缀,tooltip 换用周末回落文案', () => {

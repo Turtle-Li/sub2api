@@ -33,7 +33,7 @@
           >
             <div class="border-b border-gray-200 pb-2 text-gray-400 dark:border-dark-600 dark:text-dark-500">
               {{ t('modelPlaza.table.officialPrice') }}
-              <span class="ml-1 normal-case font-normal text-gray-400 dark:text-dark-500">{{ currencyUnit(t('modelPlaza.table.unitPerMillion')) }}</span>
+              <span class="ml-1 normal-case font-normal text-gray-400 dark:text-dark-500">{{ officialCurrencyUnit(t('modelPlaza.table.unitPerMillion')) }}</span>
             </div>
           </th>
           <th
@@ -219,10 +219,10 @@
                 class="whitespace-nowrap leading-5"
               >
                 <span class="mr-1 font-sans text-gray-400 dark:text-dark-500" :title="t('modelPlaza.table.tierHint')">{{ tierLabel(iv) }}</span>
-                {{ official(iv.input_price) }}
+                {{ official(m, iv.input_price) }}
               </div>
             </template>
-            <template v-else>{{ official(m.official_pricing?.input_price) }}</template>
+            <template v-else>{{ official(m, m.official_pricing?.input_price) }}</template>
           </td>
           <td class="px-3 py-2.5 align-middle font-mono text-xs text-gray-500 dark:text-dark-400">
             <template v-if="officialIntervals(m).length">
@@ -232,10 +232,10 @@
                 class="whitespace-nowrap leading-5"
                 :title="t('modelPlaza.table.tierHint')"
               >
-                {{ official(iv.output_price) }}
+                {{ official(m, iv.output_price) }}
               </div>
             </template>
-            <template v-else>{{ official(m.official_pricing?.output_price) }}</template>
+            <template v-else>{{ official(m, m.official_pricing?.output_price) }}</template>
           </td>
           <td class="px-3 py-2.5 align-middle">
             <template v-if="hasTierCachePricing(officialIntervals(m))">
@@ -247,13 +247,13 @@
               >
                 <template v-if="iv.cache_write_price != null || iv.cache_write_1h_price != null || iv.cache_read_price != null">
                   <span class="font-sans text-gray-400 dark:text-dark-500">{{ t('modelPlaza.table.cacheWriteShort') }}</span>
-                  {{ official(iv.cache_write_price) }}
+                  {{ official(m, iv.cache_write_price) }}
                   <template v-if="iv.cache_write_1h_price != null"
-                    ><span class="font-sans text-gray-400 dark:text-dark-500"> (1h </span>{{ official(iv.cache_write_1h_price)
+                    ><span class="font-sans text-gray-400 dark:text-dark-500"> (1h </span>{{ official(m, iv.cache_write_1h_price)
                     }}<span class="font-sans text-gray-400 dark:text-dark-500">)</span></template
                   >
                   <span class="ml-1 font-sans text-gray-400 dark:text-dark-500">{{ t('modelPlaza.table.cacheReadShort') }}</span>
-                  {{ official(iv.cache_read_price) }}
+                  {{ official(m, iv.cache_read_price) }}
                 </template>
                 <span v-else class="text-gray-400 dark:text-dark-500">-</span>
               </div>
@@ -264,15 +264,15 @@
             >
               <div>
                 <span class="mr-1 font-sans font-normal text-gray-400 dark:text-dark-500">{{ t('modelPlaza.table.cacheWrite') }}</span>
-                {{ official(m.official_pricing.cache_write_price)
+                {{ official(m, m.official_pricing.cache_write_price)
                 }}<template v-if="m.official_pricing.cache_write_1h_price != null"
-                  ><span class="font-sans text-gray-400 dark:text-dark-500"> (1h </span>{{ official(m.official_pricing.cache_write_1h_price)
+                  ><span class="font-sans text-gray-400 dark:text-dark-500"> (1h </span>{{ official(m, m.official_pricing.cache_write_1h_price)
                   }}<span class="font-sans text-gray-400 dark:text-dark-500">)</span></template
                 >
               </div>
               <div>
                 <span class="mr-1 font-sans font-normal text-gray-400 dark:text-dark-500">{{ t('modelPlaza.table.cacheRead') }}</span>
-                {{ official(m.official_pricing.cache_read_price) }}
+                {{ official(m, m.official_pricing.cache_read_price) }}
               </div>
             </div>
             <span v-else class="text-gray-400 dark:text-dark-500">-</span>
@@ -316,6 +316,7 @@ import {
   settlementCurrencySymbol
 } from '@/utils/settlementCurrency'
 import { platformAccentColor, platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
+import { getPlatformSpec } from '@/constants/platformCatalog'
 import {
   BILLING_MODE_TOKEN,
   BILLING_MODE_IMAGE,
@@ -365,8 +366,9 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const sitePricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
 const pricingCurrency = computed(() => {
-  const site = pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings)
+  const site = sitePricingCurrency.value
   if (!props.displayCurrency) return site
   return {
     settlementCurrency: normalizeSettlementCurrency(props.displayCurrency),
@@ -460,6 +462,15 @@ function currencyUnit(unit: string): string {
   return symbol === '$' ? unit : unit.replace(/\$/g, symbol)
 }
 
+function officialCurrencySymbol(model: PlazaModel): string {
+  return getPlatformSpec(model.platform)?.cn_provider ? '¥' : '$'
+}
+
+function officialCurrencyUnit(unit: string): string {
+  const symbols = [...new Set(props.models.map(officialCurrencySymbol))].sort().join(' / ')
+  return unit.replace(/\$/g, symbols || '$')
+}
+
 /** 实付价 = 渠道单价 × 生效倍率(时段行再乘时段倍率),按结算币种的每 1M token 展示。 */
 function paidPerMillion(value: number | null | undefined, period: PlazaTimePricingPeriod | null = null): string {
   if (value == null) return '-'
@@ -489,9 +500,12 @@ function paidRequestPrice(m: PlazaModel, value: number | null | undefined): stri
   return displayCatalogUSDPrice(value * requestRate(m), 1, MIN_DECIMALS)
 }
 
-/** 官方参考价不乘倍率。 */
-function official(value: number | null | undefined): string {
+/** 官方价保持目录 USD 契约，国模按公开汇率还原人民币；不使用分组实付口径。 */
+function official(model: PlazaModel, value: number | null | undefined): string {
   if (value == null) return '-'
+  if (officialCurrencySymbol(model) === '¥') {
+    return formatScaled(value * sitePricingCurrency.value.usdToCNYRate, PER_MILLION, MIN_DECIMALS).replace(/^\$/, '¥')
+  }
   return displayCatalogUSDPrice(value, PER_MILLION, MIN_DECIMALS)
 }
 

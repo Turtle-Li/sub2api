@@ -192,3 +192,19 @@ This is presentation only: persisted compatibility markers, exports, pricing
 cards, billing arithmetic, group multipliers and balance numbers are unchanged.
 No data migration, new setting or extra FX calculation is introduced. This
 supersedes the initial mixed-currency hiding decision in R6.
+
+## Domestic official reference prices (owner clarification 2026-10-23)
+
+In the model plaza, official reference prices for platforms marked `cn_provider`
+in the shared platform catalog display real CNY with `¥`. The official-price API
+retains its canonical USD/token contract: the frontend restores CNY using the
+public `pricing_currency.usd_to_cny_rate`, the same policy used by backend CNY
+price-card normalization. It does not use a group's actual-debit display rate.
+This applies to input, output, cache and context-tier reference prices. Mixed
+platform tables declare both symbols in the official-price header.
+
+Actual prices keep the historical `$` internal reference marker and their
+existing numeric calculation. Wallet values, actual charges, recharge bonuses,
+the `¥1` recharge to 1 wallet-unit basis and non-domestic reference rendering do
+not change. Do not change the global wallet formatter or rerun a migration for
+this model-plaza display rule.
