@@ -1,5 +1,12 @@
 # Sub2API project operations
 
+## Upstream v0.2.18 integration
+
+- For the October 23 merge, read `docs/operations/UPSTREAM_V0218_20261023.md`.
+  Keep scheduler memo invalidation compatible with atomic protected/deleted
+  account retirement, compatibility-stream draining with local usage dispatch,
+  account quota denomination, and existing image/upscale/batch capabilities.
+
 ## Paid fallback accounts
 
 - Before changing paid reserve selection, forwarding admission, usage attribution,
