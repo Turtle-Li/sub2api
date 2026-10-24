@@ -1,6 +1,7 @@
 package service
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -62,7 +63,8 @@ const (
 	ClineUpstreamStatusNotAdopted = "not-adopted"
 
 	// clineUpstreamMaxListLen 限制单个列表长度，避免异常配置无限放大请求体。
-	clineUpstreamMaxListLen = 16
+	clineUpstreamMaxListLen    = 16
+	clineCapabilityPinnedModel = "cline-pass/deepseek-v4.1-flash-1017"
 )
 
 // ClineUpstreamPin 是单个模型的钉住配置。
@@ -239,10 +241,20 @@ func injectClineUpstreamPrefs(body []byte, pin ClineUpstreamPin, meta ClineUpstr
 
 	out := body
 	pipeline := meta.Pipeline
-	useGateway := pipeline == "" || pipeline == ClinePipelinePlanner
+	capabilityPin := strings.TrimSpace(gjson.GetBytes(body, "model").String()) == clineCapabilityPinnedModel && (len(wanted) > 0 || len(allow) > 0)
+	useGateway := pipeline == "" || pipeline == ClinePipelinePlanner || capabilityPin
 	useOpenRouter := pipeline == "" || pipeline == ClinePipelineDirect
 
 	if useGateway {
+		if capabilityPin {
+			capabilities := []string{"vision", "implicit-caching"}
+			for _, value := range gjson.GetBytes(body, "providerOptions.gateway.has").Array() {
+				if value.Type == gjson.String && !slices.Contains(capabilities, value.String()) {
+					capabilities = append(capabilities, value.String())
+				}
+			}
+			out = setClineJSONField(out, "providerOptions.gateway.has", capabilities)
+		}
 		if len(wanted) > 0 {
 			if pin.Mode == ClinePinModeStrict {
 				out = setClineJSONField(out, "providerOptions.gateway.only", clineChannelsForPipeline(wanted[:1], ClinePipelinePlanner))
@@ -385,9 +397,9 @@ func EvaluateClinePinAdherence(pin ClineUpstreamPin, actualProvider string) Clin
 	return ClineAdherenceNotAdopted
 }
 
-// ClinePinAdherenceOK 报告该判定是否算「钉住被遵守或无法判定」。
+// ClinePinAdherenceOK requires provider evidence that the pin was adopted.
 func ClinePinAdherenceOK(adherence ClinePinAdherence) bool {
-	return adherence != ClineAdherenceNotAdopted && adherence != ClineAdherenceViolated
+	return adherence == ClineAdherenceAdopted || adherence == ClineAdherenceFallback
 }
 
 // clineGatewaySort 返回 Vercel AI Gateway 的排序取值（原样）。

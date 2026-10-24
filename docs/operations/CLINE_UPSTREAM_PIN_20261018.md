@@ -1,5 +1,27 @@
 # Cline Pass upstream pinning (2026-10-18)
 
+## October 24 capability correction
+
+Read [the measured capability-filter contract](CLINE_CAPABILITY_PIN_20261024.md)
+for the current Flash-1017 exception. A configured restriction on
+`cline-pass/deepseek-v4.1-flash-1017` now adds gateway
+`has: ["vision", "implicit-caching"]` at the shared final-send seam, with no
+configuration migration. The same injector serves channel harvesting and
+validation. It preserves additional client capability requirements and sends the
+gateway form even with a stale direct-pipeline snapshot. Unconfigured requests
+and all other model IDs retain their previous injection behavior.
+
+This supersedes the earlier inference below that a private contributor response
+necessarily means a model cannot be pinned: for this exact model the combined
+filter was verified to route to DeepSeek and reject an invalid provider.
+Ordinary Flash still ignored the combination in real tests; Pro already honoured
+`only` but rejected the two extra capabilities. Never broaden the default from
+one model based on its family name.
+
+Admin test/probe/validate now inspect response-body errors, including HTTP 200
+SSE errors. A pin test with no provider declaration returns
+`ok=false, adherence=unresolved`; HTTP success alone is not a verified pin.
+
 ## Release record
 
 - Fork `main` advanced to `b3ffa338ef24697dd11c059086968a4875bebfb7`

@@ -367,6 +367,12 @@
 
 ## Cline Pass upstream pinning
 
+- For capability-assisted pinning, read
+  `docs/operations/CLINE_CAPABILITY_PIN_20261024.md`. Only the verified
+  `cline-pass/deepseek-v4.1-flash-1017` restriction automatically adds gateway
+  `has: ["vision", "implicit-caching"]`, including with a stale direct-pipeline
+  snapshot. Do not apply this default to Pro or ordinary Flash. Pin tests
+  require observed provider evidence and must reject HTTP 200 JSON/SSE errors.
 - Read `docs/operations/CLINE_UPSTREAM_PIN_20261018.md` before changing the
   Cline Pass (`cline-pass/*`) upstream pinning path. Preserve the single
   injection point in `sendCCUpstreamRequest`, the no-op guarantee for accounts

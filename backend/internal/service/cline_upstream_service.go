@@ -427,8 +427,8 @@ func (s *ClineUpstreamService) Test(ctx context.Context, accountID int64, model 
 		result.Error = callErr.Error()
 		return result, nil
 	}
-	if status < 200 || status >= 300 {
-		result.Error = truncate(strings.TrimSpace(string(respBody)), 400)
+	if message := clineUpstreamErrorMessage(status, respBody); message != "" {
+		result.Error = truncate(message, 400)
 		return result, nil
 	}
 	routing := parseClineUpstreamRouting(respBody)
@@ -593,8 +593,8 @@ func (s *ClineUpstreamService) probeModel(ctx context.Context, account *Account,
 		result.Error = callErr.Error()
 		return result
 	}
-	if status < 200 || status >= 300 {
-		result.Error = truncate(strings.TrimSpace(string(respBody)), 400)
+	if message := clineUpstreamErrorMessage(status, respBody); message != "" {
+		result.Error = truncate(message, 400)
 		return result
 	}
 	routing := parseClineUpstreamRouting(respBody)
@@ -681,16 +681,16 @@ func (s *ClineUpstreamService) harvestWithForm(ctx context.Context, account *Acc
 		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
 		"max_tokens": clineUpstreamHarvestMaxTokens,
 	}
-	payload := base
-	if pipeline == ClinePipelineDirect {
-		payload["provider"] = map[string]any{"only": []string{clineUpstreamProbePlaceholder}}
-	} else {
-		payload["providerOptions"] = map[string]any{"gateway": map[string]any{"only": []string{clineUpstreamProbePlaceholder}}}
-	}
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(base)
 	if err != nil {
 		return nil, err.Error(), false, ""
 	}
+	if pipeline != ClinePipelineDirect {
+		pipeline = ClinePipelinePlanner
+	}
+	body = injectClineUpstreamPrefs(body, ClineUpstreamPin{
+		Mode: ClinePinModeStrict, Upstreams: []string{clineUpstreamProbePlaceholder},
+	}, ClineUpstreamMeta{Pipeline: pipeline})
 	status, respBody, callErr := s.chatCompletion(ctx, account, body, clineUpstreamValidateTimeout)
 	if callErr != nil {
 		return nil, callErr.Error(), false, ""
@@ -730,10 +730,6 @@ func (s *ClineUpstreamService) validateUpstreams(ctx context.Context, account *A
 				"model":      model,
 				"messages":   []map[string]any{{"role": "user", "content": "hi"}},
 				"max_tokens": clineUpstreamValidateMaxTokens,
-				"provider":   map[string]any{"only": []string{upstream}},
-				"providerOptions": map[string]any{
-					"gateway": map[string]any{"only": []string{upstream}},
-				},
 			})
 			if err != nil {
 				mu.Lock()
@@ -741,13 +737,20 @@ func (s *ClineUpstreamService) validateUpstreams(ctx context.Context, account *A
 				mu.Unlock()
 				return
 			}
+			body = injectClineUpstreamPrefs(body, ClineUpstreamPin{
+				Mode: ClinePinModeStrict, Upstreams: []string{upstream},
+			}, ClineUpstreamMeta{})
 			started := time.Now()
 			status, respBody, callErr := s.chatCompletion(ctx, account, body, clineUpstreamValidateTimeout)
+			message := clineUpstreamErrorMessage(status, respBody)
 			entry := ClineUpstreamStatus{MS: time.Since(started).Milliseconds(), CheckedAt: now}
 			switch {
 			case callErr != nil:
 				entry.Status = ClineUpstreamStatusUnknown
 				entry.Note = truncate(callErr.Error(), 160)
+			case message != "":
+				entry.Status = classifyClineUpstreamError(message)
+				entry.Note = truncate(message, 160)
 			case status >= 200 && status < 300:
 				// 200 不是钉住生效的证据：网关会静默丢弃无法识别的 only 并自行选渠道。
 				// 唯一诚实的判据是响应回读到的实际渠道是否就是被钉的那一个。
@@ -763,7 +766,6 @@ func (s *ClineUpstreamService) validateUpstreams(ctx context.Context, account *A
 					entry.Note = truncate("pin not adopted: served by "+actual, 160)
 				}
 			default:
-				message := clineUpstreamErrorMessage(status, respBody)
 				entry.Status = classifyClineUpstreamError(message)
 				entry.Note = truncate(message, 160)
 			}
@@ -974,8 +976,22 @@ func clineUpstreamErrorMessage(status int, body []byte) string {
 		}
 		return strings.TrimSpace(dataErr.Raw)
 	}
+	if !gjson.ValidBytes(body) {
+		var message string
+		forEachOpenAISSEFrame(string(body), func(_ string, payload []byte) {
+			if message == "" && gjson.ValidBytes(payload) {
+				message = clineUpstreamErrorMessage(http.StatusOK, payload)
+			}
+		})
+		if message != "" {
+			return message
+		}
+	}
 	if status < 200 || status >= 300 {
-		return truncate(strings.TrimSpace(string(body)), 400)
+		if message := truncate(strings.TrimSpace(string(body)), 400); message != "" {
+			return message
+		}
+		return fmt.Sprintf("upstream returned HTTP %d", status)
 	}
 	return ""
 }
@@ -1048,6 +1064,7 @@ func classifyClineUpstreamError(message string) string {
 		return ClineUpstreamStatusAuth
 	case strings.Contains(lower, "invalid_request"), strings.Contains(lower, "modelid"),
 		strings.Contains(lower, "no allowed providers"), strings.Contains(lower, "no available providers"),
+		strings.Contains(lower, "no_capable_providers_available"),
 		strings.Contains(lower, "not found"), strings.Contains(lower, "unsupported"):
 		return ClineUpstreamStatusBad
 	default:
