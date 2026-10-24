@@ -130,6 +130,8 @@ func (o *upstreamResponseModelObserver) ObserveUpstreamProvider(payload []byte) 
 		payload,
 		"provider_metadata.gateway.routing.finalProvider",
 		"data.provider_metadata.gateway.routing.finalProvider",
+		"choices.0.message.provider_metadata.gateway.routing.finalProvider",
+		"data.choices.0.message.provider_metadata.gateway.routing.finalProvider",
 	)
 	if provider == "" {
 		provider = normalizeObservedUpstreamProvider(firstValidTrimmedGJSONString(payload, "provider", "data.provider"))

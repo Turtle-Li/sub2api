@@ -343,6 +343,23 @@ func TestUpstreamProviderObserverReadsPlannerRoutingMetadata(t *testing.T) {
 	require.Equal(t, "alibaba", observer.Provider())
 }
 
+func TestUpstreamProviderObserverReadsMessageRoutingMetadata(t *testing.T) {
+	for _, payload := range []string{
+		`{"choices":[{"message":{"content":"OK","provider_metadata":{"gateway":{"routing":{"finalProvider":"deepseek"}}}}}]}`,
+		`{"data":{"choices":[{"message":{"content":"OK","provider_metadata":{"gateway":{"routing":{"finalProvider":"deepseek"}}}}}]}}`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			observer := &upstreamResponseModelObserver{}
+			observer.ObserveOpenAI([]byte(payload), "")
+			require.Equal(t, "deepseek", observer.Provider())
+		})
+	}
+
+	observer := &upstreamResponseModelObserver{}
+	observer.ObserveOpenAI([]byte(`{"choices":[{"message":{"provider_metadata":{"gateway":{"routing":{"finalProvider":{"only":["deepseek"]}}}}}}]}`), "")
+	require.Empty(t, observer.Provider())
+}
+
 func TestUpstreamProviderObserverSlugifiesDirectProviderDisplayName(t *testing.T) {
 	observer := &upstreamResponseModelObserver{}
 	observer.ObserveOpenAI([]byte(`{"model":"z-ai/glm-5.3-flash","provider":"GMICloud","choices":[{"delta":{"content":"hi"}}]}`), "")

@@ -187,7 +187,7 @@ func TestForwardAsRawChatCompletions_CapabilityFilterAfterModelMapping(t *testin
 	body := []byte(`{"model":"deepseek-flash-1017","messages":[{"role":"user","content":"hi"}]}`)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	upstream := &httpUpstreamRecorder{resp: clineHarvestResponse(http.StatusOK, `{"choices":[{"message":{"content":"OK"}}],"model":"`+clineCapabilityTestModel+`"}`)}
+	upstream := &httpUpstreamRecorder{resp: clineHarvestResponse(http.StatusOK, `{"choices":[{"message":{"content":"OK","provider_metadata":{"gateway":{"routing":{"finalProvider":"deepseek"}}}}}],"model":"`+clineCapabilityTestModel+`"}`)}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 	account := clineUpstreamTestAccount(
 		map[string]any{clineCapabilityTestModel: clinePinExtra(ClinePinModeStrict, []string{"deepseek"}, nil, "")},
@@ -199,6 +199,7 @@ func TestForwardAsRawChatCompletions_CapabilityFilterAfterModelMapping(t *testin
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.Equal(t, "deepseek", result.UpstreamProvider)
 	require.Equal(t, clineCapabilityTestModel, gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, []any{"deepseek"}, gjson.GetBytes(upstream.lastBody, "providerOptions.gateway.only").Value())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "providerOptions.gateway.has").IsArray())
