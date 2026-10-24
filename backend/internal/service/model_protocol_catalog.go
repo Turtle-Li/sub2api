@@ -233,7 +233,7 @@ func (s *OpenAIGatewayService) fetchModelProtocolCatalog(ctx context.Context, ur
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodGet, validatedURL, nil)
+	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodGet, validatedURL, nil) //nolint:gosec // G704: account URL passed configured allowlist/HTTP/private-host validation above; redirects are disabled and HTTPUpstream enforces configured resolved-IP policy.
 	if err != nil {
 		return nil, err
 	}

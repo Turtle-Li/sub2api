@@ -418,3 +418,52 @@ func TestCommandCodeGatewayFetchesModelCatalog(t *testing.T) {
 		require.Equal(t, fmt.Sprintf("t-%d", account.ID), getHeaderRaw(req.Header, "x-tenant"))
 	}
 }
+
+func TestModelProtocolCatalogOutboundURLPolicy(t *testing.T) {
+	tests := []struct {
+		name         string
+		url          string
+		allowlist    bool
+		allowHTTP    bool
+		allowPrivate bool
+		hosts        []string
+		wantRequest  bool
+	}{
+		{name: "default HTTPS", url: "https://catalog.example/v1/models", wantRequest: true},
+		{name: "HTTP denied by default", url: "http://catalog.example/v1/models"},
+		{name: "HTTP explicitly allowed", url: "http://catalog.example/v1/models", allowHTTP: true, wantRequest: true},
+		{name: "allowlisted HTTPS", url: "https://catalog.example/v1/models", allowlist: true, hosts: []string{"catalog.example"}, wantRequest: true},
+		{name: "nonallowlisted host denied", url: "https://other.example/v1/models", allowlist: true, hosts: []string{"catalog.example"}},
+		{name: "unconfigured allowlist denied", url: "https://catalog.example/v1/models", allowlist: true},
+		{name: "private host denied", url: "https://127.0.0.1/v1/models", allowlist: true, hosts: []string{"127.0.0.1"}},
+		{name: "private host explicitly allowed", url: "https://127.0.0.1/v1/models", allowlist: true, allowPrivate: true, hosts: []string{"127.0.0.1"}, wantRequest: true},
+		{name: "unsafe scheme denied", url: "file:///etc/passwd"},
+		{name: "invalid port denied", url: "https://catalog.example:99999/v1/models"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := rawChatCompletionsTestConfig()
+			cfg.Security.URLAllowlist.Enabled = tt.allowlist
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = tt.allowHTTP
+			cfg.Security.URLAllowlist.AllowPrivateHosts = tt.allowPrivate
+			cfg.Security.URLAllowlist.UpstreamHosts = tt.hosts
+			upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
+			svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+			headers := http.Header{"Authorization": {"Bearer catalog-test-key"}}
+
+			_, err := svc.fetchModelProtocolCatalog(t.Context(), tt.url, headers, "", 11, 1)
+
+			require.Error(t, err)
+			if !tt.wantRequest {
+				require.Empty(t, upstream.requests, "rejected destinations must not receive credentials")
+				return
+			}
+			require.EqualError(t, err, "stop after capture")
+			require.Len(t, upstream.requests, 1)
+			req := upstream.requests[0]
+			require.Equal(t, tt.url, req.URL.String())
+			require.Equal(t, headers, req.Header)
+			require.True(t, HTTPUpstreamRedirectsDisabled(req.Context()))
+		})
+	}
+}
