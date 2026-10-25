@@ -165,7 +165,10 @@ describe('PricingEntryCard request multipliers', () => {
       found: true, input_price: 3e-6, output_price: 15e-6,
     })
     const wrapper = shallowMount(PricingEntryCard, {
-      props: { entry: { ...createEntry(), reasoning_effort_multipliers: { high: 0.5 } } },
+      props: {
+        entry: { ...createEntry(), reasoning_effort_multipliers: { high: 0.5 } },
+        onUpdate: next => { void wrapper.setProps({ entry: next }) },
+      },
     })
     wrapper.findComponent({ name: 'ModelTagInput' }).vm.$emit('update:models', ['example-model'])
     await flushPromises()

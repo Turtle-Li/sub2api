@@ -175,6 +175,7 @@ export async function remove(id: number): Promise<void> {
 
 export interface ModelDefaultPricing {
   found: boolean
+  currency?: 'USD' | 'CNY'
   input_price?: number    // per-token price
   output_price?: number
   cache_write_price?: number
@@ -185,9 +186,9 @@ export interface ModelDefaultPricing {
   reasoning_effort_multipliers?: Record<string, number> | null
 }
 
-export async function getModelDefaultPricing(model: string): Promise<ModelDefaultPricing> {
+export async function getModelDefaultPricing(model: string, currency: 'USD' | 'CNY' = 'USD'): Promise<ModelDefaultPricing> {
   const { data } = await apiClient.get<ModelDefaultPricing>('/admin/channels/model-pricing', {
-    params: { model }
+    params: { model, currency }
   })
   return data
 }

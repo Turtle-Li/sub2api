@@ -2,6 +2,8 @@ package admin
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -612,7 +614,12 @@ func (h *ChannelHandler) GetModelDefaultPricing(c *gin.Context) {
 		return
 	}
 
-	pricing, err := h.billingService.GetModelPricing(model)
+	currency, err := service.NormalizePricingCurrency(c.Query("currency"))
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("INVALID_CURRENCY", err.Error()))
+		return
+	}
+	pricing, err := h.billingService.GetModelPricingForAuthoring(model, currency)
 	if err != nil {
 		// 模型不在定价列表中
 		response.Success(c, gin.H{"found": false})
@@ -629,6 +636,7 @@ func (h *ChannelHandler) GetModelDefaultPricing(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"found":                        true,
+		"currency":                     currency,
 		"input_price":                  pricing.InputPricePerToken,
 		"output_price":                 pricing.OutputPricePerToken,
 		"cache_write_price":            cacheWritePrice,
@@ -669,5 +677,10 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 	}
 
 	models := h.pricingService.ListModelNamesByProvider(provider)
+	if platform == service.PlatformKimi {
+		models = append(models, "kimi-k3", "kimi-k3.1-pro")
+		sort.Strings(models)
+		models = slices.Compact(models)
+	}
 	response.Success(c, gin.H{"models": models})
 }

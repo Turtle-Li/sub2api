@@ -1080,6 +1080,11 @@ func (s *BillingService) initFallbackPricing() {
 
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
+	if isKimi31PricingModel(model) {
+		pricing := kimiOfficialCNYPricing(model)
+		scaleAuthoringTokenPrices(pricing, 1/s.currentCurrencyPolicy().USDToCNYRate)
+		return pricing
+	}
 	modelLower := normalizeAntigravityClaudeTierAlias(strings.ToLower(model))
 	if modelLower == "jev-latest" {
 		return s.fallbackPrices["jev-latest"]
@@ -1405,11 +1410,17 @@ func (s *BillingService) HasIdentifiedTokenPricing(model string) bool {
 	if model == "" {
 		return false
 	}
+	if strings.Contains(model, "k3.1-pro") && !isKimi31PricingModel(model) {
+		return false
+	}
 	if s.pricingService != nil {
 		// 仅有图片价的条目不能用于 token 计费，口径与 GetModelPricing 保持一致。
 		if pricing := s.pricingService.GetIdentifiedModelPricing(model); pricing != nil && !pricing.TokenPricingAbsent {
 			return true
 		}
+	}
+	if kimiOfficialCNYPricing(model) != nil {
+		return true
 	}
 	pricing, ok := s.fallbackPrices[model]
 	return ok && pricing != nil

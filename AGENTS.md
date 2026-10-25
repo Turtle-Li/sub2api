@@ -1,5 +1,12 @@
 # Sub2API project operations
 
+## Channel model pricing
+
+- For authored-currency defaults, native Kimi CNY quotes and group-rate previews,
+  read `docs/features/CHANNEL_PRICING_AUTOFILL_20261025.md`. Preserve strict model
+  identification, in-flight manual edits and group-card priority. Live K3.1 Pass
+  configuration and reversal are in `deploy/KIMI_K31_CHANNEL_20261025.md`.
+
 ## Upstream v0.2.18 integration
 
 - For the October 23 merge, read `docs/operations/UPSTREAM_V0218_20261023.md`.

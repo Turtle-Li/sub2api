@@ -20,6 +20,8 @@
       <input
         ref="inputRef"
         v-model="inputValue"
+        :list="suggestionsId"
+        :aria-label="t('admin.channels.form.models')"
         type="text"
         class="flex-1 min-w-[120px] border-none bg-transparent text-sm outline-none placeholder:text-gray-400 dark:text-white"
         :placeholder="models.length === 0 ? placeholder : ''"
@@ -28,19 +30,27 @@
         @keydown.backspace="handleBackspace"
         @paste="handlePaste"
         @blur="addModel"
+        @focus="loadSuggestions"
       />
+      <datalist :id="suggestionsId">
+        <option v-for="model in suggestions" :key="model" :value="model" />
+      </datalist>
     </div>
     <p class="mt-1 text-xs text-gray-400">
       {{ t('admin.channels.form.modelInputHint', 'Press Enter to add, supports paste for batch import.') }}
     </p>
+    <p v-if="suggestionsError" role="status" class="mt-1 text-xs text-gray-500">{{ suggestionsError }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { getPlatformTagClass } from './types'
+import { supportsPricingModelSync } from '@/constants/platformCatalog'
+import channelsAPI from '@/api/admin/channels'
+import { extractApiErrorMessage } from '@/utils/apiError'
 
 const { t } = useI18n()
 
@@ -56,6 +66,27 @@ const emit = defineEmits<{
 
 const inputValue = ref('')
 const inputRef = ref<HTMLInputElement>()
+const suggestionsId = useId()
+const suggestions = ref<string[]>([])
+const suggestionsLoading = ref(false)
+const suggestionsLoaded = ref(false)
+const suggestionsError = ref('')
+
+async function loadSuggestions() {
+  const platform = props.platform
+  if (!platform || !supportsPricingModelSync(platform) || suggestionsLoaded.value || suggestionsLoading.value) return
+  suggestionsLoading.value = true
+  suggestionsError.value = ''
+  try {
+    const result = await channelsAPI.syncPricingModels(platform)
+    suggestions.value = result.models
+    suggestionsLoaded.value = true
+  } catch (error) {
+    suggestionsError.value = extractApiErrorMessage(error, t('admin.channels.form.modelSuggestionsError'))
+  } finally {
+    suggestionsLoading.value = false
+  }
+}
 
 function addModel() {
   const val = inputValue.value.trim()

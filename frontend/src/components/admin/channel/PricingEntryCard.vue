@@ -85,6 +85,15 @@
               :placeholder="t('admin.channels.form.modelsPlaceholder')"
               class="mt-1"
             />
+            <div v-if="entry.billing_mode === 'token' && entry.models.length === 1" class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <button type="button" class="text-primary-600 hover:underline disabled:opacity-50 dark:text-primary-400"
+                :disabled="defaultPricingState === 'admin.channels.form.defaultPricingLoading'" @click="fillDefaultPrices()">
+                {{ t('admin.channels.form.fillDefaultPricing') }}
+              </button>
+              <span v-if="defaultPricingState" role="status" class="text-gray-500 dark:text-gray-400" :title="defaultPricingFailure">
+                {{ t(defaultPricingState) }}
+              </span>
+            </div>
           </div>
           <div class="w-40">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -176,6 +185,8 @@
                 type="number" step="any" min="0.000001" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.multiplierPlaceholder')" />
             </div>
           </div>
+
+          <GroupPricingPreview v-if="linkedGroups" :entry="entry" :groups="linkedGroups" />
 
           <!-- Channel token intervals; the group long-context toggle controls whether tiers apply. -->
           <div v-if="!hideTokenIntervals" class="mt-3">
@@ -330,10 +341,12 @@ import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
 import TimePricingSection from './TimePricingSection.vue'
 import type { PricingFormEntry, IntervalFormEntry } from './types'
-import { normalizePricingCurrency, perTokenToMTok, getPlatformTagClass, isValidPositiveMultiplier, validateReasoningEffortMultipliers } from './types'
+import { normalizePricingCurrency, getPlatformTagClass, isValidPositiveMultiplier, validateReasoningEffortMultipliers } from './types'
+import GroupPricingPreview from './GroupPricingPreview.vue'
+import { useModelDefaultPricing } from './useModelDefaultPricing'
+import type { AdminGroup } from '@/types'
 import { REASONING_EFFORT_LEVELS, type ReasoningEffortLevel } from '@/constants/channel'
 import type { BillingMode } from '@/api/admin/channels'
-import channelsAPI from '@/api/admin/channels'
 
 const { t } = useI18n()
 
@@ -343,6 +356,7 @@ const props = withDefaults(defineProps<{
   hideTokenIntervals?: boolean
   enableTimePricing?: boolean
   enableTierMultipliers?: boolean
+  linkedGroups?: Pick<AdminGroup, 'id' | 'name' | 'platform' | 'subscription_type' | 'rate_multiplier' | 'model_pricing'>[]
 }>(), {
   hideTokenIntervals: false,
   enableTimePricing: false,
@@ -437,47 +451,8 @@ function removeInterval(idx: number) {
   emit('update', { ...props.entry, intervals })
 }
 
-async function onModelsUpdate(newModels: string[]) {
-  const oldModels = props.entry.models
-  emit('update', { ...props.entry, models: newModels })
-
-  // 仅在「空条目首次加入单个模型」时自动填充默认价：
-  // 条目已有模型时（即使价格留空、按各模型的官方默认价回退）追加模型不应改写整条价格，
-  // 一次加入多个模型也不应把第一个模型的价格套用到整条，否则条目内所有模型都会被静默改价。
-  const addedModels = newModels.filter(m => !oldModels.includes(m))
-  if (oldModels.length !== 0 || addedModels.length !== 1) return
-
-  // The catalog endpoint is USD-only. Do not silently put its USD numbers
-  // into an entry authored in CNY.
-  if (pricingCurrency.value !== 'USD') return
-
-  // 检查是否所有价格字段都为空
-  const e = props.entry
-  const hasPrice = e.input_price != null || e.output_price != null ||
-                   e.cache_write_price != null || e.cache_write_1h_price != null || e.cache_read_price != null
-  if (hasPrice) return
-
-  // 查询第一个新增模型的默认价格
-  try {
-    const result = await channelsAPI.getModelDefaultPricing(addedModels[0])
-    if (result.found) {
-      emit('update', {
-        ...props.entry,
-        models: newModels,
-        input_price: perTokenToMTok(result.input_price ?? null),
-        output_price: perTokenToMTok(result.output_price ?? null),
-        cache_write_price: perTokenToMTok(result.cache_write_price ?? null),
-        cache_write_1h_price: perTokenToMTok(result.cache_write_1h_price ?? null),
-        cache_read_price: perTokenToMTok(result.cache_read_price ?? null),
-        image_input_price: perTokenToMTok(result.image_input_price ?? null),
-        image_output_price: perTokenToMTok(result.image_output_price ?? null),
-        reasoning_effort_multipliers: props.entry.reasoning_effort_multipliers ?? result.reasoning_effort_multipliers ?? null,
-      })
-    }
-  } catch {
-    // 查询失败不影响用户操作
-  }
-}
+const { state: defaultPricingState, failure: defaultPricingFailure, fillDefaultPrices, onModelsUpdate } =
+  useModelDefaultPricing(() => props.entry, entry => emit('update', entry))
 </script>
 
 <style scoped>

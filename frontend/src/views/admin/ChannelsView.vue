@@ -455,6 +455,7 @@
                   :key="idx"
                   :entry="entry"
                   :platform="section.platform"
+                  :linked-groups="allGroups.filter(group => section.group_ids.includes(group.id))"
                   enable-time-pricing
                   enable-tier-multipliers
                   @update="updatePricingEntry(sIdx, idx, $event)"
@@ -646,7 +647,7 @@ import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm,
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
 import { platformTextClass, platformBadgeLightClass, platformLabel as catalogPlatformLabel } from '@/utils/platformColors'
-import { listPlatformIds, supportsPricingModelSync } from '@/constants/platformCatalog'
+import { getPlatformSpec, listPlatformIds, supportsPricingModelSync } from '@/constants/platformCatalog'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
@@ -869,7 +870,7 @@ function addPricingEntry(sectionIdx: number) {
   form.platforms[sectionIdx].model_pricing.push({
     models: [],
     billing_mode: 'token',
-    currency: 'USD',
+    currency: getPlatformSpec(form.platforms[sectionIdx].platform)?.cn_provider ? 'CNY' : 'USD',
     input_price: null,
     output_price: null,
     cache_write_price: null,
