@@ -39,3 +39,40 @@ retain cache/outbox invalidation; do not restore a historical database snapshot.
 The channel editor's automatic-pricing code is tracked separately in
 `docs/features/CHANNEL_PRICING_AUTOFILL_20261025.md`; this live configuration
 does not require a binary release.
+
+## Channel editor release and acceptance
+
+Released source `9a7cf06d0bba68d33a2b08f0f06675195a6913d4` through
+[production workflow 40185841154](https://github.com/Turtle-Li/sub2api/actions/runs/40185841154),
+completed successfully at 2026-10-25 10:52:34 UTC. Image verification, the
+main-commit freshness gate, blue-green release and AWS Caddy verification all
+passed. Green is running and healthy with the exact source revision; the
+previous blue revision `819dce3c016d3dc116473c2b43295a7d4d7d1a8a` is stopped and
+retained for the canonical rollback procedure.
+
+Post-release read-only acceptance passed:
+
+- Authoring CNY endpoint returns 13 / 68 / 1.3 / 13 / 26 per million tokens.
+- Unknown family names and unauthorized K3.1 date/namespace aliases return
+  `found:false`; Kimi model suggestions contain the canonical model once.
+- Account Pass mapping, group 0.3 multiplier and the exact CNY channel card are
+  preserved. Public plaza shows one canonical K3.1 card and hides its short alias.
+- Public `/model-plaza` loads `ChannelsView-CLoP2M7_.js` and
+  `PricingEntryCard-8nq9AlDV.js`. The latter contains both new default-price and
+  group-pricing notices; SHA-256 is
+  `f7ff66267df8516629abfba1655c3ae63135cd5777f8a9c89a5124461be20391`.
+
+Validation before release: 99 related frontend tests, locale completeness (3),
+typecheck, ESLint, Vite build, focused backend race tests, broad conventional
+pricing/channel unit suites, Go build/vet and independent review passed.
+Real-component browser QA covered automatic fill and manual edit protection in
+light/dark modes. Production browser inspection timed out; production checks
+therefore use APIs and the exact served component bundle. Optional expanded
+race testing found an existing shared-Account parallel-fixture race outside this
+change; see the feature contract for the evidence boundary.
+
+The binary release can be reversed through the installed canonical image
+rollback flow using the retained 819dce3c0 revision, after its existing readiness
+and health gates. Keep current account/group/channel data: this feature adds no
+schema migration, and its live model configuration also works on the previous
+binary. Do not restore a historical database or use retired Azure hosts.

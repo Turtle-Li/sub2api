@@ -77,6 +77,9 @@ their source/call chain is unchanged by this feature. They are recorded in the
 task evidence rather than included in this feature's repair scope. Production
 browser tab inspection timed out, so production acceptance is API-based.
 
-Source release is ready for the existing owner-authorized fork/main workflow.
+Source `9a7cf06d0bba68d33a2b08f0f06675195a6913d4` was released successfully by
+production workflow `40185841154`; healthy green and post-release API/static
+bundle checks passed. Full release and rollback evidence is in
+`deploy/KIMI_K31_CHANNEL_20261025.md`.
 Knowledge candidate: no; project-specific pricing and provider configuration
 belongs in this checkout and private Registry.
