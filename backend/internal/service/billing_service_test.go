@@ -2050,6 +2050,8 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 			consumptionMultiplier      float64
 		}{
 			{"gpt-6.1-sol", 2e-6, 10e-6, 2.5e-6, 0.1e-6, 2.0},
+			{"gpt-6.1-terra", 1e-6, 5e-6, 1.25e-6, 0.05e-6, 1.0},
+			{"openai/gpt-6.1-terra-max", 1e-6, 5e-6, 1.25e-6, 0.05e-6, 1.0},
 			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6, 1.8},
 			{"gpt-6-luna", 0.25e-6, 1.25e-6, 0.3125e-6, 0.025e-6, 1.5},
 		} {

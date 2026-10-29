@@ -69,3 +69,13 @@ func TestAPIKeyService_RejectsV24AuthSnapshotBeforeMergedAllowlist(t *testing.T)
 		t.Fatalf("local and upstream v24 snapshots must miss: used=%v err=%v", used, err)
 	}
 }
+
+func TestAPIKeyService_RejectsV25AuthSnapshotBeforeMergedImageBilling(t *testing.T) {
+	svc := &APIKeyService{}
+	apiKey, used, err := svc.applyAuthCacheEntry("v25-legacy-layout", &APIKeyAuthCacheEntry{
+		Snapshot: &APIKeyAuthSnapshot{Version: 25},
+	})
+	if err != nil || used || apiKey != nil {
+		t.Fatalf("local and upstream v25 snapshots must miss: used=%v err=%v", used, err)
+	}
+}

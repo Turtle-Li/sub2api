@@ -45,6 +45,7 @@ type Group struct {
 	// Image 分组价卡由管理员直接填写内部钱包单位，不应再次套用汇率。
 	AllowImageGeneration         bool
 	AllowBatchImageGeneration    bool
+	ImageCountBilling            bool
 	ImageRateIndependent         bool
 	ImageRateMultiplier          float64
 	ImagePrice1K                 *float64

@@ -118,6 +118,7 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 // SettingService 系统设置服务
 type SettingService struct {
 	unifiedPaymentAppliedDigest atomic.Value // public configuration loaded at startup
+	scopedAdminKeyRepo          ScopedAdminKeyRepository
 	settingRepo                 SettingRepository
 	paidFallbackOpsStore        PaidFallbackOpsStore
 	defaultSubGroupReader       DefaultSubscriptionGroupReader

@@ -16,6 +16,7 @@ func TestAPIKeyAuthSnapshotGroupForceOpenAIFastRoundtrip(t *testing.T) {
 		Group: &Group{
 			ID: groupID, Name: "fast-roundtrip", Platform: PlatformOpenAI, Status: StatusActive,
 			Hydrated: true, ForceOpenAIFast: true, FreeOpenAIFast: true,
+			AllowImageGeneration: true, ImageCountBilling: true,
 		},
 	}
 	svc := &APIKeyService{}
@@ -32,5 +33,6 @@ func TestAPIKeyAuthSnapshotGroupForceOpenAIFastRoundtrip(t *testing.T) {
 	require.True(t, materialized.Group.Hydrated)
 	require.True(t, materialized.Group.ForceOpenAIFast)
 	require.True(t, materialized.Group.FreeOpenAIFast)
+	require.True(t, materialized.Group.ImageCountBilling)
 	require.Equal(t, apiKeyAuthSnapshotVersion, cached.Snapshot.Version, "merged auth snapshots must invalidate older local and upstream entries")
 }

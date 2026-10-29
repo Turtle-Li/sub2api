@@ -1,5 +1,14 @@
 # Sub2API project operations
 
+## Upstream v0.2.19 integration
+
+- Read `docs/operations/UPSTREAM_V0219_20261029.md` for the pinned upstream
+  source, additive migrations and merge contracts. Preserve transaction-owned
+  cache publication, local image delivery/billing caps, paid-reserve markers,
+  fixed egress and explicit AWS releases. Auth snapshots use version 26 because
+  local and upstream version 25 have different layouts. Regenerate Ent/Wire
+  after schema merges instead of accepting merged positional generated code.
+
 ## Channel model pricing
 
 - For authored-currency defaults, native Kimi CNY quotes and group-rate previews,
