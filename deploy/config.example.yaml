@@ -302,8 +302,15 @@ gateway:
     # Optional live switch containing exactly: off, dry_run, or rewrite.
     # 配置后，文件缺失或内容非法会安全回退为 off，无需重启即可切换灰度模式。
     rollout_control_file: ""
-    # Keep false in production; explicitly list internal API keys/groups below.
-    # 生产保持 false，并显式填写内部测试 API key/group ID。
+    # Global rollout does not use this switch: keep `allow_unscoped: false` and
+    # list every group that should be optimized in allowed_group_ids. A canary
+    # lists only its test key/user/group; a full rollout lists all production
+    # groups. Inline base64 screenshots are the dominant first-token cost for
+    # every client that replays conversation history, so most deployments want
+    # full coverage rather than a single test account.
+    # 全量生效不靠 allow_unscoped：保持 false，把要优化的全部分组填进
+    # allowed_group_ids。灰度只填测试 key/用户/分组，全量则填全部生产分组；
+    # 客户端每轮重传的 base64 截图是所有用户首字延迟的主要来源。
     allow_unscoped: false
     allowed_api_key_ids: []
     # Explicit users are useful for an admin's rotating local-test keys.
