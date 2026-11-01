@@ -358,7 +358,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
-	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+	if account.Platform == PlatformOpenAI && (account.Type == AccountTypeOAuth || IsCPRQuotaSyncAccount(account)) {
 		// Usage can come from a stored snapshot even when a probe fails. Neither
 		// that nor a working access token proves a rejected refresh token recovered.
 		return s.getOpenAIUsage(ctx, account, forceProbe)
@@ -716,7 +716,14 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	applyExtraToUsage(usage, account.Extra, now)
 
-	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
+	if IsCPRQuotaSyncAccount(account) {
+		// codex-proxy-rs 上游：额度来自 cpr 管理端快照，同步失败时沿用已存快照。
+		if force || cprQuotaSnapshotStale(account, now) {
+			if result, err := syncCPRQuotaSnapshot(ctx, s.accountRepo, account, force); err == nil && result != nil {
+				applyExtraToUsage(usage, account.Extra, now)
+			}
+		}
+	} else if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
 		if account.IsShadow() {
 			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
 			// via the shared OpenAIQuotaService, which resolves credentials from the

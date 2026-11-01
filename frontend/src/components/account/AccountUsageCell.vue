@@ -123,7 +123,7 @@
     </template>
 
     <!-- OpenAI OAuth accounts: single source from /usage API -->
-    <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
+    <template v-else-if="isOpenAICodexUsage">
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
@@ -149,7 +149,33 @@
           refresh button is rendered via the pre-actions slot so the user sees a
           single row of related buttons instead of two stacked rows.
         -->
-        <OpenAIQuotaResetCell :account="account" @account-updated="handleQuotaResetAccountUpdated">
+        <!-- codex-proxy-rs 账号没有 /wham/usage 能力，只保留刷新 cpr 快照的按钮。 -->
+        <div v-if="isCPRQuotaSync" class="flex items-center gap-1">
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              :class="{ 'animate-spin': activeQueryLoading }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            {{ t('admin.accounts.usageWindow.activeQuery') }}
+          </button>
+          <span class="text-[10px] text-gray-400 dark:text-gray-500">cpr</span>
+        </div>
+        <OpenAIQuotaResetCell v-else :account="account" @account-updated="handleQuotaResetAccountUpdated">
           <template #pre-actions>
             <button
               type="button"
@@ -190,12 +216,29 @@
       </div>
       <div v-else>
         <div class="text-xs text-gray-400">-</div>
+        <button
+          v-if="isCPRQuotaSync"
+          type="button"
+          class="mt-1 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="activeQueryLoading"
+          @click="loadActiveUsage"
+        >
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
         <!-- Always allow on-demand upstream quota query, even before local data exists. -->
         <OpenAIQuotaResetCell
+          v-else
           :account="account"
           class="mt-1"
           @account-updated="handleQuotaResetAccountUpdated"
         />
+      </div>
+      <div
+        v-if="cprQuotaLastError"
+        class="mt-0.5 max-w-[180px] truncate text-[10px] text-amber-600 dark:text-amber-400"
+        :title="cprQuotaLastError"
+      >
+        cpr: {{ cprQuotaLastError }}
       </div>
     </template>
 
@@ -704,7 +747,7 @@ import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'v
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
-import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { buildOpenAIUsageRefreshKey, isCPRQuotaSyncAccount, isOpenAICodexUsageAccount } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
@@ -804,6 +847,14 @@ const isGeminiVertex = computed(() => {
   return props.account.platform === 'gemini' && props.account.type === 'service_account'
 })
 
+const isOpenAICodexUsage = computed(() => isOpenAICodexUsageAccount(props.account))
+const isCPRQuotaSync = computed(() => isCPRQuotaSyncAccount(props.account))
+const cprQuotaLastError = computed(() => {
+  if (!isCPRQuotaSync.value) return ''
+  const value = props.account.extra?.cpr_quota_last_error
+  return typeof value === 'string' ? value.trim() : ''
+})
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
   // The backend determines eligibility from the saved upstream URL. Account
@@ -817,6 +868,7 @@ const showUsageWindows = computed(() => {
   if (isMultiProtocolApiKeyPlatform(props.account.platform)) {
     return true
   }
+  if (isOpenAICodexUsage.value) return true
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
 })
 
@@ -834,7 +886,7 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth'
   }
   if (props.account.platform === 'openai') {
-    return props.account.type === 'oauth'
+    return isOpenAICodexUsage.value
   }
   return false
 })
@@ -869,7 +921,7 @@ const geminiUsageAvailable = computed(() => {
 })
 
 const hasOpenAIUsageFallback = computed(() => {
-  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
+  if (!isOpenAICodexUsage.value) return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
 
@@ -1738,7 +1790,7 @@ watch(
 
 watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
   if (!prevKey || nextKey === prevKey) return
-  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
+  if (!isOpenAICodexUsage.value) return
 
   if (isBatchManaged.value) {
     requestParentBatchUsage({ force: true })

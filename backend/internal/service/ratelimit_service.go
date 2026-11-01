@@ -1298,6 +1298,22 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", *resetAt)
 			return
 		}
+		// codex-proxy-rs 会剥掉 x-codex-* 头，额度耗尽时改从 cpr 管理端快照取真实恢复时间。
+		if IsCPRQuotaSyncAccount(account) {
+			syncCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			result, err := syncCPRQuotaSnapshot(syncCtx, s.accountRepo, account, true)
+			cancel()
+			if err == nil && result != nil && result.exhaustedUntil != nil {
+				resetAt := *result.exhaustedUntil
+				s.notifyAccountSchedulingBlocked(account, resetAt, "429")
+				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+					return
+				}
+				slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", resetAt, "source", "cpr_quota")
+				return
+			}
+		}
 	}
 
 	// 2. Anthropic 平台：尝试解析 per-window 头（5h / 7d），选择实际触发的窗口

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '../accountUsageRefresh'
+import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, isCPRQuotaSyncAccount, isOpenAICodexUsageAccount } from '../accountUsageRefresh'
 
 describe('buildOpenAIUsageRefreshKey', () => {
   it('会在 codex 快照变化时生成不同 key', () => {
@@ -59,6 +59,24 @@ describe('buildOpenAIUsageRefreshKey', () => {
       last_used_at: '2026-03-07T10:00:00Z',
       extra: {}
     } as any)).toBe('')
+  })
+
+  it('配置了 cpr 管理 Key 的 OpenAI API Key 账号参与 codex 额度刷新', () => {
+    const plain = {
+      id: 4,
+      platform: 'openai',
+      type: 'apikey',
+      updated_at: '2026-11-02T10:00:00Z',
+      last_used_at: '2026-11-02T10:00:00Z',
+      extra: { codex_5h_used_percent: 10 }
+    } as any
+    expect(isOpenAICodexUsageAccount(plain)).toBe(false)
+    expect(buildOpenAIUsageRefreshKey(plain)).toBe('')
+
+    const cpr = { ...plain, credentials_status: { has_api_key: true, has_cpr_admin_api_key: true } }
+    expect(isCPRQuotaSyncAccount(cpr)).toBe(true)
+    expect(isOpenAICodexUsageAccount(cpr)).toBe(true)
+    expect(buildOpenAIUsageRefreshKey(cpr)).not.toBe('')
   })
 })
 

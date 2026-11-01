@@ -842,6 +842,15 @@ export default {
         baseUrlHint: '留空使用官方 OpenAI API',
         apiKeyHint: '您的 OpenAI API Key',
         oauthPassthrough: '自动透传（仅替换认证）',
+        cprQuota: 'codex-proxy-rs 额度同步',
+        cprQuotaDesc:
+          '上游是 codex-proxy-rs 时填写它的管理 API Key（设置 → 管理 API Key），sub2 会读取 cpr 中对应账号的 5h/7d 额度并在账号列表展示、参与额度自动暂停。cpr 账号按本账号的 API Key 自动匹配（Key 需只绑定一个分组、分组内只有一个账号），也可手动填写 cpr 账号 ID。',
+        cprAdminApiKey: 'cpr 管理 API Key',
+        cprAdminApiKeyPlaceholder: 'admin-…',
+        cprAdminApiKeyConfigured: '已配置，留空保持不变',
+        cprAdminApiKeyClear: '清除管理 Key（停用额度同步）',
+        cprAccountId: 'cpr 账号 ID（可选）',
+        cprAccountIdPlaceholder: '留空自动匹配',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',
         flattenNamespaces: '摊平 Codex namespace 工具（兼容）',
