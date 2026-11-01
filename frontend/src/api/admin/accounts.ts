@@ -622,6 +622,11 @@ export interface SyncUpstreamModelsResult {
   warnings?: UpstreamModelSyncWarning[]
   discovery_source?: 'upstream' | 'configured_fallback'
   grok_model_diagnostics?: GrokModelDiagnostics
+  /**
+   * 上游使用统一通道前缀（如 cn:）时出现：公开模型名 → 上游原名。
+   * models 已是去前缀后的官方名，写映射时用这里的 value 作为目标。
+   */
+  model_aliases?: Record<string, string>
 }
 
 export interface UpstreamModelSyncWarning {

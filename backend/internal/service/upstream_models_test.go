@@ -1242,3 +1242,56 @@ func TestMatchModelsDevProviderOfficialHostsWithoutAPI(t *testing.T) {
 	}}
 	require.False(t, upstreamCatalogNeedsRegistry(capabilitySyncModelIDs([]string{"gpt-6-astra", "gpt-image-2"}), metadata))
 }
+
+// 自建反代把官方模型名统一加 `cn:` 前缀时，管理端"同步模型"必须直接得到官方名，
+// 并给出 公开名→上游原名 的别名表，前端据此生成一一对应的 model_mapping。
+func TestApplyUpstreamModelChannelPrefix(t *testing.T) {
+	catalog := &UpstreamModelCatalog{
+		Models: []string{"cn:deepseek-v4-pro", "cn:kimi-k3", "cn:glm-5.3"},
+		Metadata: map[string]UpstreamModelMetadata{
+			"cn:deepseek-v4-pro": {ContextWindow: 128000},
+		},
+	}
+	applyUpstreamModelChannelPrefix(catalog)
+
+	require.Equal(t, []string{"deepseek-v4-pro", "kimi-k3", "glm-5.3"}, catalog.Models)
+	require.Equal(t, map[string]string{
+		"deepseek-v4-pro": "cn:deepseek-v4-pro",
+		"kimi-k3":         "cn:kimi-k3",
+		"glm-5.3":         "cn:glm-5.3",
+	}, catalog.ModelAliases)
+	// Metadata 的键同步改名，前端按公开名仍能查到能力信息。
+	require.Equal(t, int64(128000), catalog.Metadata["deepseek-v4-pro"].ContextWindow)
+	require.NotContains(t, catalog.Metadata, "cn:deepseek-v4-pro")
+}
+
+func TestApplyUpstreamModelChannelPrefixLeavesAmbiguousListsAlone(t *testing.T) {
+	for name, models := range map[string][]string{
+		"no prefix":        {"deepseek-v4-pro", "kimi-k3"},
+		"mixed prefixes":   {"cn:deepseek-v4-pro", "relay:kimi-k3"},
+		"vendor prefix":    {"kimi:deepseek-v4-pro", "kimi:kimi-k3"},
+		"duplicate result": {"cn:kimi-k3", "relay:kimi-k3"},
+		"long prefix":      {"verylongchannelprefix:kimi-k3", "verylongchannelprefix:glm-5.3"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			catalog := &UpstreamModelCatalog{Models: append([]string(nil), models...)}
+			applyUpstreamModelChannelPrefix(catalog)
+			require.Equal(t, models, catalog.Models)
+			require.Empty(t, catalog.ModelAliases)
+		})
+	}
+}
+
+// 剥离出来的公开名必须仍是可识别的厂商族，否则跨族绑定会被 fail closed 挡掉。
+func TestUpstreamChannelPrefixKeepsModelFamilyDetectable(t *testing.T) {
+	catalog := &UpstreamModelCatalog{Models: []string{"cn:deepseek-v4-pro", "cn:kimi-k3"}}
+	applyUpstreamModelChannelPrefix(catalog)
+	for _, model := range catalog.Models {
+		_, ok := DetectModelPlatform(model)
+		require.True(t, ok, model)
+	}
+	for _, original := range catalog.ModelAliases {
+		_, ok := DetectModelPlatform(original)
+		require.True(t, ok, original)
+	}
+}

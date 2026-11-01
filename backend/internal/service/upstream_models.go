@@ -58,6 +58,9 @@ type UpstreamModelCatalog struct {
 	Warnings             []UpstreamModelSyncWarning       `json:"warnings,omitempty"`
 	DiscoverySource      string                           `json:"discovery_source,omitempty"`
 	GrokModelDiagnostics *GrokModelDiagnostics            `json:"grok_model_diagnostics,omitempty"`
+	// ModelAliases 只在启用通道前缀剥离时出现：公开模型名 → 上游原名。
+	// 管理端据此为每个模型生成一一对应的 model_mapping，无需人工改写。
+	ModelAliases map[string]string `json:"model_aliases,omitempty"`
 }
 
 // upstreamModelListFetchResult is the live model list plus an optional Grok
@@ -361,7 +364,109 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 			})
 		}
 	}
+	applyUpstreamModelChannelPrefix(catalog)
 	return catalog, nil
+}
+
+// maxChannelPrefixLen 是通道前缀的最大长度（`cn:`、`relay:` 这类标记都很短）。
+const maxChannelPrefixLen = 16
+
+// applyUpstreamModelChannelPrefix 把上游统一的通道前缀（例如自建反代把官方模型名
+// 加 `cn:`）从对外模型名中剥离，并给出 公开名 → 上游原名 的别名表。管理端"同步
+// 模型"因此直接得到官方模型名，前端可据此生成一一对应的 model_mapping，管理员不必
+// 再逐条手改。
+//
+// 只有整个列表共享同一个非厂商前缀时才启用；前缀不一致、去前缀后为空或产生重名时
+// 一律原样返回，避免误改模型名。
+func applyUpstreamModelChannelPrefix(catalog *UpstreamModelCatalog) {
+	if catalog == nil || len(catalog.Models) == 0 {
+		return
+	}
+	prefix, ok := uniformChannelPrefix(catalog.Models)
+	if !ok {
+		return
+	}
+	aliases := make(map[string]string, len(catalog.Models))
+	canonical := make([]string, 0, len(catalog.Models))
+	seen := make(map[string]struct{}, len(catalog.Models))
+	for _, model := range catalog.Models {
+		trimmed := strings.TrimSpace(model)
+		public := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix+":"))
+		if public == "" {
+			return
+		}
+		if _, dup := seen[public]; dup {
+			return
+		}
+		seen[public] = struct{}{}
+		aliases[public] = trimmed
+		canonical = append(canonical, public)
+	}
+	// Metadata 的键跟着改名，前端按公开名查能力信息才不会落空。
+	if len(catalog.Metadata) > 0 {
+		remapped := make(map[string]UpstreamModelMetadata, len(catalog.Metadata))
+		for public, original := range aliases {
+			if entry, ok := catalog.Metadata[original]; ok {
+				remapped[public] = entry
+			}
+		}
+		catalog.Metadata = remapped
+	}
+	catalog.Models = canonical
+	catalog.ModelAliases = aliases
+}
+
+// uniformChannelPrefix 返回列表里所有模型共享的通道前缀。前缀必须是短的小写字母
+// 数字串，且不是已知厂商名——`kimi:kimi-k3` 这类厂商前缀交给模型族识别处理，
+// 不当作通道前缀。
+func uniformChannelPrefix(models []string) (string, bool) {
+	prefix := ""
+	for _, model := range models {
+		trimmed := strings.TrimSpace(model)
+		colon := strings.IndexByte(trimmed, ':')
+		if colon <= 0 || colon > maxChannelPrefixLen {
+			return "", false
+		}
+		candidate := trimmed[:colon]
+		if !isChannelPrefixToken(candidate) || isKnownVendorToken(candidate) {
+			return "", false
+		}
+		if prefix == "" {
+			prefix = candidate
+			continue
+		}
+		if prefix != candidate {
+			return "", false
+		}
+	}
+	return prefix, prefix != ""
+}
+
+func isChannelPrefixToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '-' || c == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isKnownVendorToken 列出模型族识别已使用的厂商前缀，这些不作为通道前缀剥离。
+func isKnownVendorToken(token string) bool {
+	switch token {
+	case "anthropic", "claude", "openai", "chatgpt", "google", "gemini", "xai", "grok",
+		"kimi", "moonshot", "zhipu", "glm", "bigmodel", "deepseek", "minimax",
+		"typesafe", "jev":
+		return true
+	}
+	return false
 }
 
 func upstreamModelSyncStatusCode(err error) int {

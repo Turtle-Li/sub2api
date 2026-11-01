@@ -5179,11 +5179,14 @@ const syncAntigravityUpstreamModels = async () => {
       return
     }
 
+    // 上游用统一通道前缀（如 cn:）时，models 已是官方名，映射目标要写回上游原名；
+    // 没有别名表时保持 identity 映射。
+    const aliases = result.model_aliases ?? {}
     let addedCount = 0
     for (const model of upstreamModels) {
       const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
       if (!exists) {
-        antigravityModelMappings.value.push({ from: model, to: model })
+        antigravityModelMappings.value.push({ from: model, to: aliases[model] ?? model })
         addedCount += 1
       }
     }
