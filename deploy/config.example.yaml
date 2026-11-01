@@ -302,16 +302,15 @@ gateway:
     # Optional live switch containing exactly: off, dry_run, or rewrite.
     # 配置后，文件缺失或内容非法会安全回退为 off，无需重启即可切换灰度模式。
     rollout_control_file: ""
-    # Global rollout does not use this switch: keep `allow_unscoped: false` and
-    # list every group that should be optimized in allowed_group_ids. A canary
-    # lists only its test key/user/group; a full rollout lists all production
-    # groups. Inline base64 screenshots are the dominant first-token cost for
-    # every client that replays conversation history, so most deployments want
-    # full coverage rather than a single test account.
-    # 全量生效不靠 allow_unscoped：保持 false，把要优化的全部分组填进
-    # allowed_group_ids。灰度只填测试 key/用户/分组，全量则填全部生产分组；
-    # 客户端每轮重传的 base64 截图是所有用户首字延迟的主要来源。
-    allow_unscoped: false
+    # Global by default: every API key is optimized once the optimizer is on.
+    # Inline base64 screenshots are the dominant first-token cost for every
+    # client that replays conversation history, so a scoped list would silently
+    # drop every new key or group. Set false only for a deliberately narrow
+    # canary and fill the ID lists below.
+    # 默认全量：优化器打开后对所有 API Key 生效。客户端每轮重传的 base64 截图
+    # 是所有用户首字延迟的主要来源；用白名单会漏掉后续新增的 key/分组。
+    # 只有刻意做小范围灰度时才改回 false 并填写下面的 ID 列表。
+    allow_unscoped: true
     allowed_api_key_ids: []
     # Explicit users are useful for an admin's rotating local-test keys.
     # 可显式允许管理员用户的全部本地测试 Key，仍不会扩到普通用户。
