@@ -148,6 +148,12 @@ func TestProviderProfile_BaseURLKeysAreNativeProtocols(t *testing.T) {
 
 	for platform, profile := range providerProfiles {
 		for mode, endpoints := range profile.Modes {
+			// 没有官方兼容端点的供应商（WorkBuddy）必须整体不登记默认端点，且显式
+			// 要求账号提供 base_url；否则 GetOpenAIBaseURL 会静默回落 api.openai.com。
+			if profile.RequireAccountBaseURL {
+				require.Empty(t, endpoints.BaseURLs, "%s/%s must not declare default endpoints", platform, mode)
+				continue
+			}
 			require.NotEmpty(t, endpoints.BaseURLs[APIProtocolChatCompletions], "%s/%s must have a chat_completions base", platform, mode)
 			for protocol, baseURL := range endpoints.BaseURLs {
 				require.True(t, isNativeUpstreamProtocol(protocol), "%s/%s has unknown protocol key %q", platform, mode, protocol)
@@ -185,4 +191,19 @@ func TestProviderProfile_OpenCodeProtocolRulesByMode(t *testing.T) {
 	require.Equal(t, DefaultOpenCodeGoProtocolRules(), openCode.Endpoints("").ProtocolRules)
 	require.Equal(t, DefaultOpenCodeZenProtocolRules(), openCode.Endpoints(AccountModeZen).ProtocolRules)
 	require.Empty(t, LookupProviderProfile(PlatformKimi).Endpoints(AccountModeCoding).ProtocolRules)
+}
+
+// 没有官方兼容端点的供应商必须由账号提供 base_url：缺凭证时不能回落到
+// api.openai.com，否则第三方 Key 会被发往 OpenAI 官方。
+func TestRequireAccountBaseURLProviders(t *testing.T) {
+	profile := LookupProviderProfile(PlatformWorkbuddy)
+	require.NotNil(t, profile)
+	require.True(t, profile.RequireAccountBaseURL)
+
+	missing := &Account{Platform: PlatformWorkbuddy, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-test"}}
+	require.Empty(t, missing.GetOpenAIBaseURL())
+
+	withBase := &Account{Platform: PlatformWorkbuddy, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://relay.example.com/v1"}}
+	require.Equal(t, "https://relay.example.com/v1", withBase.GetOpenAIBaseURL())
 }

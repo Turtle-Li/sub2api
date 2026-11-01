@@ -1584,6 +1584,11 @@ func (a *Account) GetOpenAIBaseURL() string {
 	if baseURL := a.defaultProviderBaseURL(APIProtocolChatCompletions); baseURL != "" {
 		return baseURL
 	}
+	// 没有官方兼容端点的供应商（profile.RequireAccountBaseURL）：缺凭证基址时返回
+	// 空串，让请求在构造阶段失败，而不是回落到 api.openai.com 把第三方 Key 发出去。
+	if profile := a.providerProfile(); profile != nil && profile.RequireAccountBaseURL {
+		return ""
+	}
 	return "https://api.openai.com"
 }
 

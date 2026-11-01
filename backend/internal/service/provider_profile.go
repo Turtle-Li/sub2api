@@ -45,6 +45,10 @@ type ProviderProfile struct {
 	// ModelCatalog 表示上游 {Chat Completions 基址}/models 为每个模型给出
 	// supported_endpoints；按模型分流时据此判断模型支持哪些协议（见 model_protocol_catalog.go）。
 	ModelCatalog bool
+	// RequireAccountBaseURL 表示该供应商没有默认端点：上游基址必须由账号
+	// credentials.base_url 提供。置位时 GetOpenAIBaseURL 在缺凭证的情形返回空串，
+	// 而不是回落到 api.openai.com —— 避免把第三方 Key 发给 OpenAI 官方。
+	RequireAccountBaseURL bool
 }
 
 // providerDefaultTestModel 返回账号连接测试未指定模型时的默认模型；非多协议供应商或
@@ -219,6 +223,21 @@ var providerProfiles = map[string]*ProviderProfile{
 			AccountModePayG: {
 				BaseURLs: map[string]string{APIProtocolChatCompletions: DefaultClineBaseURL},
 			},
+		},
+	},
+	// WorkBuddy 与 Cline 同构：多模型聚合、只有 Chat Completions，Responses /
+	// Anthropic 入站由现有转换链转为 Chat Completions。差别是它没有公开的官方
+	// 兼容端点，也不设默认基址：端点必须由账号 credentials.base_url 提供
+	// （RequireAccountBaseURL，见 GetOpenAIBaseURL）。不登记任何原生端点，
+	// 因此自适应账号回落到 Chat Completions
+	// （shouldForwardOpenAIResponsesViaRawChatCompletions）。
+	// DefaultTestModel 留空：上游模型名由运营在账号映射里定义，连接测试需显式指定模型。
+	PlatformWorkbuddy: {
+		Platform:              PlatformWorkbuddy,
+		DefaultMode:           AccountModePayG,
+		RequireAccountBaseURL: true,
+		Modes: map[string]ProviderEndpoints{
+			AccountModePayG: {BaseURLs: map[string]string{}},
 		},
 	},
 }

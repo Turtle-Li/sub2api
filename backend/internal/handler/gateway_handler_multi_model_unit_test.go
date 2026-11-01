@@ -113,7 +113,7 @@ func TestMultiModelProviderGroupHandlerIngress(t *testing.T) {
 }
 
 func TestMultiModelMessagesUsesNormalizedForwardModel(t *testing.T) {
-	for _, provider := range []string{service.PlatformOpenCodeGo, service.PlatformCommandCode, service.PlatformCline} {
+	for _, provider := range []string{service.PlatformOpenCodeGo, service.PlatformCommandCode, service.PlatformCline, service.PlatformWorkbuddy} {
 		for _, allowed := range []bool{false, true} {
 			t.Run(provider+map[bool]string{false: "/wrong-family", true: "/matching-family"}[allowed], func(t *testing.T) {
 				gid := int64(7)

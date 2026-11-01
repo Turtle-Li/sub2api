@@ -119,7 +119,7 @@ func (c *multiModelHydrationConcurrencyCache) ReleaseAccountSlot(ctx context.Con
 }
 
 func TestMultiModelGroupHydrationRechecksMappedFamily(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		for _, groupPlatform := range []string{PlatformAnthropic, PlatformGemini} {
 			for _, loadAware := range []bool{false, true} {
 				for _, mappingChanged := range []bool{false, true} {
@@ -167,7 +167,7 @@ func TestMultiModelGroupHydrationRechecksMappedFamily(t *testing.T) {
 }
 
 func TestMultiModelGroupOpenAILegacyHydrationRechecksMappedFamily(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		for _, groupPlatform := range []string{PlatformKimi, PlatformDeepseek} {
 			for _, mode := range []string{"catalog", "legacy", "batch"} {
 				t.Run(provider+"/"+groupPlatform+"/"+mode, func(t *testing.T) {
@@ -204,7 +204,7 @@ func TestMultiModelGroupOpenAILegacyHydrationRechecksMappedFamily(t *testing.T) 
 }
 
 func TestMultiModelGroupCompositeAliasRetainsResolvedModelDuringHydration(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		t.Run(provider, func(t *testing.T) {
 			account := multiModelGroupTestAccount(provider)
 			account.AccountGroups = []AccountGroup{{AccountID: account.ID, GroupID: 7}}
@@ -227,7 +227,7 @@ func TestMultiModelGroupCompositeAliasRetainsResolvedModelDuringHydration(t *tes
 }
 
 func TestMultiModelGroupNativeGatewaySelection(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		for _, groupPlatform := range []string{PlatformAnthropic, PlatformGemini} {
 			t.Run(provider+"/"+groupPlatform, func(t *testing.T) {
 				account := multiModelGroupTestAccount(provider)
@@ -254,7 +254,7 @@ func TestMultiModelGroupNativeGatewaySelection(t *testing.T) {
 }
 
 func TestMultiModelGroupChannelMappingAdmission(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		for _, wrongFamily := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/wrong=%t", provider, wrongFamily), func(t *testing.T) {
 				model := "claude-sonnet-4-6"
@@ -281,7 +281,7 @@ func TestMultiModelGroupChannelMappingAdmission(t *testing.T) {
 }
 
 func TestMultiModelGroupTerminalRefreshRetainsSelectionConstraint(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		for _, acquired := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/acquired=%t", provider, acquired), func(t *testing.T) {
 				selected := multiModelGroupTestAccount(provider)

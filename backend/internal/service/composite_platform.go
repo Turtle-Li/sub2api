@@ -88,7 +88,40 @@ func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {
 // DetectModelPlatform maps common public model IDs to the concrete provider
 // platform used by sub2api. It intentionally returns false for ambiguous model
 // names so composite groups fail closed instead of guessing.
+//
+// 上游常用 `<通道>:` 前缀区分供应来源（例如自建反代把官方模型名加 `cn:`），
+// 该前缀不属于模型名本身：严格识别失败时剥掉一层短前缀再试，仍然失败才
+// fail closed。剥前缀只放宽"名字形状"，不放宽族归属——判定依旧按模型名匹配，
+// 不会把账号声明的族当成通行证。
 func DetectModelPlatform(model string) (string, bool) {
+	if platform, ok := detectModelPlatformStrict(model); ok {
+		return platform, true
+	}
+	if rest, ok := stripChannelPrefix(model); ok {
+		return detectModelPlatformStrict(rest)
+	}
+	return "", false
+}
+
+// stripChannelPrefix 剥掉形如 `cn:` / `relay:` 的一层通道前缀。限制长度与字符集，
+// 避免把 URL、路径或以冒号结尾的普通模型名误当成前缀。
+func stripChannelPrefix(model string) (string, bool) {
+	normalized := strings.TrimSpace(model)
+	colon := strings.IndexByte(normalized, ':')
+	if colon <= 0 || colon > 16 {
+		return "", false
+	}
+	if strings.ContainsAny(normalized[:colon], "/\\.: ") {
+		return "", false
+	}
+	rest := strings.TrimSpace(normalized[colon+1:])
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
+func detectModelPlatformStrict(model string) (string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	if normalized == "" {
 		return "", false

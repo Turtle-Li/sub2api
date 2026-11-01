@@ -48,6 +48,7 @@ var platformList = []PlatformSpec{
 	{ID: PlatformTypeSafe, DisplayName: "TypeSafe / Jev", Gateway: PlatformGatewayAnthropic, LiteLLMProvider: "typesafe"},
 	{ID: PlatformCommandCode, DisplayName: "Command Code", Gateway: PlatformGatewayOpenAI},
 	{ID: PlatformCline, DisplayName: "Cline", Gateway: PlatformGatewayOpenAI},
+	{ID: PlatformWorkbuddy, DisplayName: "WorkBuddy", Gateway: PlatformGatewayOpenAI},
 }
 
 var platformIndex = func() map[string]int {
@@ -88,7 +89,8 @@ func IsGroupPlatform(id string) bool {
 // IsMultiModelPlatform identifies providers whose native accounts serve models
 // from several vendors. Their identity still determines upstream forwarding.
 func IsMultiModelPlatform(id string) bool {
-	return id == PlatformOpenCodeGo || id == PlatformCommandCode || id == PlatformCline
+	return id == PlatformOpenCodeGo || id == PlatformCommandCode || id == PlatformCline ||
+		id == PlatformWorkbuddy
 }
 
 // IsModelProviderPlatform excludes account-channel platforms from model-family
@@ -104,10 +106,17 @@ func IsGroupAccountPlatformCompatible(groupPlatform, accountPlatform string) boo
 		(IsModelProviderPlatform(groupPlatform) && IsMultiModelPlatform(accountPlatform))
 }
 
+// GroupAccountPlatforms 返回模型厂商分组可复用的账号平台：自身加上全部多模型聚合
+// 平台。聚合平台集合由 IsMultiModelPlatform 派生，新增一个聚合平台只需在那里登记，
+// 不会再漏改候选池展开（顺序沿用平台清单的展示顺序）。
 func GroupAccountPlatforms(groupPlatform string) []string {
 	platforms := []string{groupPlatform}
 	if IsModelProviderPlatform(groupPlatform) {
-		platforms = append(platforms, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline)
+		for _, id := range ConcretePlatformIDs() {
+			if IsMultiModelPlatform(id) {
+				platforms = append(platforms, id)
+			}
+		}
 	}
 	return platforms
 }

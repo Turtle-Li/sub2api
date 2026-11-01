@@ -660,7 +660,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const labels = (testid: string) =>
       wrapper.get(`[data-testid="${testid}"]`).findAll('button').map(button => button.text().trim())
     expect(labels('platform-row-cn')).toEqual(['Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax'])
-    expect(labels('platform-row-aggregators')).toEqual(['OpenCode', 'Command Code', 'Cline'])
+    expect(labels('platform-row-aggregators')).toEqual(['OpenCode', 'Command Code', 'Cline', 'WorkBuddy'])
   })
 
   it('creates a Cline account without an account type and with only the Chat Completions endpoint', async () => {
@@ -685,6 +685,33 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(payload?.credentials).not.toHaveProperty('protocol_rules')
     expect(payload?.credentials?.api_base_urls).not.toHaveProperty('responses')
     expect(payload?.credentials?.api_base_urls).not.toHaveProperty('anthropic')
+  })
+
+  it('requires a self-declared base_url for WorkBuddy and pins Chat Completions', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-button-workbuddy"]').trigger('click')
+
+    // 没有默认端点：没有点选条件就提交必须被挡住，不能写入任何猜测地址。
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('WorkBuddy relay')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-workbuddy')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).not.toHaveBeenCalled()
+
+    // 填了端点即按 Chat Completions 提交（供应商不登记原生协议端点，不提供 adaptive）。
+    await wrapper.get('[data-testid="api-key-base-url"]').setValue('https://relay.example.com/v1')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.platform).toBe('workbuddy')
+    expect(payload?.credentials).toMatchObject({
+      account_mode: 'payg',
+      api_protocol: 'chat_completions',
+      base_url: 'https://relay.example.com/v1'
+    })
+    expect(payload?.credentials).not.toHaveProperty('api_base_urls')
   })
 
   it('submits adaptive Kimi protocol endpoints', async () => {

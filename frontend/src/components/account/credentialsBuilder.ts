@@ -291,6 +291,14 @@ export function providerNativeProtocols(platform: string, mode?: string): CnNati
   return NATIVE_API_PROTOCOLS.filter(protocol => providerSupportsProtocol(platform, mode, protocol))
 }
 
+/**
+ * 供应商没有默认端点、必须由账号填写 base_url（与后端 ProviderProfile.RequireAccountBaseURL
+ * 一致）。这类供应商把端点完全交给部署方（自建反代/网关），前端不能兜底成任何猜测地址。
+ */
+export function providerRequiresAccountBaseUrl(platform: string): boolean {
+  return getProviderProfile(platform)?.require_account_base_url === true
+}
+
 /** 供应商按模型名选择上游协议（多模型聚合平台），此时 adaptive 账号携带分流规则。 */
 export function providerRoutesByModel(platform: string): boolean {
   return getProviderProfile(platform)?.routing === 'by_model'

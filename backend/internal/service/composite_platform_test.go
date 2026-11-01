@@ -247,14 +247,57 @@ func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
 		platforms = append(platforms, platform)
 	}
 	require.ElementsMatch(t,
-		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline},
+		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformWorkbuddy},
 		platforms,
 	)
 }
 
 func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformWorkbuddy} {
 		require.True(t, isConcreteRequestPlatform(platform))
 		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
+	}
+}
+
+// 自建反代常给官方模型名加通道前缀（如 `cn:`）。族判定必须在账号映射之后仍能
+// 识别出真实厂商，否则跨族绑定的聚合账号会被 fail closed 全部挡掉；无法识别
+// 的上游名必须继续 fail closed，不能因为"声明了这个族"就放行。
+func TestChannelPrefixedModelFamilyAdmission(t *testing.T) {
+	account := &Account{ID: 1, Platform: PlatformWorkbuddy, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://relay.example.com/v1",
+			"model_mapping": map[string]any{
+				"deepseek-v4-pro": "cn:deepseek-v4-pro",
+				"kimi-k3":         "cn:kimi-k3",
+				"glm-5.3":         "cn:glm-5.3",
+			},
+		}}
+	require.True(t, account.SupportsGroupPlatformModel(PlatformDeepseek, "deepseek-v4-pro"))
+	require.True(t, account.SupportsGroupPlatformModel(PlatformKimi, "kimi-k3"))
+	require.True(t, account.SupportsGroupPlatformModel(PlatformZhipu, "glm-5.3"))
+	// 映射到别的族仍然被拒。
+	require.False(t, account.SupportsGroupPlatformModel(PlatformDeepseek, "kimi-k3"))
+
+	unmapped := &Account{ID: 2, Platform: PlatformWorkbuddy, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"base_url": "https://relay.example.com/v1"}}
+	require.False(t, unmapped.SupportsGroupPlatformModel(PlatformDeepseek, "cn:my-custom-model"))
+
+	for model, want := range map[string]string{
+		"cn:deepseek-v4.1-flash":    PlatformDeepseek,
+		"cn:kimi-k3":                PlatformKimi,
+		"cn:glm-5.3":                PlatformZhipu,
+		"cn:minimax-m3":             PlatformMiniMax,
+		"cn:gpt-5":                  PlatformOpenAI,
+		"relay:claude-sonnet-4-6":   PlatformAnthropic,
+		"cn:models/deepseek-v4-pro": PlatformDeepseek,
+		"cn:kimi/kimi-k3":           PlatformKimi,
+	} {
+		got, ok := DetectModelPlatform(model)
+		require.True(t, ok, model)
+		require.Equal(t, want, got, model)
+	}
+	for _, model := range []string{"cn:my-custom-model", "cn:", ":", "cn:free"} {
+		_, ok := DetectModelPlatform(model)
+		require.False(t, ok, model)
 	}
 }

@@ -657,7 +657,7 @@
       </div>
 
       <!-- API Protocol Selection (Kimi / Zhipu / DeepSeek / OpenCode) -->
-      <div v-if="isMultiProtocolPlatform" class="mt-4">
+      <div v-if="isMultiProtocolPlatform && cnProtocolOptions.length > 1" class="mt-4">
         <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
         <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <button
@@ -1507,6 +1507,7 @@
             v-model="apiKeyBaseUrl"
             type="text"
             class="input"
+            data-testid="api-key-base-url"
             :placeholder="apiKeyBaseUrlPlaceholder"
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -4199,6 +4200,7 @@ import {
   providerAccountModes,
   providerModeLabel,
   providerNativeProtocols,
+  providerRequiresAccountBaseUrl,
   providerRoutesByModel,
   resolveProviderAccountMode,
   validateHeaderOverrideRows,
@@ -4550,8 +4552,10 @@ function selectGenericMultiProtocolPlatform(platform: string) {
   form.platform = platform
   form.type = 'apikey'
   accountCategory.value = 'apikey'
-  apiProtocol.value = 'adaptive'
   accountMode.value = resolveProviderAccountMode(platform, undefined)
+  // 不登记任何原生协议端点的供应商（自建反代/网关）只有 Chat Completions 一条路，
+  // adaptive 会让端点输入框消失、把空基址写进凭据，因此固定为 chat_completions。
+  apiProtocol.value = providerRequiresAccountBaseUrl(platform) ? 'chat_completions' : 'adaptive'
   apiKeyBaseUrl.value = defaultCNBaseUrl(platform, accountMode.value, apiProtocol.value)
   resetAdaptiveBaseUrls(platform, accountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultProviderProtocolRules(platform, accountMode.value))
@@ -6173,6 +6177,13 @@ const handleSubmit = async () => {
   }
   if (form.platform === 'gemini' && isOfficialGeminiBaseUrl(apiKeyBaseUrl.value)) {
     credentials.tier_id = geminiTierAIStudio.value
+  }
+
+  // 没有官方兼容端点的供应商（自建反代/网关）不提供默认端点，端点必须由账号给出，
+  // 否则后端会在构造上游请求时拒绝（不回落到 api.openai.com）。
+  if (providerRequiresAccountBaseUrl(form.platform) && !apiKeyBaseUrl.value.trim()) {
+    appStore.showError(t('admin.accounts.upstream.pleaseEnterBaseUrl'))
+    return
   }
 
   // 国产供应商：账号模式 + 协议 + 对应端点写入凭据；后端按 account_mode 路由

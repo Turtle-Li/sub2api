@@ -11,6 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// multiModelTestProviders 是全部多模型聚合平台。新增一个此类平台时在
+// domain.IsMultiModelPlatform 登记后，把它的常量加进来即可让跨族绑定、族判定、
+// 模型列表投影与发送边界校验的回归矩阵自动覆盖它。
+var multiModelTestProviders = []string{
+	PlatformOpenCodeGo, PlatformCommandCode, PlatformCline, PlatformWorkbuddy,
+}
+
 func multiModelGroupTestAccount(platform string) *Account {
 	return &Account{ID: 221, Platform: platform, Type: AccountTypeAPIKey,
 		Status: StatusActive, Schedulable: true, Concurrency: 10, GroupIDs: []int64{7},
@@ -21,7 +28,7 @@ func multiModelGroupTestAccount(platform string) *Account {
 }
 
 func TestMultiModelGroupScheduler(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		for _, advanced := range []bool{false, true} {
 			for _, loadBatch := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/advanced=%t/batch=%t", provider, advanced, loadBatch), func(t *testing.T) {
@@ -67,7 +74,7 @@ func TestMultiModelGroupScheduler(t *testing.T) {
 }
 
 func TestMultiModelGroupEligibility(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		t.Run(provider, func(t *testing.T) {
 			account := multiModelGroupTestAccount(provider)
 			for _, tc := range []struct {
@@ -89,7 +96,7 @@ func TestMultiModelGroupEligibility(t *testing.T) {
 }
 
 func TestMultiModelGroupModelListing(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		t.Run(provider, func(t *testing.T) {
 			account := multiModelGroupTestAccount(provider)
 			account.Credentials["model_mapping"] = map[string]any{
@@ -140,7 +147,7 @@ func TestMultiModelGroupClineWalletCooldown(t *testing.T) {
 }
 
 func TestMultiModelGroupScheduledCatalog(t *testing.T) {
-	for _, provider := range []string{PlatformOpenCodeGo, PlatformCommandCode, PlatformCline} {
+	for _, provider := range multiModelTestProviders {
 		t.Run(provider, func(t *testing.T) {
 			account := multiModelGroupTestAccount(provider)
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, accountRepo: schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{*account}}}}

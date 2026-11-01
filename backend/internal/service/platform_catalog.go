@@ -30,6 +30,9 @@ type ProviderProfileInfo struct {
 	ResponsesPath string          `json:"responses_path,omitempty"`
 	// ModelCatalog 表示模型支持的协议由上游 /models 自动获取（账号规则仍优先）。
 	ModelCatalog bool `json:"model_catalog,omitempty"`
+	// RequireAccountBaseURL 表示该供应商没有默认端点，账号必须填写 base_url；
+	// 前端据此把端点输入框标为必填，后端 GetOpenAIBaseURL 缺凭证时返回空串。
+	RequireAccountBaseURL bool `json:"require_account_base_url,omitempty"`
 	// Modes 以默认模式开头，其余按模式名排序。
 	Modes []ProviderModeInfo `json:"modes"`
 }
@@ -76,11 +79,12 @@ func providerProfileInfo(profile *ProviderProfile) *ProviderProfileInfo {
 		modes = append([]string{profile.DefaultMode}, modes...)
 	}
 	info := &ProviderProfileInfo{
-		DefaultMode:   profile.DefaultMode,
-		Routing:       routing,
-		ResponsesPath: profile.ResponsesPath,
-		ModelCatalog:  profile.ModelCatalog,
-		Modes:         make([]ProviderModeInfo, 0, len(modes)),
+		DefaultMode:           profile.DefaultMode,
+		Routing:               routing,
+		ResponsesPath:         profile.ResponsesPath,
+		ModelCatalog:          profile.ModelCatalog,
+		RequireAccountBaseURL: profile.RequireAccountBaseURL,
+		Modes:                 make([]ProviderModeInfo, 0, len(modes)),
 	}
 	for _, mode := range modes {
 		endpoints := profile.Modes[mode]

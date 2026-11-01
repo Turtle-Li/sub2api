@@ -34,6 +34,8 @@ export interface ProviderProfileInfo {
   responses_path?: string
   /** 上游 /models 为每个模型给出 supported_endpoints，按模型分流时未命中规则的模型据此选协议。 */
   model_catalog?: boolean
+  /** 该供应商没有默认端点，账号必须填写 base_url。 */
+  require_account_base_url?: boolean
   /** 默认模式在前。 */
   modes: ProviderModeInfo[]
 }

@@ -278,6 +278,23 @@
           }
         ]
       }
+    },
+    {
+      "id": "workbuddy",
+      "display_name": "WorkBuddy",
+      "gateway": "openai",
+      "cn_provider": false,
+      "multi_protocol": {
+        "default_mode": "payg",
+        "routing": "by_inbound",
+        "require_account_base_url": true,
+        "modes": [
+          {
+            "mode": "payg",
+            "base_urls": {}
+          }
+        ]
+      }
     }
   ],
   "composite_precedence": [
@@ -293,6 +310,7 @@
     "opencode_go",
     "typesafe",
     "command_code",
-    "cline"
+    "cline",
+    "workbuddy"
   ]
 }
