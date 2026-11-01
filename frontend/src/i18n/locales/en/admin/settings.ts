@@ -27,6 +27,18 @@ export default {
         saveFailed: 'Failed to save pricing currency settings',
         saved: 'Pricing currency settings saved',
       },
+      cprQuota: {
+        title: 'codex-proxy-rs quota sync',
+        description: 'cpr strips the upstream quota headers. Enter the cpr address and its admin API key (cpr panel → Settings → Admin API key). OpenAI API key accounts whose base_url points to this address then read their 5h/7d quota from cpr, shown in the account list and used for quota auto-pause. The matching cpr account is found from each account\'s API key.',
+        baseUrl: 'cpr address',
+        baseUrlHint: 'Same address as the account base_url, /v1 optional, e.g. http://172.26.0.217:18080',
+        adminApiKey: 'cpr admin API key',
+        adminApiKeyConfigured: 'Configured, leave blank to keep',
+        adminApiKeyClear: 'Clear admin key (disable sync)',
+        loadFailed: 'Failed to load cpr quota sync settings',
+        saveFailed: 'Failed to save cpr quota sync settings',
+        saved: 'cpr quota sync settings saved',
+      },
       attachmentGatewayR2: {
         title: 'Attachment Gateway R2',
         description: 'Configure a dedicated private R2 bucket for URL externalization after Responses image optimization. Backup and async-image credentials are not reused.',

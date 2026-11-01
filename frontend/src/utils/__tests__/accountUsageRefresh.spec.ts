@@ -61,7 +61,7 @@ describe('buildOpenAIUsageRefreshKey', () => {
     } as any)).toBe('')
   })
 
-  it('配置了 cpr 管理 Key 的 OpenAI API Key 账号参与 codex 额度刷新', () => {
+  it('指向 cpr 的 OpenAI API Key 账号参与 codex 额度刷新', () => {
     const plain = {
       id: 4,
       platform: 'openai',
@@ -73,7 +73,7 @@ describe('buildOpenAIUsageRefreshKey', () => {
     expect(isOpenAICodexUsageAccount(plain)).toBe(false)
     expect(buildOpenAIUsageRefreshKey(plain)).toBe('')
 
-    const cpr = { ...plain, credentials_status: { has_api_key: true, has_cpr_admin_api_key: true } }
+    const cpr = { ...plain, cpr_quota_sync: true }
     expect(isCPRQuotaSyncAccount(cpr)).toBe(true)
     expect(isOpenAICodexUsageAccount(cpr)).toBe(true)
     expect(buildOpenAIUsageRefreshKey(cpr)).not.toBe('')

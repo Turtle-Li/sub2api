@@ -726,6 +726,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		// 钱包结算货币配置
 		adminSettings.GET("/pricing-currency", h.Admin.Setting.GetPricingCurrencySettings)
 		adminSettings.PUT("/pricing-currency", h.Admin.Setting.UpdatePricingCurrencySettings)
+		adminSettings.GET("/cpr-quota", h.Admin.Setting.GetCPRQuotaSettings)
+		adminSettings.PUT("/cpr-quota", h.Admin.Setting.UpdateCPRQuotaSettings)
 		// 流超时处理配置
 		adminSettings.GET("/stream-timeout", h.Admin.Setting.GetStreamTimeoutSettings)
 		adminSettings.PUT("/stream-timeout", h.Admin.Setting.UpdateStreamTimeoutSettings)

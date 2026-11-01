@@ -20,9 +20,8 @@ func newCPRTestAccount(id int64, baseURL string) *Account {
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
-			"api_key":                  "sk-cpr-trial-abcdef123456",
-			"base_url":                 baseURL + "/v1",
-			cprQuotaAdminKeyCredential: cprTestAdminKey,
+			"api_key":  "sk-cpr-trial-abcdef123456",
+			"base_url": baseURL + "/v1",
 		},
 		Extra: map[string]any{},
 	}
@@ -85,24 +84,80 @@ func resetCPRQuotaState(id int64) {
 	cprQuotaResolveCache.Delete(id)
 }
 
-func TestIsCPRQuotaSyncAccount(t *testing.T) {
-	account := newCPRTestAccount(1, "http://cpr.local")
-	require.True(t, IsCPRQuotaSyncAccount(account))
-
-	account.Credentials[cprQuotaAdminKeyCredential] = " "
-	require.False(t, IsCPRQuotaSyncAccount(account))
-
-	oauth := newCPRTestAccount(2, "http://cpr.local")
-	oauth.Type = AccountTypeOAuth
-	require.False(t, IsCPRQuotaSyncAccount(oauth))
+// useCPRQuotaSettings 把全局配置固定在缓存里，测试结束后恢复。
+func useCPRQuotaSettings(t *testing.T, baseURL, adminKey string) {
+	t.Helper()
+	previous := cprQuotaSettingsCache.Load()
+	cprQuotaSettingsCache.Store(&cachedCPRQuotaSettings{
+		settings:  CPRQuotaSettings{BaseURL: normalizeCPRBaseURL(baseURL), AdminAPIKey: adminKey},
+		expiresAt: time.Now().Add(time.Hour),
+	})
+	t.Cleanup(func() { cprQuotaSettingsCache.Store(previous) })
 }
 
-func TestCPRQuotaAdminBaseURL(t *testing.T) {
-	account := newCPRTestAccount(1, "http://172.26.0.217:18080")
-	require.Equal(t, "http://172.26.0.217:18080", cprQuotaAdminBaseURL(account))
+func TestIsCPRQuotaSyncAccount(t *testing.T) {
+	useCPRQuotaSettings(t, "http://cpr.local:18080/", cprTestAdminKey)
 
-	account.Extra[cprQuotaAdminBaseURLExtra] = "https://cpr.example.com/"
-	require.Equal(t, "https://cpr.example.com", cprQuotaAdminBaseURL(account))
+	account := newCPRTestAccount(1, "http://CPR.local:18080")
+	require.True(t, IsCPRQuotaSyncAccount(account))
+
+	other := newCPRTestAccount(2, "https://relay.example.com")
+	require.False(t, IsCPRQuotaSyncAccount(other), "管理 Key 不能发给其他上游")
+
+	oauth := newCPRTestAccount(3, "http://cpr.local:18080")
+	oauth.Type = AccountTypeOAuth
+	require.False(t, IsCPRQuotaSyncAccount(oauth))
+
+	useCPRQuotaSettings(t, "http://cpr.local:18080", "")
+	require.False(t, IsCPRQuotaSyncAccount(account))
+}
+
+func TestNormalizeCPRBaseURL(t *testing.T) {
+	require.Equal(t, "http://172.26.0.217:18080", normalizeCPRBaseURL("http://172.26.0.217:18080/v1/"))
+	require.Equal(t, "https://cpr.example.com/gw", normalizeCPRBaseURL(" HTTPS://cpr.example.com/gw/v1 "))
+	require.Equal(t, "", normalizeCPRBaseURL("ftp://cpr.example.com"))
+	require.Equal(t, "", normalizeCPRBaseURL(""))
+}
+
+type cprSettingRepoStub struct {
+	SettingRepository
+	values map[string]string
+}
+
+func (r *cprSettingRepoStub) GetValue(_ context.Context, key string) (string, error) {
+	if value, ok := r.values[key]; ok {
+		return value, nil
+	}
+	return "", ErrSettingNotFound
+}
+
+func (r *cprSettingRepoStub) Set(_ context.Context, key, value string) error {
+	r.values[key] = value
+	return nil
+}
+
+func TestUpdateCPRQuotaSettingsKeepsKeyWhenOmitted(t *testing.T) {
+	previous := cprQuotaSettingsCache.Load()
+	t.Cleanup(func() { cprQuotaSettingsCache.Store(previous) })
+	svc := NewSettingService(&cprSettingRepoStub{values: map[string]string{}}, nil)
+
+	key := cprTestAdminKey
+	saved, err := svc.UpdateCPRQuotaSettings(context.Background(), "http://172.26.0.217:18080/v1", &key)
+	require.NoError(t, err)
+	require.Equal(t, "http://172.26.0.217:18080", saved.BaseURL)
+	require.Equal(t, cprTestAdminKey, saved.AdminAPIKey)
+
+	saved, err = svc.UpdateCPRQuotaSettings(context.Background(), "http://172.26.0.217:18080", nil)
+	require.NoError(t, err)
+	require.Equal(t, cprTestAdminKey, saved.AdminAPIKey)
+
+	empty := ""
+	saved, err = svc.UpdateCPRQuotaSettings(context.Background(), "http://172.26.0.217:18080", &empty)
+	require.NoError(t, err)
+	require.Empty(t, saved.AdminAPIKey)
+
+	_, err = svc.UpdateCPRQuotaSettings(context.Background(), "not a url", nil)
+	require.Error(t, err)
 }
 
 func TestBuildCPRQuotaSyncResultMapsWindows(t *testing.T) {
@@ -136,6 +191,7 @@ func TestSyncCPRQuotaSnapshotResolvesByAPIKey(t *testing.T) {
 		{"id": "key_1", "prefix": "sk-cpr-tri", "groups": []map[string]any{{"id": "grp_1"}}},
 	}
 	srv := newCPRTestServer(t, keys, nil, cprTestQuota(time.Now().Format(time.RFC3339), 12, false, "—", "—"))
+	useCPRQuotaSettings(t, srv.URL, cprTestAdminKey)
 	account := newCPRTestAccount(9101, srv.URL)
 	resetCPRQuotaState(account.ID)
 	t.Cleanup(func() { resetCPRQuotaState(account.ID) })
@@ -166,6 +222,7 @@ func TestSyncCPRQuotaSnapshotDisambiguatesPrefixByReveal(t *testing.T) {
 	}
 	reveal := map[string]string{"key_a": "sk-cpr-trial-someone-else", "key_b": "sk-cpr-trial-abcdef123456"}
 	srv := newCPRTestServer(t, keys, reveal, cprTestQuota(time.Now().Format(time.RFC3339), 5, false, "—", "—"))
+	useCPRQuotaSettings(t, srv.URL, cprTestAdminKey)
 	account := newCPRTestAccount(9102, srv.URL)
 	resetCPRQuotaState(account.ID)
 	t.Cleanup(func() { resetCPRQuotaState(account.ID) })
@@ -182,8 +239,8 @@ func TestSyncCPRQuotaSnapshotRecordsError(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"code": 40101, "message": "invalid admin api key", "data": nil})
 	}))
 	t.Cleanup(srv.Close)
+	useCPRQuotaSettings(t, srv.URL, cprTestAdminKey)
 	account := newCPRTestAccount(9103, srv.URL)
-	account.Extra[cprQuotaAccountIDExtra] = "acct_1"
 	account.Extra["codex_5h_used_percent"] = 30.0
 	resetCPRQuotaState(account.ID)
 	t.Cleanup(func() { resetCPRQuotaState(account.ID) })
@@ -211,6 +268,7 @@ func TestAccountUsageService_GetUsageForCPRAPIKeyAccount(t *testing.T) {
 	refreshed := time.Now().Add(-2 * time.Minute).Truncate(time.Second)
 	resetAt := refreshed.Add(3 * time.Hour).In(time.FixedZone("CST", 8*3600))
 	srv := newCPRTestServer(t, keys, nil, cprTestQuota(refreshed.In(time.FixedZone("CST", 8*3600)).Format(time.RFC3339), 77, false, resetAt.Format("2006-01-02 15:04:05"), "—"))
+	useCPRQuotaSettings(t, srv.URL, cprTestAdminKey)
 	account := newCPRTestAccount(9104, srv.URL)
 	resetCPRQuotaState(account.ID)
 	t.Cleanup(func() { resetCPRQuotaState(account.ID) })

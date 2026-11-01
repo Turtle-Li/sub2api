@@ -351,6 +351,49 @@ func (h *SettingHandler) UpdatePricingCurrencySettings(c *gin.Context) {
 	})
 }
 
+// CPRQuotaSettingsResponse 是 codex-proxy-rs 额度同步配置；管理 Key 只回显是否已配置。
+type CPRQuotaSettingsResponse struct {
+	BaseURL               string `json:"base_url"`
+	AdminAPIKeyConfigured bool   `json:"admin_api_key_configured"`
+}
+
+// UpdateCPRQuotaSettingsRequest 更新 cpr 额度同步配置；admin_api_key 省略时保留原 Key，空串表示清除。
+type UpdateCPRQuotaSettingsRequest struct {
+	BaseURL     string  `json:"base_url"`
+	AdminAPIKey *string `json:"admin_api_key"`
+}
+
+func cprQuotaSettingsResponse(settings service.CPRQuotaSettings) CPRQuotaSettingsResponse {
+	return CPRQuotaSettingsResponse{BaseURL: settings.BaseURL, AdminAPIKeyConfigured: settings.AdminAPIKey != ""}
+}
+
+// GetCPRQuotaSettings 获取 codex-proxy-rs 额度同步配置
+// GET /api/v1/admin/settings/cpr-quota
+func (h *SettingHandler) GetCPRQuotaSettings(c *gin.Context) {
+	settings, err := h.settingService.GetCPRQuotaSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cprQuotaSettingsResponse(settings))
+}
+
+// UpdateCPRQuotaSettings 更新 codex-proxy-rs 额度同步配置
+// PUT /api/v1/admin/settings/cpr-quota
+func (h *SettingHandler) UpdateCPRQuotaSettings(c *gin.Context) {
+	var req UpdateCPRQuotaSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	settings, err := h.settingService.UpdateCPRQuotaSettings(c.Request.Context(), req.BaseURL, req.AdminAPIKey)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, cprQuotaSettingsResponse(settings))
+}
+
 // GetStreamTimeoutSettings 获取流超时处理配置
 // GET /api/v1/admin/settings/stream-timeout
 func (h *SettingHandler) GetStreamTimeoutSettings(c *gin.Context) {

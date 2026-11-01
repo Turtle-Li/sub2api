@@ -1464,6 +1464,31 @@ export async function updatePricingCurrencySettings(
   return data
 }
 
+// ==================== codex-proxy-rs Quota Sync ====================
+
+export interface CPRQuotaSettings {
+  base_url: string
+  admin_api_key_configured: boolean
+}
+
+export interface UpdateCPRQuotaSettingsRequest {
+  base_url: string
+  /** 省略时保留原 Key；空串表示清除。 */
+  admin_api_key?: string
+}
+
+export async function getCPRQuotaSettings(): Promise<CPRQuotaSettings> {
+  const { data } = await apiClient.get<CPRQuotaSettings>('/admin/settings/cpr-quota')
+  return data
+}
+
+export async function updateCPRQuotaSettings(
+  settings: UpdateCPRQuotaSettingsRequest,
+): Promise<CPRQuotaSettings> {
+  const { data } = await apiClient.put<CPRQuotaSettings>('/admin/settings/cpr-quota', settings)
+  return data
+}
+
 export interface PaidFallbackSettings {
   enabled: boolean
   group_ids: number[]
@@ -1772,6 +1797,8 @@ export const settingsAPI = {
   updatePanelRateLimitSettings,
   getPricingCurrencySettings,
   updatePricingCurrencySettings,
+  getCPRQuotaSettings,
+  updateCPRQuotaSettings,
   getPaidFallbackSettings,
   updatePaidFallbackSettings,
   disablePaidFallback,

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,15 +26,11 @@ import (
 // 不触发上游请求），转换成和 OAuth 账号相同的 codex_* extra 字段，复用现有的额度展示、
 // 自动暂停与 429 冷却逻辑。
 //
-// 配置：
-//   - credentials.cpr_admin_api_key：cpr 管理 API Key（admin-<64 hex>），敏感字段，不回显前端。
-//   - extra.cpr_account_id：可选，cpr 账号 ID；留空时按本账号的 api_key 在 cpr 中反查
-//     （Client Key → 唯一分组 → 唯一账号）。
-//   - extra.cpr_admin_base_url：可选，cpr 管理端地址；留空时取 base_url 去掉末尾 /v1。
+// 配置是全局的（系统设置 cpr_quota_settings）：cpr 地址 + 管理 API Key（admin-<64 hex>）。
+// base_url（去掉末尾 /v1）与该地址相同的 OpenAI API Key 账号自动启用同步；对应的 cpr 账号
+// 按账号的 api_key 在 cpr 中反查（Client Key → 唯一分组 → 唯一账号），无需逐个配置。
 const (
-	cprQuotaAdminKeyCredential = "cpr_admin_api_key"
-	cprQuotaAccountIDExtra     = "cpr_account_id"
-	cprQuotaAdminBaseURLExtra  = "cpr_admin_base_url"
+	SettingKeyCPRQuotaSettings = "cpr_quota_settings"
 
 	cprQuotaResolvedAccountIDExtra = "cpr_quota_account_id"
 	cprQuotaSyncedAtExtra          = "cpr_quota_synced_at"
@@ -45,6 +42,7 @@ const (
 	cprQuotaSyncMinInterval = 30 * time.Second
 	cprQuotaRequestTimeout  = 10 * time.Second
 	cprQuotaResolveCacheTTL = 30 * time.Minute
+	cprQuotaSettingsTTL     = 30 * time.Second
 	cprQuotaMaxBodyBytes    = 2 << 20
 )
 
@@ -54,6 +52,8 @@ var (
 		// 管理 Key 不跟随重定向发往别处。
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	cprQuotaSettingsSource atomic.Pointer[SettingService]
+	cprQuotaSettingsCache  atomic.Pointer[cachedCPRQuotaSettings]
 	cprQuotaSyncThrottle   sync.Map // account id -> time.Time
 	cprQuotaSyncThrottleMu sync.Mutex
 	cprQuotaResolveCache   sync.Map // account id -> cprQuotaResolvedAccount
@@ -65,10 +65,125 @@ type cprQuotaResolvedAccount struct {
 	at          time.Time
 }
 
-// IsCPRQuotaSyncAccount 判断账号是否配置了 cpr 额度同步。
+// CPRQuotaSettings 是全局 cpr 额度同步配置。
+type CPRQuotaSettings struct {
+	BaseURL     string `json:"base_url"`
+	AdminAPIKey string `json:"admin_api_key"`
+}
+
+func (c CPRQuotaSettings) enabled() bool {
+	return c.BaseURL != "" && c.AdminAPIKey != ""
+}
+
+type cachedCPRQuotaSettings struct {
+	settings  CPRQuotaSettings
+	expiresAt time.Time
+}
+
+// registerCPRQuotaSettingsSource 让无 SettingService 依赖的调用点（DTO、限流、网关）读取全局配置。
+func registerCPRQuotaSettingsSource(s *SettingService) {
+	cprQuotaSettingsSource.Store(s)
+	cprQuotaSettingsCache.Store(nil)
+}
+
+// normalizeCPRBaseURL 统一成不带 /v1、不带结尾斜杠的小写 scheme://host[/path] 形式。
+func normalizeCPRBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	base = strings.TrimRight(strings.TrimSuffix(base, "/v1"), "/")
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host) + parsed.EscapedPath()
+}
+
+// GetCPRQuotaSettings 读取全局 cpr 额度同步配置。
+func (s *SettingService) GetCPRQuotaSettings(ctx context.Context) (CPRQuotaSettings, error) {
+	if s == nil || s.settingRepo == nil {
+		return CPRQuotaSettings{}, nil
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyCPRQuotaSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return CPRQuotaSettings{}, nil
+		}
+		return CPRQuotaSettings{}, fmt.Errorf("get cpr quota settings: %w", err)
+	}
+	var settings CPRQuotaSettings
+	if strings.TrimSpace(value) != "" {
+		if err := json.Unmarshal([]byte(value), &settings); err != nil {
+			return CPRQuotaSettings{}, fmt.Errorf("decode cpr quota settings: %w", err)
+		}
+	}
+	settings.BaseURL = normalizeCPRBaseURL(settings.BaseURL)
+	settings.AdminAPIKey = strings.TrimSpace(settings.AdminAPIKey)
+	return settings, nil
+}
+
+// UpdateCPRQuotaSettings 保存全局配置；adminAPIKey 为 nil 时保留原 Key，空串表示清除。
+func (s *SettingService) UpdateCPRQuotaSettings(ctx context.Context, baseURL string, adminAPIKey *string) (CPRQuotaSettings, error) {
+	if s == nil || s.settingRepo == nil {
+		return CPRQuotaSettings{}, errors.New("cpr quota settings service is unavailable")
+	}
+	current, err := s.GetCPRQuotaSettings(ctx)
+	if err != nil {
+		return CPRQuotaSettings{}, err
+	}
+	next := CPRQuotaSettings{BaseURL: normalizeCPRBaseURL(baseURL), AdminAPIKey: current.AdminAPIKey}
+	if strings.TrimSpace(baseURL) != "" && next.BaseURL == "" {
+		return CPRQuotaSettings{}, fmt.Errorf("invalid cpr base url %q", baseURL)
+	}
+	if adminAPIKey != nil {
+		next.AdminAPIKey = strings.TrimSpace(*adminAPIKey)
+	}
+	data, err := json.Marshal(next)
+	if err != nil {
+		return CPRQuotaSettings{}, fmt.Errorf("marshal cpr quota settings: %w", err)
+	}
+	if err := s.settingRepo.Set(ctx, SettingKeyCPRQuotaSettings, string(data)); err != nil {
+		return CPRQuotaSettings{}, fmt.Errorf("set cpr quota settings: %w", err)
+	}
+	cprQuotaSettingsCache.Store(&cachedCPRQuotaSettings{settings: next, expiresAt: time.Now().Add(cprQuotaSettingsTTL)})
+	cprQuotaResolveCache.Range(func(key, _ any) bool {
+		cprQuotaResolveCache.Delete(key)
+		return true
+	})
+	return next, nil
+}
+
+func currentCPRQuotaSettings() CPRQuotaSettings {
+	now := time.Now()
+	if cached := cprQuotaSettingsCache.Load(); cached != nil && now.Before(cached.expiresAt) {
+		return cached.settings
+	}
+	source := cprQuotaSettingsSource.Load()
+	if source == nil {
+		return CPRQuotaSettings{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	settings, err := source.GetCPRQuotaSettings(ctx)
+	if err != nil {
+		slog.Warn("cpr_quota_settings_load_failed", "error", err)
+		// 读失败时短暂沿用旧值，避免每次调用都打 DB。
+		if cached := cprQuotaSettingsCache.Load(); cached != nil {
+			settings = cached.settings
+		}
+	}
+	cprQuotaSettingsCache.Store(&cachedCPRQuotaSettings{settings: settings, expiresAt: now.Add(cprQuotaSettingsTTL)})
+	return settings
+}
+
+// IsCPRQuotaSyncAccount 判断账号是否指向已配置额度同步的 codex-proxy-rs。
 func IsCPRQuotaSyncAccount(account *Account) bool {
-	return account != nil && account.IsOpenAIApiKey() && !account.IsShadow() &&
-		strings.TrimSpace(account.GetCredential(cprQuotaAdminKeyCredential)) != ""
+	if account == nil || !account.IsOpenAIApiKey() || account.IsShadow() {
+		return false
+	}
+	settings := currentCPRQuotaSettings()
+	if !settings.enabled() {
+		return false
+	}
+	return normalizeCPRBaseURL(account.GetOpenAIBaseURL()) == settings.BaseURL
 }
 
 // cprQuotaSyncResult 是一次同步得到的 extra 更新与耗尽信息。
@@ -121,14 +236,6 @@ type cprQuotaClient struct {
 	adminKey string
 }
 
-func cprQuotaAdminBaseURL(account *Account) string {
-	if override := strings.TrimSpace(account.GetExtraString(cprQuotaAdminBaseURLExtra)); override != "" {
-		return strings.TrimRight(override, "/")
-	}
-	base := strings.TrimRight(strings.TrimSpace(account.GetOpenAIBaseURL()), "/")
-	return strings.TrimRight(strings.TrimSuffix(base, "/v1"), "/")
-}
-
 func (c cprQuotaClient) get(ctx context.Context, path string, query url.Values, out any) error {
 	endpoint := c.baseURL + path
 	if len(query) > 0 {
@@ -175,17 +282,14 @@ func (e *cprQuotaHTTPError) Error() string {
 	return fmt.Sprintf("%s: http %d code %d %s", e.path, e.status, e.code, truncateForLog([]byte(e.message), 200))
 }
 
-func cprQuotaFingerprint(account *Account, baseURL string) string {
-	sum := sha256.Sum256([]byte(baseURL + "\x00" + account.GetOpenAIApiKey() + "\x00" + account.GetCredential(cprQuotaAdminKeyCredential)))
+func cprQuotaFingerprint(account *Account, client cprQuotaClient) string {
+	sum := sha256.Sum256([]byte(client.baseURL + "\x00" + account.GetOpenAIApiKey() + "\x00" + client.adminKey))
 	return hex.EncodeToString(sum[:])
 }
 
 // resolveCPRAccountID 找到本 sub2 账号对应的 cpr 账号 ID。
 func resolveCPRAccountID(ctx context.Context, client cprQuotaClient, account *Account, now time.Time) (string, error) {
-	if explicit := strings.TrimSpace(account.GetExtraString(cprQuotaAccountIDExtra)); explicit != "" {
-		return explicit, nil
-	}
-	fingerprint := cprQuotaFingerprint(account, client.baseURL)
+	fingerprint := cprQuotaFingerprint(account, client)
 	if cached, ok := cprQuotaResolveCache.Load(account.ID); ok {
 		if entry, ok := cached.(cprQuotaResolvedAccount); ok && entry.fingerprint == fingerprint && now.Sub(entry.at) < cprQuotaResolveCacheTTL {
 			return entry.cprID, nil
@@ -213,7 +317,7 @@ func resolveCPRAccountID(ctx context.Context, client cprQuotaClient, account *Ac
 		return "", err
 	}
 	if len(matched.Groups) != 1 {
-		return "", fmt.Errorf("cpr client key %s is bound to %d groups, set %s explicitly", matched.ID, len(matched.Groups), cprQuotaAccountIDExtra)
+		return "", fmt.Errorf("cpr client key %s is bound to %d groups, expected exactly 1", matched.ID, len(matched.Groups))
 	}
 
 	var page struct {
@@ -224,7 +328,7 @@ func resolveCPRAccountID(ctx context.Context, client cprQuotaClient, account *Ac
 		return "", err
 	}
 	if len(page.Items) != 1 {
-		return "", fmt.Errorf("cpr group %s has %d accounts, set %s explicitly", matched.Groups[0].ID, len(page.Items), cprQuotaAccountIDExtra)
+		return "", fmt.Errorf("cpr group %s has %d accounts, expected exactly 1", matched.Groups[0].ID, len(page.Items))
 	}
 	cprID := page.Items[0].ID
 	cprQuotaResolveCache.Store(account.ID, cprQuotaResolvedAccount{fingerprint: fingerprint, cprID: cprID, at: now})
@@ -255,14 +359,11 @@ func pickCPRClientKey(ctx context.Context, client cprQuotaClient, candidates []c
 
 // fetchCPRQuota 读取 cpr 快照并转换成 codex_* extra 更新。
 func fetchCPRQuota(ctx context.Context, account *Account, now time.Time) (*cprQuotaSyncResult, string, error) {
-	baseURL := cprQuotaAdminBaseURL(account)
-	if baseURL == "" {
-		return nil, "", errors.New("cpr admin base url is empty")
+	settings := currentCPRQuotaSettings()
+	if !settings.enabled() {
+		return nil, "", errors.New("cpr quota sync is not configured")
 	}
-	if parsed, err := url.Parse(baseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, "", fmt.Errorf("invalid cpr admin base url %q", baseURL)
-	}
-	client := cprQuotaClient{baseURL: baseURL, adminKey: strings.TrimSpace(account.GetCredential(cprQuotaAdminKeyCredential))}
+	client := cprQuotaClient{baseURL: settings.BaseURL, adminKey: settings.AdminAPIKey}
 	cprID, err := resolveCPRAccountID(ctx, client, account, now)
 	if err != nil {
 		return nil, "", err

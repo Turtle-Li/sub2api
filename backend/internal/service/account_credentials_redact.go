@@ -12,8 +12,6 @@ var SensitiveCredentialKeys = []string{
 	// 云服务凭据
 	"aws_secret_access_key", "aws_session_token",
 	"service_account_json", "service_account", "private_key",
-	// codex-proxy-rs 管理 API Key（额度同步）
-	"cpr_admin_api_key",
 }
 
 var sensitiveCredentialKeySet = func() map[string]struct{} {

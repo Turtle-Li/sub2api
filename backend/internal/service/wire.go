@@ -888,6 +888,7 @@ func ProvideOpsIngressRejectAggregator(opsRepo OpsRepository, opsService *OpsSer
 func ProvideSettingService(scopedKeys ScopedAdminKeyRepository, settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config, paidStore PaidFallbackOpsStore) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
 	svc.SetPaidFallbackOpsStore(paidStore)
+	registerCPRQuotaSettingsSource(svc)
 	svc.scopedAdminKeyRepo = scopedKeys
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)

@@ -165,6 +165,7 @@
         <div v-show="activeTab === 'gateway'" class="space-y-6">
           <PaidFallbackSettingsCard />
           <PaidFallbackOpsCard />
+          <CPRQuotaSettingsCard />
           <!-- OpenAI model-level internal billing multipliers -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -9160,6 +9161,7 @@ import {
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import PricingCurrencySettingsCard from "@/views/admin/settings/PricingCurrencySettingsCard.vue";
 import PaidFallbackSettingsCard from "@/views/admin/settings/PaidFallbackSettingsCard.vue";
+import CPRQuotaSettingsCard from "@/views/admin/settings/CPRQuotaSettingsCard.vue";
 import PaidFallbackOpsCard from "@/views/admin/settings/PaidFallbackOpsCard.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {

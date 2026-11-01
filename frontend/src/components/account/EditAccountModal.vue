@@ -2048,43 +2048,6 @@
         </div>
       </div>
 
-      <!-- codex-proxy-rs 额度同步（仅 OpenAI API Key） -->
-      <div
-        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-      >
-        <label class="input-label mb-0">{{ t('admin.accounts.openai.cprQuota') }}</label>
-        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          {{ t('admin.accounts.openai.cprQuotaDesc') }}
-        </p>
-        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label class="input-label">{{ t('admin.accounts.openai.cprAdminApiKey') }}</label>
-            <input
-              v-model="editCprAdminApiKey"
-              type="password"
-              autocomplete="new-password"
-              class="input font-mono"
-              :disabled="editCprAdminApiKeyClear"
-              :placeholder="hasCprAdminApiKey ? t('admin.accounts.openai.cprAdminApiKeyConfigured') : t('admin.accounts.openai.cprAdminApiKeyPlaceholder')"
-            />
-            <label v-if="hasCprAdminApiKey" class="mt-1 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-              <input v-model="editCprAdminApiKeyClear" type="checkbox" class="rounded border-gray-300" />
-              {{ t('admin.accounts.openai.cprAdminApiKeyClear') }}
-            </label>
-          </div>
-          <div>
-            <label class="input-label">{{ t('admin.accounts.openai.cprAccountId') }}</label>
-            <input
-              v-model="editCprAccountId"
-              type="text"
-              class="input font-mono"
-              :placeholder="t('admin.accounts.openai.cprAccountIdPlaceholder')"
-            />
-          </div>
-        </div>
-      </div>
-
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -4245,10 +4208,6 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
-const editCprAdminApiKey = ref('')
-const editCprAdminApiKeyClear = ref(false)
-const editCprAccountId = ref('')
-const hasCprAdminApiKey = computed(() => props.account?.credentials_status?.has_cpr_admin_api_key === true)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4779,9 +4738,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
-  editCprAdminApiKey.value = ''
-  editCprAdminApiKeyClear.value = false
-  editCprAccountId.value = typeof extra?.cpr_account_id === 'string' ? extra.cpr_account_id : ''
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openaiFlattenNamespacesEnabled.value =
@@ -5933,16 +5889,6 @@ const handleSubmit = async () => {
         return
       }
 
-      // cpr 管理 Key 是敏感字段：后端不回显，未提交时保留原值；显式提交空串表示清除。
-      if (props.account.platform === 'openai') {
-        const cprAdminApiKey = editCprAdminApiKey.value.trim()
-        if (editCprAdminApiKeyClear.value) {
-          newCredentials.cpr_admin_api_key = ''
-        } else if (cprAdminApiKey) {
-          newCredentials.cpr_admin_api_key = cprAdminApiKey
-        }
-      }
-
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
       if (shouldApplyModelMapping) {
         const modelMapping = buildModelRestrictionMapping()
@@ -6429,14 +6375,6 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
-      }
-      if (props.account.type === 'apikey') {
-        const cprAccountId = editCprAccountId.value.trim()
-        if (cprAccountId) {
-          newExtra.cpr_account_id = cprAccountId
-        } else {
-          delete newExtra.cpr_account_id
-        }
       }
       // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
       if (props.account.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {

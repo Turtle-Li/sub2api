@@ -27,6 +27,18 @@ export default {
         saveFailed: '保存定价币种设置失败',
         saved: '定价币种设置已保存',
       },
+      cprQuota: {
+        title: 'codex-proxy-rs 额度同步',
+        description: 'cpr 会去掉上游的额度响应头。填写 cpr 地址和它的管理 API Key（cpr 面板 → 设置 → 管理 API Key）后，base_url 指向该地址的 OpenAI API Key 账号会自动从 cpr 读取 5h/7d 额度，在账号列表展示并参与额度自动暂停；对应的 cpr 账号按账号的 API Key 自动匹配。',
+        baseUrl: 'cpr 地址',
+        baseUrlHint: '与账号 base_url 相同的地址，/v1 可省略，例如 http://172.26.0.217:18080',
+        adminApiKey: 'cpr 管理 API Key',
+        adminApiKeyConfigured: '已配置，留空保持不变',
+        adminApiKeyClear: '清除管理 Key（停用同步）',
+        loadFailed: '加载 cpr 额度同步配置失败',
+        saveFailed: '保存 cpr 额度同步配置失败',
+        saved: 'cpr 额度同步配置已保存',
+      },
       attachmentGatewayR2: {
         title: 'Attachment Gateway 专用 R2',
         description: '为 Responses 图片压缩后的 URL 化配置独立私有 R2。此处不会复用数据库备份或异步生图的对象存储凭证。',

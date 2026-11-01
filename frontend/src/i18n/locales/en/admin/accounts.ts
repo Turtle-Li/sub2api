@@ -724,15 +724,6 @@ export default {
         baseUrlHint: 'Leave default for official OpenAI API',
         apiKeyHint: 'Your OpenAI API Key',
         oauthPassthrough: 'Auto passthrough (auth only)',
-        cprQuota: 'codex-proxy-rs quota sync',
-        cprQuotaDesc:
-          'When the upstream is codex-proxy-rs, enter its admin API key (Settings → Admin API key). sub2 reads the matching cpr account\'s 5h/7d quota, shows it in the account list and uses it for quota auto-pause. The cpr account is matched by this account\'s API key (the key must be bound to one group containing one account), or enter the cpr account ID manually.',
-        cprAdminApiKey: 'cpr admin API key',
-        cprAdminApiKeyPlaceholder: 'admin-…',
-        cprAdminApiKeyConfigured: 'Configured, leave blank to keep',
-        cprAdminApiKeyClear: 'Clear admin key (disable quota sync)',
-        cprAccountId: 'cpr account ID (optional)',
-        cprAccountIdPlaceholder: 'Leave blank to auto-match',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
         flattenNamespaces: 'Flatten Codex namespace tools (compatibility)',

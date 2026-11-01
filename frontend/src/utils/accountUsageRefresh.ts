@@ -29,19 +29,19 @@ const isNonBlankString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
 )
 
-// OpenAI API Key 账号指向 codex-proxy-rs 且配置了 cpr 管理 Key 时，后端从 cpr 同步 5h/7d 额度。
-export const isCPRQuotaSyncAccount = (account: Pick<Account, 'platform' | 'type' | 'credentials_status'>): boolean => (
+// OpenAI API Key 账号指向已配置额度同步的 codex-proxy-rs 时，后端从 cpr 同步 5h/7d 额度。
+export const isCPRQuotaSyncAccount = (account: Pick<Account, 'platform' | 'type' | 'cpr_quota_sync'>): boolean => (
   account.platform === 'openai' &&
   account.type === 'apikey' &&
-  account.credentials_status?.has_cpr_admin_api_key === true
+  account.cpr_quota_sync === true
 )
 
 // 展示 Codex 5h/7d 额度窗口的 OpenAI 账号：OAuth 账号，或已配置 cpr 额度同步的 API Key 账号。
-export const isOpenAICodexUsageAccount = (account: Pick<Account, 'platform' | 'type' | 'credentials_status'>): boolean => (
+export const isOpenAICodexUsageAccount = (account: Pick<Account, 'platform' | 'type' | 'cpr_quota_sync'>): boolean => (
   account.platform === 'openai' && (account.type === 'oauth' || isCPRQuotaSyncAccount(account))
 )
 
-export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platform' | 'type' | 'credentials_status' | 'updated_at' | 'last_used_at' | 'rate_limit_reset_at' | 'extra'>): string => {
+export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platform' | 'type' | 'cpr_quota_sync' | 'updated_at' | 'last_used_at' | 'rate_limit_reset_at' | 'extra'>): string => {
   if (!isOpenAICodexUsageAccount(account)) {
     return ''
   }
