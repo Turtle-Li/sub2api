@@ -109,3 +109,63 @@ npx eslint <9 个改动文件>                # 无告警
 未回滚时，若只删代码不动数据：`IsConcretePlatform("workbuddy")` 变 false，该平台账号不再进入调度（fail closed），不会产生错误转发；但账号行与历史绑定仍在库中，重新上线后自动恢复。
 
 注意：`docs/*` 在 `.gitignore` 中被忽略，本文件与同目录其他记录一样需要 `git add -f` 才能进入提交。
+
+## 11. 发布与生产配置核对（2026-11-01 ~ 11-02）
+
+### 11.1 v0.2.20（平台接入）
+
+工作流 [Deploy #41320248062](https://github.com/Turtle-Li/sub2api/actions/runs/41320248062)，8m26s 成功。
+镜像 source `8c4d415e`，`sub2api-blue → sub2api-green`，`health=healthy background_mode=activate`，
+`app_5xx=0 app_fatal=0 caddy_5xx=0`，Caddy `active_slot=green`。线上 `GET /health` → `{"status":"ok"}`。
+
+发布分支在 fork/main（v0.2.19）基线上重跑：后端 service 272.8s / handler 57.9s / domain 6.1s /
+routes 20.6s 全过；前端 `vue-tsc` 通过、429 files / 3653 tests 通过、`pnpm build` 成功。
+
+### 11.2 v0.2.21（同步模型剥离通道前缀）
+
+原因：上游 `/models` 全部返回 `cn:<官方名>`，"同步模型"会把带前缀的名字直接写进白名单与映射，
+管理员还要逐条手改成官方名。
+
+- `UpstreamModelCatalog.ModelAliases`（公开名 → 上游原名）；同步/预览接口返回前剥离统一的
+  通道前缀，Metadata 键同步改名。
+- 编辑账号"同步模型"用别名表生成 `{from: 官方名, to: 上游原名}`，白名单直接是官方名。
+- 只在整个列表共享同一个非厂商前缀、去前缀后非空且不重名时启用，否则原样返回。
+- 转发仍用上游原名；跨族准入继续由映射后的模型族判定兜底（`cn:` 前缀在 `DetectModelPlatform`
+  中剥离一层后识别）。
+
+### 11.3 生产配置核对
+
+账号 246（`workbuddy` / apikey / active）绑定分组 17 DeepSeek、18 KIMI、35 GLM、36 MiniMax，
+`api_protocol=chat_completions`、`account_mode=payg`，上游端点由账号 `base_url` 提供（已回填可用）。
+
+**发现并修正**：该账号原有 10 条映射的 **key 也带 `cn:` 前缀**（形如 `cn:deepseek-v4-pro → cn:deepseek-v4-pro`），
+而分组白名单是官方名，两者对不上，等于四个分组都拿不到这个账号的供给。已按一一对应改为
+`key = 官方名`、`value = cn:原名`（10 条，`UPDATE accounts ... credentials.model_mapping`，
+仅限 `id = 246` 且 `base_url` 匹配的记录，改后即时生效——调度快照只缓存账号 ID，实体每次读库）。
+
+上游实测可用模型 18 个（全部 `cn:` 前缀）：`balanced-model`、`deep-model`、`deepseek-v4-pro`、
+`deepseek-v4.1-flash`、`fast-model`、`glm-5.2`、`glm-5.3`、`glm-5.3-flash`、`hunyuan-image-alpha`、
+`hunyuan-image-alpha-edit`、`hy3`、`hy4-preview`、`kimi-k2.8-preview`、`kimi-k3-1`、`kimi-k3.1-pro`、
+`mimo-v2.6-pro`、`minimax-m3.1-flash`、`space-bunny`、`step-5-preview`。
+
+白名单缺口（没有任何 active 账号能供给，需删名或补别名映射；不要用别的型号冒充）：
+
+| 分组 | 白名单里有、无供给的模型 | 说明 |
+| --- | --- | --- |
+| 17 DeepSeek | `deepseek-flash`、`deepseek-v4.1-flash-sg` | 上游无 `cn:deepseek-flash`；`-sg` 别名随旧 WorkBuddy 账号 232 的映射一起消失 |
+| 18 KIMI | `kimi-k3`、`k3`、`k3-256k`、`kimi-for-coding`、`kimi-for-coding-highspeed` | 原生 Kimi 账号 17 已 `inactive`；上游只有 `kimi-k3-1` / `kimi-k3.1-pro` |
+| 18 KIMI | `k3.1-pro` | 可加一条别名映射 `k3.1-pro → cn:kimi-k3.1-pro`（同型号另一种写法），需运营确认后再加 |
+| 36 MiniMax | `minimax-m3` | 上游只有 `minimax-m3.1-flash` |
+
+已具备供给：`deepseek-v4-pro`、`deepseek-v4.1-flash`（246）、`deepseek-v4.1-flash` + `-1017`（232）、
+`glm-5.3`、`glm-5.3-flash`（246）、`kimi-k3.1-pro`（246）、`minimax-m3.1-flash`（246）。
+
+未验证：这四个分组的真实转发（本地 smoke key 绑定的是别的分组，返回的是该分组的
+`model_not_found`，不能证明跨组链路）。需要在一个 17/18/35/36 的密钥上各发一次最小请求。
+
+### 11.4 验证备注
+
+`TestInflightEstimate_AccountMappingNoDBAndBoundedMemory` 断言整包运行时的堆增长 < 8MB，对同包其他测试留下的堆状态敏感：
+同一基线（`8c4d415e`）全包通过，0.2.21 全包首跑失败、二次通过，单跑该组稳定通过。
+它与本次改动（上游模型同步、模型族识别、账号基址）无调用关系，记为既有测试的环境敏感性；
+发布流水线不执行 `go test`（仅构建镜像），不受影响。
