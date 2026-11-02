@@ -164,6 +164,9 @@ func NewOpenAIQuotaService(
 // OAuth account. Returns infraerrors so the handler layer can map them to
 // stable error codes / HTTP statuses.
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	if account := s.loadCPRQuotaAccount(ctx, accountID); account != nil {
+		return s.queryCPRQuotaUsage(ctx, account)
+	}
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -373,6 +376,9 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 		}
 		if acc.IsShadow() {
 			return nil, ErrSparkShadowResetNotSupported
+		}
+		if IsCPRQuotaSyncAccount(acc) {
+			return s.resetCPRCredit(ctx, acc, creditID, redeemRequestID)
 		}
 	}
 

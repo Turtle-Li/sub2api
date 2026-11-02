@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -202,10 +203,17 @@ type cprAdminEnvelope struct {
 type cprAdminQuotaWindow struct {
 	Key            string   `json:"key"`
 	LimitID        *string  `json:"limitId"`
+	LimitName      *string  `json:"limitName"`
 	WindowSeconds  *int64   `json:"windowSeconds"`
 	UsedPercent    *float64 `json:"usedPercent"`
 	LimitReached   bool     `json:"limitReached"`
 	ResetAtDisplay string   `json:"resetAtDisplay"`
+}
+
+type cprAdminQuotaCredits struct {
+	HasCredits bool    `json:"hasCredits"`
+	Unlimited  bool    `json:"unlimited"`
+	Balance    *string `json:"balance"`
 }
 
 type cprAdminQuota struct {
@@ -213,12 +221,17 @@ type cprAdminQuota struct {
 	LimitReached     bool                  `json:"limitReached"`
 	RateLimitedUntil *string               `json:"rateLimitedUntil"`
 	Windows          []cprAdminQuotaWindow `json:"windows"`
+	Credits          *cprAdminQuotaCredits `json:"credits"`
 }
 
 type cprAdminAccount struct {
-	ID       string        `json:"id"`
-	Provider string        `json:"provider"`
-	Quota    cprAdminQuota `json:"quota"`
+	ID        string        `json:"id"`
+	Provider  string        `json:"provider"`
+	Email     *string       `json:"email"`
+	AccountID *string       `json:"accountId"`
+	UserID    *string       `json:"userId"`
+	PlanType  *string       `json:"planType"`
+	Quota     cprAdminQuota `json:"quota"`
 }
 
 type cprAdminGroupRef struct {
@@ -237,18 +250,37 @@ type cprQuotaClient struct {
 }
 
 func (c cprQuotaClient) get(ctx context.Context, path string, query url.Values, out any) error {
+	return c.do(ctx, http.MethodGet, path, query, nil, out)
+}
+
+func (c cprQuotaClient) post(ctx context.Context, path string, payload any, out any) error {
+	return c.do(ctx, http.MethodPost, path, nil, payload, out)
+}
+
+func (c cprQuotaClient) do(ctx context.Context, method, path string, query url.Values, payload any, out any) error {
 	endpoint := c.baseURL + path
 	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
 	}
+	var reqBody io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode %s body: %w", path, err)
+		}
+		reqBody = bytes.NewReader(encoded)
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, cprQuotaRequestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(reqCtx, method, endpoint, reqBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-api-key", c.adminKey)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := cprQuotaHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request %s: %w", path, err)
@@ -357,14 +389,31 @@ func pickCPRClientKey(ctx context.Context, client cprQuotaClient, candidates []c
 	return cprAdminClientKey{}, errors.New("no cpr client key matches this account api_key")
 }
 
-// fetchCPRQuota 读取 cpr 快照并转换成 codex_* extra 更新。
-func fetchCPRQuota(ctx context.Context, account *Account, now time.Time) (*cprQuotaSyncResult, string, error) {
+// resolveCPRClient 返回全局 cpr 客户端与本账号对应的 cpr 账号 ID。
+func resolveCPRClient(ctx context.Context, account *Account, now time.Time) (cprQuotaClient, string, error) {
 	settings := currentCPRQuotaSettings()
 	if !settings.enabled() {
-		return nil, "", errors.New("cpr quota sync is not configured")
+		return cprQuotaClient{}, "", errors.New("cpr quota sync is not configured")
 	}
 	client := cprQuotaClient{baseURL: settings.BaseURL, adminKey: settings.AdminAPIKey}
 	cprID, err := resolveCPRAccountID(ctx, client, account, now)
+	if err != nil {
+		return cprQuotaClient{}, "", err
+	}
+	return client, cprID, nil
+}
+
+// forgetCPRAccountOnNotFound 在 cpr 账号被删除/替换时清掉反查缓存，下次重新匹配。
+func forgetCPRAccountOnNotFound(accountID int64, err error) {
+	var httpErr *cprQuotaHTTPError
+	if errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound {
+		cprQuotaResolveCache.Delete(accountID)
+	}
+}
+
+// fetchCPRQuota 读取 cpr 快照并转换成 codex_* extra 更新。
+func fetchCPRQuota(ctx context.Context, account *Account, now time.Time) (*cprQuotaSyncResult, string, error) {
+	client, cprID, err := resolveCPRClient(ctx, account, now)
 	if err != nil {
 		return nil, "", err
 	}
@@ -372,10 +421,7 @@ func fetchCPRQuota(ctx context.Context, account *Account, now time.Time) (*cprQu
 		Account cprAdminAccount `json:"account"`
 	}
 	if err := client.get(ctx, "/api/admin/accounts/quota", url.Values{"accountId": {cprID}}, &data); err != nil {
-		var httpErr *cprQuotaHTTPError
-		if errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound {
-			cprQuotaResolveCache.Delete(account.ID)
-		}
+		forgetCPRAccountOnNotFound(account.ID, err)
 		return nil, cprID, err
 	}
 	return buildCPRQuotaSyncResult(data.Account.Quota, now), cprID, nil

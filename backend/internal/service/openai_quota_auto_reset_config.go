@@ -49,7 +49,11 @@ func ResolveOpenAIAutoResetCreditConfig(account *Account) OpenAIAutoResetCreditC
 }
 
 func isOpenAIAutoResetCreditAccount(account *Account) bool {
-	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth && !account.IsShadow()
+	if account == nil || account.Platform != PlatformOpenAI || account.IsShadow() {
+		return false
+	}
+	// codex-proxy-rs 上游的 API Key 账号经 cpr 管理端查卡/用卡，与 OAuth 母账号同等对待。
+	return account.Type == AccountTypeOAuth || IsCPRQuotaSyncAccount(account)
 }
 
 // normalizeOpenAIAutoResetCreditExtra 校验管理请求中的配置并剥离服务运行态。
@@ -67,8 +71,9 @@ func normalizeOpenAIAutoResetCreditExtra(platform, accountType string, isShadow 
 	if !hasEnabled && !has5h && !has7d {
 		return normalized, nil
 	}
-	if platform != PlatformOpenAI || accountType != AccountTypeOAuth || isShadow {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_AUTO_RESET_CREDIT_ACCOUNT_INVALID", "automatic reset credits are only supported for OpenAI OAuth parent accounts")
+	// API Key 账号只有指向 codex-proxy-rs 时才会真正生效（见 isOpenAIAutoResetCreditAccount）。
+	if platform != PlatformOpenAI || (accountType != AccountTypeOAuth && accountType != AccountTypeAPIKey) || isShadow {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_AUTO_RESET_CREDIT_ACCOUNT_INVALID", "automatic reset credits are only supported for OpenAI OAuth parent accounts and codex-proxy-rs API key accounts")
 	}
 
 	enabled := false

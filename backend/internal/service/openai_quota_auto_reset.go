@@ -224,12 +224,19 @@ func (s *OpenAIQuotaAutoResetService) scanEnabledAccounts(ctx context.Context) {
 	if release != nil {
 		defer release()
 	}
+	// API Key 账号由 ResolveOpenAIAutoResetCreditConfig 进一步限定为 codex-proxy-rs 上游。
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		s.scanEnabledAccountsOfType(ctx, accountType)
+	}
+}
+
+func (s *OpenAIQuotaAutoResetService) scanEnabledAccountsOfType(ctx context.Context, accountType string) {
 	for page := 1; ; page++ {
 		accounts, pageInfo, err := s.accountRepo.ListWithFilters(ctx, pagination.PaginationParams{
 			Page: page, PageSize: openAIAutoResetBatchSize,
-		}, PlatformOpenAI, AccountTypeOAuth, StatusActive, "", 0, "")
+		}, PlatformOpenAI, accountType, StatusActive, "", 0, "")
 		if err != nil {
-			slog.Warn("openai_auto_reset_scan_failed", "page", page, "error", err)
+			slog.Warn("openai_auto_reset_scan_failed", "type", accountType, "page", page, "error", err)
 			return
 		}
 		for i := range accounts {

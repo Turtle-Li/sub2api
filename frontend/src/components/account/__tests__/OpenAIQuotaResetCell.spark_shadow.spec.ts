@@ -473,3 +473,20 @@ describe('OpenAIQuotaResetCell 自动用卡运行态', () => {
     wrapper.unmount()
   })
 })
+
+describe('OpenAIQuotaResetCell — codex-proxy-rs API Key 账号', () => {
+  it('cpr 账号显示点数与重置，但不显示需要 OAuth 的邀请', () => {
+    const wrapper = mount(OpenAIQuotaResetCell, {
+      props: { account: makeAccount({ type: 'apikey', cpr_quota_sync: true }) },
+    })
+    expect(wrapper.find('[data-testid="codex-credits"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="referral-count"]').exists()).toBe(false)
+  })
+
+  it('普通 API Key 账号不显示', () => {
+    const wrapper = mount(OpenAIQuotaResetCell, {
+      props: { account: makeAccount({ type: 'apikey' }) },
+    })
+    expect(wrapper.find('[data-testid="codex-credits"]').exists()).toBe(false)
+  })
+})

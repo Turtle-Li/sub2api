@@ -73,7 +73,8 @@
         {{ t('admin.accounts.openaiQuotaReset.points') }}
         <span class="truncate tabular-nums">{{ creditsDisplay }}</span>
       </button>
-      <OpenAIReferralCell :account="account" />
+      <!-- 邀请需要 ChatGPT OAuth 凭证，cpr 上游的 API Key 账号不支持。 -->
+      <OpenAIReferralCell v-if="account.type === 'oauth'" :account="account" />
     </div>
 
     <div v-if="creditsCacheWarning" class="text-[10px] text-amber-600 dark:text-amber-400">
@@ -191,6 +192,7 @@ import {
   type OpenAIQuotaResetResult
 } from '@/api/admin/accounts'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { isOpenAICodexUsageAccount } from '@/utils/accountUsageRefresh'
 import OpenAIReferralCell from '@/components/account/OpenAIReferralCell.vue'
 
 const props = defineProps<{
@@ -203,8 +205,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-// Visible only for OpenAI OAuth accounts.
-const visible = computed(() => props.account.platform === 'openai' && props.account.type === 'oauth')
+// OpenAI OAuth accounts, plus API key accounts behind codex-proxy-rs (queried via the cpr admin API).
+const visible = computed(() => isOpenAICodexUsageAccount(props.account))
 
 const loading = ref(false)
 const resetting = ref(false)

@@ -2816,7 +2816,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="supportsAutoResetCredit"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="auto-reset-credit-settings"
       >
@@ -3394,6 +3394,7 @@
 </template>
 
 <script setup lang="ts">
+import { isCPRQuotaSyncAccount } from '@/utils/accountUsageRefresh'
 import { ref, reactive, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -4142,6 +4143,12 @@ const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
 const autoResetCreditEnabled = ref(false)
+// OpenAI OAuth 母账号，或 codex-proxy-rs 上游的 API Key 账号（经 cpr 管理端查卡/用卡）。
+const supportsAutoResetCredit = computed(() =>
+  props.account?.platform === 'openai' &&
+  !isSparkShadow.value &&
+  (props.account.type === 'oauth' || isCPRQuotaSyncAccount(props.account))
+)
 const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
 const upstreamBillingAutoProbeEnabled = ref(false)
@@ -6429,7 +6436,7 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		if (props.account.type === 'oauth' && !isSparkShadow.value) {
+		if (supportsAutoResetCredit.value) {
 			newExtra.auto_reset_credit_enabled = autoResetCreditEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
 			newExtra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
