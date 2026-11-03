@@ -55,3 +55,9 @@ Bug: BUG-20261104-gemini-implicit-output-limit
 ## 发布前CI资源阻碍
 
 首次CI 41708888531的frontend任务在Build embedded frontend失败：Vue编译阶段V8堆约2044MB时退出134，明确报JavaScript heap out of memory。前置typecheck与critical vitest通过，frontend/Dockerfile/workflow在Gemini修复提交前后无变动，属于现有CI资源不足。仅在该编译步骤设置NODE_OPTIONS=--max-old-space-size=4096；保留同一pnpm build、所有检查与生产配置。新CI实际结果另行记录，不能把资源配置修改本身当作通过。
+
+后续CI 41709907598的frontend任务通过，确认4GiB构建堆修复了该资源阻碍。
+
+独立复核确认WorkBuddy由21751cd48接入，当前两文件补丁只修正既定契约的测试基线；完整集合与JSON等值断言保留。独立红灯复现后定向model/domain/server回归通过（0.227s/0.530s/0.793s），git diff --check通过。
+
+首次完整单测还发现两个既有测试预期未收录WorkBuddy：TestAllPlatformsIncludesEveryConcretePlatform，以及TestAPIContracts下两个admin/settings场景的default_platform_quotas。生产平台清单及其领域测试均已明确登记workbuddy；这些相关文件相对发布基线9bb4085339b6e3dedb7550b66bb05ff0af9e0678没有修改。定向本地红灯复现与CI一致，仅缺workbuddy。最小修复只补显式平台预期及两个快照中的空daily/weekly/monthly额度，不改变业务行为、不移除断言。定向domain/model/server回归通过（0.453s/0.888s/1.078s）；完整CI结果仍需重跑核验。
