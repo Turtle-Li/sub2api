@@ -132,6 +132,8 @@ jobs:
         run: make test-frontend
       - name: Build embedded frontend
         working-directory: frontend
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm run build
       - uses: actions/setup-go@v6
         with:

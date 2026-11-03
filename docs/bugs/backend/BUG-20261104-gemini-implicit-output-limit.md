@@ -51,3 +51,7 @@ Bug: BUG-20261104-gemini-implicit-output-limit
 根因位于共享Sub2API服务，不能只更新消费者就宣称恢复。作者已授权提交并发布：安全整合最新fork/main，只提交本次改动和故障记录，运行所需检查，再按deploy/README.md的手动GitHub构建与AWS蓝绿流程发布。保留既有镜像和自动回退；无迁移、不改分组或额度。Sub2文档被现有docs/*忽略，提交时必须显式纳入，不能只提交代码。
 
 生产生效后，使用消费方保存的原完整输入、同gemini-4-argon、HIGH、temperature=1且不传输出上限，要求正常STOP、非空完整正文、usage/思考统计与模型标签、酒馆聊天逐字读回。未通过这一项前，故障状态保持“本地修复待线上验证”，不将技术修复等同内容交付。
+
+## 发布前CI资源阻碍
+
+首次CI 41708888531的frontend任务在Build embedded frontend失败：Vue编译阶段V8堆约2044MB时退出134，明确报JavaScript heap out of memory。前置typecheck与critical vitest通过，frontend/Dockerfile/workflow在Gemini修复提交前后无变动，属于现有CI资源不足。仅在该编译步骤设置NODE_OPTIONS=--max-old-space-size=4096；保留同一pnpm build、所有检查与生产配置。新CI实际结果另行记录，不能把资源配置修改本身当作通过。
