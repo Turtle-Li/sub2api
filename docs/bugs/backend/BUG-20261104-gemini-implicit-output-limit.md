@@ -10,7 +10,7 @@ Bug: BUG-20261104-gemini-implicit-output-limit
 
 影响范围: Gemini兼容入口的未设上限请求，尤其HIGH思考加长正文。不是模型能力结论；思考与正文共用输出预算会导致正文前耗尽。原生v1beta路径不经此默认注入。不得全局删除Anthropic默认值，也不修改组、账号、计费、模型或思考档位。
 
-疑似根因: ANALYSIS_READY。在本地fork/main 9bb4085339b6e3dedb7550b66bb05ff0af9e0678可直接追踪8192的生成与传递，固定上游Wei-Shaw/sub2api e60cefeaf78f2fbfa95aa076029e28b40d0a5527也有相同链路。原始线上失败确定，但尚未读取线上最终Gemini请求体，不能把本地源码身份当作生产部署证明。需真实转发stub回归及同原任务线上验证补齐。
+根因证据: 在fork/main基线9bb4085339b6e3dedb7550b66bb05ff0af9e0678可直接追踪8192的生成与传递，固定上游Wei-Shaw/sub2api e60cefeaf78f2fbfa95aa076029e28b40d0a5527也有相同链路。真实转发stub红灯复现、修改后最终请求体省略该字段、实际部署revision与原完整任务线上成功已构成验证闭环。未抓取生产原始请求体，不把本地源码身份单独当作生产证明。
 
 推荐修改方案: 在Gemini专属转换边界保留“未指定上限”。Antigravity仅在最终解析为Gemini时消除兼容中间态补入的上限。保留显式上限的优先级与现有clamp、真实Claude默认值。小说消费者增加流式usage请求和思考delta计数（不记录思考内容），用于诊断。原始完整任务+HIGH验证恢复后再继续审稿润色。
 
@@ -20,7 +20,7 @@ Bug: BUG-20261104-gemini-implicit-output-limit
 
 上游契约: 对照e60cefeaf78f2fbfa95aa076029e28b40d0a5527的backend/internal/pkg/apicompat/{chatcompletions_to_responses.go,responses_to_anthropic_request.go}、backend/internal/service/gemini_chat_completions_compat_service.go及相关测试；采用其协议与思考转换，刻意修正Gemini复用Anthropic中间结构时的人工上限。保留项目LGPL许可和版权声明。
 
-状态: IMPLEMENTATION_READY。本地修复、回归及独立QA/代码审查完成；生产尚未发布，原完整任务＋HIGH线上验证未完成。
+状态: FIX_VERIFIED。修复已提交并发布，原完整输入、同模型、HIGH、不传上限的线上验证成功，正常stop且正文完整返回；输出11286 tokens超过原隐式8192。内容另行进入审稿，技术恢复不等于文学验收。
 
 ## 本地修复与验证
 
@@ -59,5 +59,13 @@ Bug: BUG-20261104-gemini-implicit-output-limit
 后续CI 41709907598的frontend任务通过，确认4GiB构建堆修复了该资源阻碍。
 
 独立复核确认WorkBuddy由21751cd48接入，当前两文件补丁只修正既定契约的测试基线；完整集合与JSON等值断言保留。独立红灯复现后定向model/domain/server回归通过（0.227s/0.530s/0.793s），git diff --check通过。
+
+## 生产发布与原任务恢复验证
+
+- 提交：Gemini修复5791eef504e1649ab0a3cf478b470895a4a3cdf1；CI构建堆d7cab706199a3b8755e12fd046df9fdd605bc306；WorkBuddy既有测试基线3008402d56f1ec53a1b72704b3d95789d7813b23。用户明确授权后推送自有main，无force-push。
+- CI [41711044158](https://github.com/Turtle-Li/sub2api/actions/runs/41711044158) 的五项Linux任务全部通过，包括完整单测、集成、前端、lint与容器挂载。macOS shell因hosted-runner容量不足未获执行器而取消，整体为基础设施failure，不能记全绿。冻结workflow的同一Check deployment scripts全文已在本机Mac以/bin/bash -e执行，退出0；没有删减检查。workflow SHA256 b76926fd7e4606f6761764c0646fd46a7e25c8bb4ec6da96c783bc5803c7ee70。
+- Canonical AWS蓝绿发布 [41713638423](https://github.com/Turtle-Li/sub2api/actions/runs/41713638423) 成功。运行revision3008402d56f1ec53a1b72704b3d95789d7813b23，version0.2.21，image sha256:a89511cba669a6ed7fed24fe57c8cc58e3eb88fec9963e7b7078524a69d28b2a；blue健康、traffic accepting、background active、公共health200；审计app_5xx/app_fatal/caddy_5xx均0。旧green由持久drain monitor管理，未手工强停。
+- 原完整提示SHA256 66a1e14c8f26ac04e8e4697ed237be46ae6a9e76d2ab96ba974e7ea53b9e3dc0未变。经实际SillyTavern Custom发送gemini-4-argon、HIGH、temperature1、无上限；stop与DONE均到达，5750汉字，酒馆逐字读回成功。prompt_tokens2602、completion_tokens11286、total_tokens13888；耗时234427ms，首正文113547ms。思考delta仅计数7838字符，不留内容，不把字符当Token。
+- 同任务完成输出已超过8192，不依赖压缩输入或降低HIGH。当前仍受模型自身限额与服务可用性约束，不宣称无限输出或一次验证证明所有未来请求。原始失败、原始成功与阶段资料均保留。
 
 首次完整单测还发现两个既有测试预期未收录WorkBuddy：TestAllPlatformsIncludesEveryConcretePlatform，以及TestAPIContracts下两个admin/settings场景的default_platform_quotas。生产平台清单及其领域测试均已明确登记workbuddy；这些相关文件相对发布基线9bb4085339b6e3dedb7550b66bb05ff0af9e0678没有修改。定向本地红灯复现与CI一致，仅缺workbuddy。最小修复只补显式平台预期及两个快照中的空daily/weekly/monthly额度，不改变业务行为、不移除断言。定向domain/model/server回归通过（0.453s/0.888s/1.078s）；完整CI结果仍需重跑核验。
