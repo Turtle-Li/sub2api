@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/sjson"
 )
 
 type antigravityCompatProtocol uint8
@@ -32,14 +33,15 @@ const (
 const antigravityCompatMaxTokens = 64000
 
 type antigravityCompatRequest struct {
-	protocol        antigravityCompatProtocol
-	originalBody    []byte
-	claudeBody      []byte
-	originalModel   string
-	clientStream    bool
-	includeUsage    bool
-	startTime       time.Time
-	reasoningEffort *string
+	protocol           antigravityCompatProtocol
+	originalBody       []byte
+	claudeBody         []byte
+	originalModel      string
+	clientStream       bool
+	includeUsage       bool
+	outputLimitOmitted bool
+	startTime          time.Time
+	reasoningEffort    *string
 }
 
 type antigravityCompatUpstreamCall struct {
@@ -87,14 +89,15 @@ func (s *AntigravityGatewayService) ForwardAsChatCompletions(
 	}
 
 	return s.forwardAntigravityCompat(ctx, c, account, antigravityCompatRequest{
-		protocol:        antigravityCompatChatCompletions,
-		originalBody:    body,
-		claudeBody:      claudeBody,
-		originalModel:   request.Model,
-		clientStream:    request.Stream,
-		includeUsage:    request.StreamOptions != nil && request.StreamOptions.IncludeUsage,
-		startTime:       time.Now(),
-		reasoningEffort: extractCCReasoningEffortFromBody(body),
+		protocol:           antigravityCompatChatCompletions,
+		originalBody:       body,
+		claudeBody:         claudeBody,
+		originalModel:      request.Model,
+		clientStream:       request.Stream,
+		includeUsage:       request.StreamOptions != nil && request.StreamOptions.IncludeUsage,
+		outputLimitOmitted: request.MaxTokens == nil && request.MaxCompletionTokens == nil,
+		startTime:          time.Now(),
+		reasoningEffort:    extractCCReasoningEffortFromBody(body),
 	})
 }
 
@@ -129,13 +132,14 @@ func (s *AntigravityGatewayService) ForwardAsResponses(
 	}
 
 	return s.forwardAntigravityCompat(ctx, c, account, antigravityCompatRequest{
-		protocol:        antigravityCompatResponses,
-		originalBody:    body,
-		claudeBody:      claudeBody,
-		originalModel:   request.Model,
-		clientStream:    request.Stream,
-		startTime:       time.Now(),
-		reasoningEffort: ExtractResponsesReasoningEffortFromBody(body),
+		protocol:           antigravityCompatResponses,
+		originalBody:       body,
+		claudeBody:         claudeBody,
+		originalModel:      request.Model,
+		clientStream:       request.Stream,
+		startTime:          time.Now(),
+		outputLimitOmitted: request.MaxOutputTokens == nil,
+		reasoningEffort:    ExtractResponsesReasoningEffortFromBody(body),
 	})
 }
 
@@ -248,6 +252,14 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	geminiBody, err := s.buildAntigravityCompatGeminiBody(ctx, request.claudeBody, &claudeRequest, projectID, mappedModel)
 	if err != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request")
+	}
+	// Only a Gemini target may omit this field; real Claude targets still
+	// require the Anthropic default and its thinking-budget adjustment.
+	if request.outputLimitOmitted && strings.HasPrefix(strings.ToLower(mappedModel), "gemini-") {
+		geminiBody, err = sjson.DeleteBytes(geminiBody, "request.generationConfig.maxOutputTokens")
+		if err != nil {
+			return nil, fmt.Errorf("preserve omitted Gemini output limit: %w", err)
+		}
 	}
 
 	request.reasoningEffort = ApplyThinkingEnabledFallback(request.reasoningEffort, request.originalBody, mappedModel)

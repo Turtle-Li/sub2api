@@ -60,6 +60,11 @@ func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
 	if err != nil {
 		return nil, s.writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 	}
+	// Anthropic requires a default max_tokens, but Gemini does not. Do not
+	// turn an omitted client limit into an 8192-token thinking+text ceiling.
+	if responsesReq.MaxOutputTokens == nil {
+		anthropicReq.MaxTokens = 0
+	}
 	anthropicReq.Stream = clientStream
 
 	claudeBody, err := json.Marshal(anthropicReq)

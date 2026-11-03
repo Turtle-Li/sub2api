@@ -1,5 +1,13 @@
 # Sub2API project operations
 
+## Gemini omitted output limits
+
+- Gemini compatibility requests must preserve an omitted output limit through
+  the intermediate Anthropic shape. Read
+  `docs/bugs/backend/BUG-20261104-gemini-implicit-output-limit.md`; retain real
+  Claude defaults and explicit client limits. Do not lower thinking to work
+  around this bug.
+
 ## Upstream v0.2.19 integration
 
 - Read `docs/operations/UPSTREAM_V0219_20261029.md` for the pinned upstream
