@@ -80,3 +80,33 @@ Owner test URLs: `https://www.turtleligpt.com/shop` and
 and external email/Feishu delivery remain owner acceptance checks. No real
 purchase, paid-order injection or outbound test notification was performed by
 the release executor.
+
+## Payment choices and card refinement follow-up
+
+- Owner-authorized source `0df04a812a86d03e57c78efea470cb603c6ebf74` fixes
+  checkout-info compatibility: normally omitted `available` fields no longer
+  hide returned Alipay/WeChat methods. Explicit disablement, CNY and amount
+  constraints remain enforced. No backend, schema or configuration changes.
+- Gemini 4 (`gemini-4-argon`, matching request/response, normal stop/DONE)
+  supplied the shop and product card templates. Independent QA/Review approved
+  the same six-file snapshot; final shop regression 22/22, payment regression
+  27 files/336 tests, build/type checks and scoped lint passed. Actual browser
+  captures cover desktop/390-width viewports, light/dark and keyboard selection.
+- Explicit workflow
+  `https://github.com/Turtle-Li/sub2api/actions/runs/41823520372`
+  completed successfully at `2026-11-04T11:56:41Z` on the exact source revision.
+  Active healthy blue image `sub2api:auto-20261104-035531-0df04a81`, revision
+  `0df04a812a86d03e57c78efea470cb603c6ebf74`, zero restarts/OOM;
+  `traffic=accepting`, `background=active`. Prior green was stopped by the
+  canonical drain process, without a raw lifecycle command by this task.
+- Public health/shop/detail/tutorial return HTTP 200. Anonymous user/admin
+  catalog APIs return HTTP 401 with `no-store`. Served application chunks
+  `ShopView-bnftO3sZ.js` and `ShopProductView-BWfRdcJE.js` return HTTP 200;
+  the detail chunk includes optional availability and single-amount checks.
+- Read-only production verification: both shop products enabled at 10 fen;
+  Alipay/WeChat enabled and sourced from `unified_alipay`/`unified_wxpay`;
+  minimum recharge 0.10 CNY, unlimited maximum and zero recharge fee.
+  No real payment or external notification was triggered by the executor.
+- Roll back through the canonical helper to the prior manual-shop-capable
+  `76d6158e` image if required. Preserve shop/payment data and the two test
+  products. This frontend follow-up needs no SQL rollback or backup restoration.
