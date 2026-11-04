@@ -412,6 +412,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import { METHOD_ORDER, getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
+import { bindPaymentPopupContext, paymentPopupName } from '@/components/payment/embeddedPaymentReturn'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   clearQueuedPaymentCancellation,
@@ -1910,10 +1911,11 @@ async function openExistingOrder(): Promise<void> {
   existingOrderContinueLoading.value = true
   existingOrderActionError.value = ''
   let popup: Window | null = null
+  const popupName = paymentPopupName()
   let popupNavigated = false
   if (typeof window !== 'undefined' && !isMobileDevice()) {
     try {
-      popup = window.open('', 'paymentPopup', getPaymentPopupFeatures())
+      popup = window.open('', popupName, getPaymentPopupFeatures())
     } catch {
       popup = null
     }
@@ -1924,6 +1926,7 @@ async function openExistingOrder(): Promise<void> {
   const navigatePopup = (url: string) => {
     if (popup && !popup.closed) {
       try {
+        bindPaymentPopupContext(popup, { orderId: order.id, resumeToken: paymentState.value.resumeToken })
         popup.location.href = url
         popupNavigated = true
         return
@@ -1931,8 +1934,10 @@ async function openExistingOrder(): Promise<void> {
         // Browser popup ownership can change after the authenticated response.
       }
     }
-    const opened = window.open(url, 'paymentPopup', getPaymentPopupFeatures())
-    if (!opened || opened.closed) window.location.href = url
+    const opened = window.open('', popupName, getPaymentPopupFeatures())
+    bindPaymentPopupContext(opened, { orderId: order.id, resumeToken: paymentState.value.resumeToken })
+    if (opened && !opened.closed) opened.location.href = url
+    else window.location.href = url
   }
 
   try {
@@ -2127,8 +2132,9 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
   errorMessage.value = ''
   errorHintMessage.value = ''
   const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
+  const popupName = paymentPopupName()
   const preopenedPopup = shouldPreopenHostedPopup(requestType, options)
-    ? window.open('', 'paymentPopup', getPaymentPopupFeatures())
+    ? window.open('', popupName, getPaymentPopupFeatures())
     : null
   let preopenedPopupNavigated = false
   const closePreopenedPopup = () => {
@@ -2175,6 +2181,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     const openWindow = (url: string) => {
       if (preopenedPopup && !preopenedPopup.closed) {
         try {
+          bindPaymentPopupContext(preopenedPopup, { orderId: result.order_id, resumeToken: result.resume_token })
           preopenedPopup.location.href = url
           preopenedPopupNavigated = true
           return
@@ -2183,10 +2190,10 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           // discard or deny access to a preopened browsing context.
         }
       }
-      const win = window.open(url, 'paymentPopup', getPaymentPopupFeatures())
-      if (!win || win.closed) {
-        window.location.href = url
-      }
+      const win = window.open('', popupName, getPaymentPopupFeatures())
+      bindPaymentPopupContext(win, { orderId: result.order_id, resumeToken: result.resume_token })
+      if (win && !win.closed) win.location.href = url
+      else window.location.href = url
     }
     const visibleMethod = normalizeVisibleMethod(requestType) || requestType
     // When user clicks the dedicated Stripe button, leave method blank so the

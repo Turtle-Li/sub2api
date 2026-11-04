@@ -173,6 +173,14 @@ func TestFeishuPaymentRecheckOnlyResolvesKnownTerminalStates(t *testing.T) {
 	store.order = FeishuPaymentOrderState{Exists: true, Status: OrderStatusCompleted}
 	require.NoError(t, svc.recheckOpen(context.Background(), FeishuPaymentIncident{ID: "completed", Kind: FeishuPaymentIncidentPaidIncomplete, SubjectOrderID: 1}, now))
 	require.Equal(t, []string{"resolve:completed"}, store.actions())
+	for _, status := range []string{OrderStatusPaid, OrderStatusCompleted} {
+		store.reset()
+		paidAt := now.Add(-time.Hour)
+		store.order = FeishuPaymentOrderState{Exists: true, Status: status, OrderType: "manual_shop", PaidAt: &paidAt}
+		require.False(t, isFeishuPaidIncomplete(store.order, now))
+		require.NoError(t, svc.recheckOpen(context.Background(), FeishuPaymentIncident{ID: "shop", Kind: FeishuPaymentIncidentPaidIncomplete, SubjectOrderID: 1}, now))
+		require.Equal(t, []string{"retire:shop"}, store.actions())
+	}
 }
 
 func TestFeishuPaymentSyntheticNotificationUsesOnlyItsOwnDelivery(t *testing.T) {
@@ -257,6 +265,13 @@ func (s *feishuPaymentRecheckStore) TouchOpen(_ context.Context, id string, _ ti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, "touch:"+id)
+	return nil
+}
+
+func (s *feishuPaymentRecheckStore) RetireManualShop(_ context.Context, id string, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "retire:"+id)
 	return nil
 }
 

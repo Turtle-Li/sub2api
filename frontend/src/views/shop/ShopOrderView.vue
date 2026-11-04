@@ -17,6 +17,7 @@ const busy = ref(false)
 const error = ref('')
 const message = ref('')
 let generation = 0
+let edit = 0
 const inputURL = computed(() => sanitizeUrl(order.value?.product.input_url || (order.value?.product.input_format === 'session_json' ? 'https://chatgpt.com/api/auth/session' : '')))
 const localPreview = computed(() => order.value?.product.input_format === 'session_json' ? previewShopSession(content.value) : null)
 const displayedCheck = computed(() => inputCheck.value ?? localPreview.value?.check ?? null)
@@ -29,26 +30,29 @@ async function load() {
   finally { if (current === generation) busy.value = false }
 }
 async function submit() {
-  if (!order.value || busy.value || !content.value.trim()) return
+  if (!order.value?.can_submit || busy.value || !content.value.trim()) return
   busy.value = true
   error.value = ''
   const current = generation
-  const checkedContent = content.value
+  const { order_id: id, revision } = order.value
+  const input = { content: content.value, revision }
+  const currentEdit = edit
+  const matches = () => current === generation && currentEdit === edit && order.value?.order_id === id && order.value.revision === revision && content.value === input.content
   try {
-    if (order.value.product.input_format === 'session_json' && !inputCheck.value) {
-      const result = await shopAPI.checkInput(order.value.order_id, { content: checkedContent, revision: order.value.revision })
-      if (current === generation && content.value === checkedContent) inputCheck.value = result.data
-      return
+    if (order.value.product.input_format === 'session_json') {
+      const result = await shopAPI.checkInput(id, input)
+      if (!matches()) return
+      inputCheck.value = result.data
     }
-    const result = await shopAPI.submitInput(order.value.order_id, { content: checkedContent, revision: order.value.revision })
-    if (current !== generation) return
+    const result = await shopAPI.submitInput(id, input)
+    if (!matches()) return
     order.value = result.data
     content.value = ''
     message.value = '资料已提交，等待管理员处理。'
-  } catch (err: unknown) { error.value = typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' ? err.message : '提交失败，请检查资料并刷新订单。' }
-  finally { busy.value = false }
+  } catch (err: unknown) { if (matches()) error.value = typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' ? err.message : '提交失败，请检查资料并刷新订单。' }
+  finally { if (current === generation) busy.value = false }
 }
-watch(content, () => { inputCheck.value = null; error.value = '' })
+watch(content, () => { edit++; inputCheck.value = null; error.value = '' }, { flush: 'sync' })
 watch(() => route.params.id, () => { order.value = null; content.value = ''; inputCheck.value = null; message.value = ''; void load() }, { immediate: true })
 onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
 </script>
@@ -107,24 +111,23 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
           <component :is="order.fulfillment_status === 'QUEUED' ? 'details' : 'div'">
           <summary v-if="order.fulfillment_status === 'QUEUED'" class="mt-3 flex min-h-11 cursor-pointer items-center text-sm font-medium text-primary-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300">更新充值资料</summary>
           <template v-if="order.can_submit">
-            <div class="mt-3 text-sm leading-6 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+            <div class="mt-3 rounded-lg bg-gray-50 p-4 text-sm leading-6 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
               <p v-if="!order.product.input_instructions">登录要充值的 ChatGPT 账号，打开会话页面，复制页面的全部内容。</p>
               <p v-if="order.product.input_instructions" class="whitespace-pre-wrap break-words">{{ order.product.input_instructions }}</p>
-              <a v-if="inputURL" :href="inputURL" target="_blank" rel="noopener noreferrer" class="mt-2 inline-flex min-h-11 items-center rounded-md font-medium text-primary-700 underline underline-offset-4 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:text-primary-300">打开 Session 页面 ↗</a>
+              <a v-if="inputURL" :href="inputURL" target="_blank" rel="noopener noreferrer" class="btn btn-secondary mt-3 min-h-11">打开 Session 页面 ↗</a>
             </div>
 
             <form class="mt-3" @submit.prevent="submit">
               <label for="shop-session-content" class="block text-sm font-medium text-gray-900 dark:text-gray-100">全部原始内容</label>
-              <textarea id="shop-session-content" v-model="content" name="content" rows="5" maxlength="262144" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="busy" class="input mt-2 block min-h-32 w-full resize-y whitespace-pre font-mono text-xs leading-5 disabled:cursor-not-allowed disabled:opacity-60" placeholder="在此粘贴全部原始内容"></textarea>
+              <textarea id="shop-session-content" v-model="content" name="content" wrap="soft" rows="5" maxlength="262144" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="busy" class="input mt-2 block min-h-32 w-full resize-y whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-xs leading-5 disabled:cursor-not-allowed disabled:opacity-60" placeholder="在此粘贴全部原始内容"></textarea>
 
               <div aria-live="polite">
                 <p v-if="localPreview?.error && !inputCheck" class="mt-3 text-sm leading-6 text-amber-800 dark:text-amber-200" role="status">{{ localPreview.error }}</p>
                 <ShopSessionCheck v-if="displayedCheck" :check="displayedCheck" :account-name="localPreview?.check?.account === displayedCheck.account ? localPreview.accountName : undefined" :local="!inputCheck" class="mt-4" />
               </div>
-              <p v-if="inputCheck" class="mt-4 text-sm leading-6 text-gray-700 dark:text-gray-300">确认账号无误后提交，客服将为这个账号充值。</p>
 
               <button type="submit" class="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900 sm:w-auto" :disabled="busy || !content.trim()" :aria-busy="busy">
-                {{ busy ? '正在处理…' : inputCheck ? '确认账号并提交资料' : order.product.input_format === 'session_json' ? '检查并核对资料' : '提交资料' }}
+                {{ busy ? '正在处理…' : order.product.input_format === 'session_json' ? '提交' : '提交资料' }}
               </button>
             </form>
           </template>

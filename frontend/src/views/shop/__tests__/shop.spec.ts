@@ -1,3 +1,4 @@
+import { reactive } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import type { ShopOrderDetail, ShopProduct } from '@/types/shop'
@@ -13,18 +14,19 @@ import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import { isManualShopPaymentConfirmed } from '@/components/payment/manualShopPayment'
 const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), createOrder: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
 const checkoutAPI = vi.hoisted(() => ({ getCheckoutInfo: vi.fn() }))
-const route = vi.hoisted(() => ({ params: { id: '42' }, path: '/shop/help/chatgpt-plus-account' }))
+const route = reactive({ params: { id: '42' }, path: '/shop/help/chatgpt-plus-account' })
 vi.mock('@/api/shop', () => ({ shopAPI: api }))
 vi.mock('@/api/payment', () => ({ paymentAPI: checkoutAPI }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ contactInfo: '测试客服入口' }) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
 vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => ({ push: vi.fn() }) }))
-vi.mock('@/composables/useStepUp', () => ({ useStepUp: () => ({ run: (fn: () => Promise<unknown>) => fn(), onCancel: vi.fn() }), isStepUpCancelled: () => false }))
+const stepUpRun = vi.hoisted(() => vi.fn((fn: () => Promise<unknown>) => fn()))
+vi.mock('@/composables/useStepUp', () => ({ useStepUp: () => ({ run: stepUpRun, onCancel: vi.fn() }), isStepUpCancelled: () => false }))
 const product: ShopProduct = { id: 1, name: '测试商品', category: 'Gemini', summary: '', description: '', price: 12, currency: 'CNY', duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', input_format: 'session_json', input_url: '', input_instructions: '', guide_key: '', enabled: true, sort_order: 0, revision: 1, created_at: '', updated_at: '' }
 const order = (): ShopOrderDetail => ({ order_id: 42, out_trade_no: 'shop-test-42', product, user_id: 8, pay_amount: 12, currency: 'CNY', payment_status: 'PAID', fulfillment_status: 'WAITING_INPUT', revision: 3, input_revision: 0, input_account: '', created_at: '2026-11-04T12:00:00Z', status_note: '', email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: true, can_start: false, can_complete: false, can_reveal_input: false })
 const global = { stubs: { AppLayout: { template: '<main><slot /></main>' }, RouterLink: { template: '<a><slot /></a>' }, ShopOrderSummary: true, TotpStepUpDialog: true, BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' } } }
 enableAutoUnmount(afterEach)
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
+beforeEach(() => { route.params.id = '42'; vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
 describe('automatic day-pass surfaces', () => {
   const daypass = { ...product, name: 'DeepSeek 24 小时日卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
   it('shows the paid clock and key restrictions without the manual delivery estimate', async () => {
@@ -175,19 +177,13 @@ describe('manual shop surfaces', () => {
     const wrapper = mount(ShopOrderView, { global })
     await flushPromises()
     await wrapper.get('textarea').setValue(content)
-    expect(wrapper.text()).toContain('本地初步识别')
+    expect(wrapper.text()).not.toContain('本地初步识别')
     expect(wrapper.text()).toContain('本地测试用户')
     expect(wrapper.text()).toContain('local@example.invalid')
     expect(wrapper.text()).toContain('ChatGPT Plus')
     expect(api.checkInput).not.toHaveBeenCalled()
     expect(api.submitInput).not.toHaveBeenCalled()
     expect(JSON.stringify(localStorage)).not.toContain('local@example.invalid')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-    expect(api.checkInput).toHaveBeenCalledWith(42, { content, revision: 3 })
-    expect(api.submitInput).not.toHaveBeenCalled()
-    expect(wrapper.text()).not.toContain('本地初步识别')
-    expect(wrapper.text()).toContain('target@example.com')
     await wrapper.get('textarea').setValue('')
     expect(wrapper.text()).not.toContain('target@example.com')
     expect(wrapper.text()).not.toContain('local@example.invalid')
@@ -215,11 +211,6 @@ describe('manual shop surfaces', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(api.checkInput).toHaveBeenCalledWith(42, { content, revision: 3 })
-    expect(api.submitInput).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('target@example.com')
-    expect(wrapper.text()).toContain('Free（免费版）')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
     expect(api.submitInput).toHaveBeenCalledWith(42, { content, revision: 3 })
     expect(wrapper.get('textarea').element.value).toBe('')
     expect((wrapper.vm as unknown as { content: string }).content).toBe('')
@@ -244,6 +235,11 @@ describe('manual shop surfaces', () => {
     await plain.get('textarea').setValue('{plain-text-product')
     expect(plain.text()).not.toContain('本地初步识别')
     expect(plain.text()).not.toContain('不是完整的 JSON')
+    api.submitInput.mockResolvedValueOnce({ data: order() })
+    await plain.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.submitInput).toHaveBeenCalledWith(42, { content: '{plain-text-product', revision: 3 })
+    expect(api.checkInput).not.toHaveBeenCalled()
   })
   it.each([true, false])('keeps queued input updates behind the server permission: %s', async canSubmit => {
     api.order.mockResolvedValue({ data: { ...order(), fulfillment_status: 'QUEUED', can_submit: canSubmit, input_account: 'submitted@example.invalid', input_submitted_at: '2026-11-05T12:00:00Z' } })
@@ -260,18 +256,65 @@ describe('manual shop surfaces', () => {
     }
   })
   it('invalidates the check when the pasted content changes', async () => {
+    let release!: (result: unknown) => void
+    api.checkInput.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
     const wrapper = mount(ShopOrderView, { global })
     await flushPromises()
     await wrapper.get('textarea').setValue('first-synthetic-content')
     await wrapper.get('form').trigger('submit')
-    await flushPromises()
-    expect(wrapper.text()).toContain('确认账号无误')
-    await wrapper.get('textarea').setValue('changed-synthetic-content')
-    expect(wrapper.text()).not.toContain('确认账号无误')
     await wrapper.get('form').trigger('submit')
+    expect(api.checkInput).toHaveBeenCalledTimes(1)
+    const state = wrapper.vm as unknown as { content: string }
+    state.content = 'changed-synthetic-content'
+    state.content = 'first-synthetic-content'
+    release({ data: { warnings: [] } })
     await flushPromises()
-    expect(api.checkInput).toHaveBeenLastCalledWith(42, { content: 'changed-synthetic-content', revision: 3 })
     expect(api.submitInput).not.toHaveBeenCalled()
+  })
+  it.each(['resolve', 'reject'])('ignores a stale server check after navigation (%s)', async outcome => {
+    let release!: () => void
+    api.checkInput.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      release = () => outcome === 'resolve' ? resolve({ data: { warnings: [] } }) : reject(new Error('obsolete'))
+    }))
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('synthetic')
+    await wrapper.get('form').trigger('submit')
+    api.order.mockImplementationOnce(() => new Promise(() => {}))
+    route.params.id = '43'
+    await flushPromises()
+    release()
+    await flushPromises()
+    expect(api.submitInput).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('obsolete')
+    expect(wrapper.get('[aria-label="正在加载订单"]').exists()).toBe(true)
+  })
+  it('copies the revealed input verbatim and clears feedback for a newer revision or failed copy', async () => {
+    const detail = { ...order(), can_reveal_input: true, input_revision: 2 }
+    api.adminOrder.mockResolvedValue({ data: detail })
+    const raw = '  synthetic raw content\n'
+    api.revealInput.mockResolvedValue({ data: { content: raw, input_revision: 2 } })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const wrapper = mount(AdminShopOrderView, { global })
+    await flushPromises()
+    const button = wrapper.findAll('button').find(item => item.text() === '复制 Session')!
+    await button.trigger('click')
+    await flushPromises()
+    expect(stepUpRun).toHaveBeenCalledTimes(1)
+    expect(api.revealInput).toHaveBeenCalledWith(42, 3)
+    expect(writeText).toHaveBeenCalledWith(raw)
+    expect(button.text()).toBe('已复制')
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+    api.adminOrder.mockResolvedValue({ data: { ...detail, revision: 4 } })
+    await wrapper.findAll('button').find(item => item.text() === '刷新订单')!.trigger('click')
+    await flushPromises()
+    expect(button.text()).toBe('复制 Session')
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await button.trigger('click')
+    await flushPromises()
+    expect(button.text()).toBe('复制 Session')
+    expect(wrapper.get('[role="alert"]').text()).toContain('剪贴板权限')
   })
   it('shows the actionable precheck error without submitting invalid input', async () => {
     api.checkInput.mockRejectedValueOnce({ message: 'Session 已过期，请重新登录后复制' })

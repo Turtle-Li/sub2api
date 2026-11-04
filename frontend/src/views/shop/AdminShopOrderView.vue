@@ -20,6 +20,10 @@ const revokePreview = ref(false)
 const busy = ref(false)
 const error = ref('')
 const message = ref('')
+const copied = ref(false)
+watch(() => [order.value?.order_id, order.value?.revision, order.value?.input_revision] as const, (next, prev) => {
+  if (next.some((v, i) => v !== prev[i])) copied.value = false
+}, { flush: 'sync' })
 let generation = 0
 async function load() {
   const current = ++generation
@@ -33,14 +37,18 @@ async function copyInput() {
   if (!order.value || busy.value) return
   busy.value = true
   error.value = ''
+  copied.value = false
+  const current = generation
+  const { order_id: id, revision, input_revision } = order.value
+  const matches = () => current === generation && order.value?.order_id === id && order.value.revision === revision && order.value.input_revision === input_revision
   try {
-    const id = order.value.order_id
-    const revision = order.value.revision
     const revealed = await stepUp.run(() => shopAPI.revealInput(id, revision))
+    if (!matches()) return
+    if (revealed.data.input_revision !== input_revision) throw new Error('stale input')
     await navigator.clipboard.writeText(revealed.data.content)
-    message.value = `已复制第 ${revealed.data.input_revision} 版完整资料，请核对目标账号。`
-  } catch (err) { if (!isStepUpCancelled(err)) error.value = '无法复制资料。请检查剪贴板权限或刷新订单后重试。' }
-  finally { busy.value = false }
+    if (matches()) copied.value = true
+  } catch (err) { if (matches() && !isStepUpCancelled(err)) error.value = '无法复制资料。请检查剪贴板权限或刷新订单后重试。' }
+  finally { if (current === generation) busy.value = false }
 }
 async function act(action: ShopAction['action']) {
   if (!order.value || busy.value) return
@@ -77,7 +85,7 @@ async function manageAutomation(action: 'retry' | 'revoke') {
   } catch (err) { if (!isStepUpCancelled(err)) error.value = '操作未完成，请刷新核对任务、资金状态及集成配置。' }
   finally { busy.value = false }
 }
-watch(() => route.params.id, () => { order.value = null; delivery.value = ''; note.value = ''; preview.value = false; revokePreview.value = false; message.value = ''; void load() }, { immediate: true })
+watch(() => route.params.id, () => { stepUp.onCancel(); order.value = null; delivery.value = ''; note.value = ''; preview.value = false; revokePreview.value = false; message.value = ''; void load() }, { immediate: true })
 onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; order.value = null; stepUp.onCancel() })
 </script>
 <template>
@@ -120,14 +128,13 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
             <section v-if="order.product.fulfillment_mode === 'session_topup'" aria-labelledby="submission-title" class="rounded-xl border border-gray-200 bg-white p-4 md:p-5 dark:border-gray-800 dark:bg-gray-900">
               <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h2 id="submission-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">目标账号与提交资料</h2>
-                <p class="text-xs text-gray-500 dark:text-gray-400">订单版本 {{ order.revision }} · 资料版本 {{ order.input_revision }}</p>
               </div>
               <dl class="mt-4 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
                 <dt class="text-gray-500 dark:text-gray-400">目标账号</dt><dd class="break-all font-medium text-gray-900 dark:text-gray-100">{{ order.input_account || '尚未识别' }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">提交时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ order.input_submitted_at ? new Date(order.input_submitted_at).toLocaleString('zh-CN') : '尚未提交' }}</dd>
               </dl>
               <div class="mt-4"><ShopSessionCheck v-if="order.input_check" :check="order.input_check" /><p v-else class="rounded-lg bg-gray-50 p-3 text-sm text-gray-600 dark:bg-gray-950 dark:text-gray-300">暂无初步检查结果。</p></div>
-              <p v-if="order.can_start" class="mt-4 text-xs leading-5 text-gray-500 dark:text-gray-400">执行代充前先开始处理，锁定当前资料版本。</p>
+              <p v-if="order.can_start" class="mt-4 text-xs leading-5 text-gray-500 dark:text-gray-400">执行代充前先开始处理，锁定买家已提交的资料。</p>
             </section>
 
             <section v-if="order.product.fulfillment_mode === 'account_delivery' && order.can_complete" aria-labelledby="delivery-title" class="rounded-xl border border-gray-200 bg-white p-4 md:p-5 dark:border-gray-800 dark:bg-gray-900">
@@ -143,7 +150,7 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
             <section class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
               <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">当前可执行操作</h2>
               <div class="mt-4 space-y-3">
-                <button v-if="order.product.fulfillment_mode === 'session_topup' && order.can_reveal_input" type="button" :disabled="busy" class="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:hover:bg-gray-800" @click="copyInput">{{ busy ? '请稍候…' : '通过验证并复制完整 Session' }}</button>
+                <button v-if="order.product.fulfillment_mode === 'session_topup' && order.can_reveal_input" type="button" :disabled="busy" class="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:hover:bg-gray-800" aria-live="polite" @click="copyInput">{{ copied ? '已复制' : '复制 Session' }}</button>
                 <p v-if="order.product.fulfillment_mode === 'session_topup' && order.can_reveal_input" class="text-xs leading-5 text-gray-500 dark:text-gray-400">验证身份后复制完整 Session，页面不展示原文。</p>
 
                 <button v-if="order.can_start" type="button" :disabled="busy" class="min-h-11 w-full rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-offset-gray-900" @click="act('start')">{{ busy ? '处理中…' : '开始处理' }}</button>
@@ -194,7 +201,7 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
           <template v-else>
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100">
               <p class="font-semibold">仅在你已经在站外实际完成本次代充后继续。</p>
-              <p class="mt-2">确认将使用当前订单版本 {{ order.revision }} 与资料版本 {{ order.input_revision }}。若站外操作失败或订单资料有变化，请取消并刷新核对，不要重复操作。</p>
+              <p class="mt-2">若站外操作失败或订单资料有变化，请取消并刷新核对，不要重复操作。</p>
             </div>
           </template>
 

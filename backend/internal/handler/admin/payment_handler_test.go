@@ -115,3 +115,15 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfoWithoutReset
 		t.Fatalf("admin subscription plan exposed reset-card tier: %s", string(body))
 	}
 }
+
+func TestAdminShopFulfillmentFlagOnListAndDetail(t *testing.T) {
+	o := &dbent.PaymentOrder{ID: 7, OrderType: "manual_shop"}
+	p := service.PaymentOrderInvoicePresentation{CanOpenShopFulfillment: true}
+	page := sanitizeAdminPaymentOrdersForResponse([]*dbent.PaymentOrder{o}, map[int64]service.PaymentOrderInvoicePresentation{7: p})
+	for _, row := range []*AdminPaymentOrderResult{page[0], sanitizeAdminPaymentOrderForResponse(o, p)} {
+		body, err := json.Marshal(row)
+		if err != nil || !strings.Contains(string(body), `"can_open_shop_fulfillment":true`) {
+			t.Fatalf("missing admin fulfillment action: %s (%v)", body, err)
+		}
+	}
+}

@@ -88,6 +88,20 @@ describe('admin order deep links', () => {
     getOrders.mockResolvedValue({ data: { items: [], total: 0 } })
   })
 
+  it('offers delivery only for a paid, unfinished manual order outside review and refund', async () => {
+    const eligible = { ...order(1), can_open_shop_fulfillment: true, order_type: 'manual_shop', status: 'PAID', payment_status: 'PAID', fulfillment_status: 'PENDING' }
+    const blocked = [{ can_open_shop_fulfillment: false }, { can_open_shop_fulfillment: undefined }, { status: 'CANCELLED' }, { status: 'EXPIRED' }, { status: 'REFUND_REQUESTED' },
+      { status: 'COMPLETED' }, { fulfillment_status: 'FULFILLED' }, { needs_manual_review: true },
+      { payment_status: 'UNPAID' }, { refund_entitlement_status: 'MANUAL_REVIEW' }, { refund_amount: 1 }, { order_type: 'balance' }]
+    getOrders.mockResolvedValue({ data: { items: [eligible, ...blocked.map((facts, i) => ({ ...eligible, id: i + 2, ...facts }))] } })
+    const wrapper = mount(AdminOrdersView, { global: { stubs: { ...stubs,
+      RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
+      OrderTable: { props: ['orders'], template: '<div><slot v-for="row in orders" name="actions" :row="row" /></div>' },
+    } } })
+    await flushPromises()
+    expect(wrapper.findAll('a').filter(a => a.text() === '交付').map(a => a.attributes('href'))).toEqual(['/admin/shop/orders/1'])
+  })
+
   it('fetches and opens the linked order detail and audit outside the current list page', async () => {
     const linkedOrder = order(202601)
     setRouteOrderID('202601')

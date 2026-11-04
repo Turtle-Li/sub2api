@@ -9,7 +9,7 @@ const expired = computed(() => !!props.check.expires_at && Date.parse(props.chec
 <template>
   <section class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800" aria-labelledby="shop-session-check-title">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <h3 id="shop-session-check-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ local ? '本地初步识别' : '资料初步检查' }}</h3>
+      <h3 id="shop-session-check-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">账号信息</h3>
     </div>
 
     <dl class="mt-4 grid gap-4 text-sm sm:grid-cols-3">
@@ -41,6 +41,6 @@ const expired = computed(() => !!props.check.expires_at && Date.parse(props.chec
       </ul>
     </div>
 
-    <p class="mt-4 text-xs leading-5 text-gray-600 dark:text-gray-400">{{ local ? '仅在当前浏览器解析，尚未提交；实际订阅以 ChatGPT 为准。' : '仅根据提交内容识别账号信息，实际订阅以 ChatGPT 为准。' }}</p>
+    <p class="mt-4 text-xs leading-5 text-gray-600 dark:text-gray-400">{{ local ? '尚未提交；实际订阅以 ChatGPT 为准。' : '仅根据提交内容识别账号信息，实际订阅以 ChatGPT 为准。' }}</p>
   </section>
 </template>

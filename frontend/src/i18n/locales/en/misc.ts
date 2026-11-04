@@ -528,6 +528,7 @@ export default {
       payInNewWindow: 'Complete Payment in New Window',
       payInNewWindowHint: 'The payment page has opened in a new window. Please complete the payment there and return to this page.',
       openPayWindow: 'Reopen Payment Page',
+      popupBlocked: 'Allow popups for this site and try again, or continue payment from My Orders.',
       refreshQRCode: 'Refresh payment QR code',
       expiresIn: 'Expires in',
       expired: 'Order Expired',

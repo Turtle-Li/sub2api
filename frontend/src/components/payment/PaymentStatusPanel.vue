@@ -433,13 +433,14 @@ import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
 import paymentIcon from '@/assets/icons/payment.svg'
 import { fulfillmentFact, paymentFact } from '@/components/payment/orderPresentation'
+import { bindPaymentPopupContext, isPaymentReturnReadyMessage, paymentPopupName } from './embeddedPaymentReturn'
 import {
   createAlipayDeepLinkLauncher,
   type AlipayDeepLinkLauncher,
   type AlipayDeepLinkState,
 } from './alipayDeepLink'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   orderId: number
   amount?: number
   payAmount?: number
@@ -450,6 +451,8 @@ const props = defineProps<{
   checkoutFrameUrl?: string
   /** Enables the legacy signed frame URL as a top-level-popup fallback hint. */
   allowCheckoutFrame?: boolean
+  /** The return must be able to recover this order before leaving this tab. */
+  allowTopLevelRedirect?: boolean
   orderType?: string
   currency?: string
   outTradeNo?: string
@@ -461,7 +464,7 @@ const props = defineProps<{
   initialCancellationPending?: boolean
   /** Resume was refused while the provider payment state is still uncertain. */
   initialConfirmationPending?: boolean
-}>()
+}>(), { allowTopLevelRedirect: true })
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
 
@@ -584,6 +587,14 @@ function onIframeLoad() {
 function onIframeError() {
   iframeLoading.value = false
   frameLoadError.value = true
+}
+
+function onPaymentReturnMessage(event: MessageEvent<unknown>) {
+  if (!showCheckoutFrame.value || event.origin !== window.location.origin || !isPaymentReturnReadyMessage(event.data)) return
+  const frame = checkoutFrame.value
+  if (!frame || event.source !== frame.contentWindow) return
+  frame.style.visibility = 'hidden'
+  waitForAuthoritativeConfirmation()
 }
 
 const isMobileAlipayDeepLink = computed(() => (resumedMobileAlipayDeepLink.value ?? props.mobileAlipayDeepLink) === true && isAlipay.value && !!qrUrl.value)
@@ -853,19 +864,24 @@ async function reopenPopup() {
   if (cancellationRetryNeeded.value || cancellationPending.value || confirmationPending.value) return
   // Reserve a browsing context synchronously from the click. It is closed if
   // the authenticated resume call says this order is no longer payable.
-  const popup = window.open('', 'paymentPopup', getPaymentPopupFeatures())
+  const popupName = paymentPopupName()
+  const popup = window.open('', popupName, getPaymentPopupFeatures())
   let navigated = false
   try {
     const launch = await resumePaymentLaunch()
     const launchUrl = launch?.payUrl || launch?.checkoutFrameUrl
     if (!launchUrl) return
     if (popup && !popup.closed) {
+      bindPaymentPopupContext(popup, { orderId: props.orderId })
       popup.location.href = launchUrl
       navigated = true
       return
     }
-    const opened = window.open(launchUrl, 'paymentPopup', getPaymentPopupFeatures())
-    if (!opened || opened.closed) window.location.assign(launchUrl)
+    const opened = window.open('', popupName, getPaymentPopupFeatures())
+    bindPaymentPopupContext(opened, { orderId: props.orderId })
+    if (opened && !opened.closed) opened.location.href = launchUrl
+    else if (props.allowTopLevelRedirect !== false) window.location.assign(launchUrl)
+    else appStore.showError(t('payment.qr.popupBlocked'))
   } finally {
     if (popup && !popup.closed && !navigated && typeof popup.close === 'function') popup.close()
   }
@@ -1355,9 +1371,11 @@ watch([() => qrUrl.value, showQRCode, sessionVersion], () => { void renderQR() }
 onMounted(() => {
   mounted = true
   disposed = false
+  window.addEventListener('message', onPaymentReturnMessage)
   startSession()
 })
 onUnmounted(() => {
+  window.removeEventListener('message', onPaymentReturnMessage)
   disposed = true
   mounted = false
   cleanupSession()

@@ -142,6 +142,7 @@ vi.mock('@/utils/device', () => ({
 enableAutoUnmount(afterEach)
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   isMobileDevice.mockReset().mockReturnValue(true)
   subscriptionStoreState.setActiveSubscriptions([])
 })
@@ -877,6 +878,17 @@ describe('PaymentView payment discount coupons', () => {
     await flushPromises()
   }
 
+  it('creates a normal QR checkout and releases submitting without randomUUID', async () => {
+    vi.stubGlobal('crypto', {})
+    const wrapper = await mountCouponCheckout()
+    createOrder.mockResolvedValue(paymentOrder())
+    wrapper.findComponent(PaymentOrderRail).vm.$emit('submit')
+    await flushPromises()
+    expect(createOrder).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(PaymentStatusPanel).props('orderId')).toBe(701)
+    expect(wrapper.findComponent(PaymentOrderRail).props('submitting')).toBe(false)
+  })
+
   it('uses a matching quote as the final price and sends its code, revision, and stable key', async () => {
     const wrapper = await mountCouponCheckout()
     getCouponQuote.mockResolvedValue({ data: couponQuote() })
@@ -1520,7 +1532,8 @@ describe('PaymentView existing pending order dialog', () => {
     expect(showError).not.toHaveBeenCalled()
   })
 
-  it('continues with only the fresh authenticated resume launch and a user-gesture popup', async () => {
+  it.each([true, false])('continues with only the fresh authenticated resume launch and a user-gesture popup (randomUUID available: %s)', async available => {
+    if (!available) vi.stubGlobal('crypto', {})
     const order = pendingExistingOrder()
     createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
     getOrder.mockResolvedValue({ data: order })
@@ -1539,7 +1552,7 @@ describe('PaymentView existing pending order dialog', () => {
       },
     })
     isMobileDevice.mockReturnValue(false)
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const popup = { closed: false, close: vi.fn(), location: { href: '' }, sessionStorage: { setItem: vi.fn() } }
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
 
     const wrapper = await mountExistingOrderFlow()
@@ -1548,7 +1561,7 @@ describe('PaymentView existing pending order dialog', () => {
     await flushPromises()
 
     expect(resumeOrder).toHaveBeenCalledWith(77)
-    expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(open).toHaveBeenCalledWith('', expect.stringMatching(/^paymentPopup-/), expect.any(String))
     expect(popup.location.href).toBe('https://pay.totools.cn/checkout/fresh-77')
     expect(wrapper.get('[data-test="payment-status-panel"]').attributes('data-order-id')).toBe('77')
     expect(wrapper.find('[data-test="existing-order-details"]').exists()).toBe(false)

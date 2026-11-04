@@ -248,6 +248,7 @@ export interface PaymentOrder {
   /** Current disposition of benefits after a refund; fulfillment_status remains the historical delivery fact. */
   refund_entitlement_status?: RefundEntitlementStatus
   needs_manual_review?: boolean
+  can_open_shop_fulfillment?: boolean
   /** Safe, admin-facing recovery state for the latest unified refund attempt. */
   refund_recovery?: PaymentRefundRecovery
   product_snapshot?: OrderProductSnapshot

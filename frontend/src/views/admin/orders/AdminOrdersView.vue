@@ -31,7 +31,9 @@
       <OrderTable :orders="orders" :loading="ordersLoading" show-user>
         <template #actions="{ row }">
           <div class="flex flex-wrap items-center gap-1">
-            <RouterLink v-if="row.order_type === 'manual_shop'" :to="`/admin/shop/orders/${row.id}`" class="btn btn-secondary btn-sm">人工交付</RouterLink>
+            <RouterLink v-if="canFulfillManualOrder(row)" :to="`/admin/shop/orders/${row.id}`" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300 dark:hover:bg-blue-900/20">
+              <Icon name="inbox" size="sm" />交付
+            </RouterLink>
             <button v-else @click="showOrderDetail(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-dark-600">
               <Icon name="eye" size="sm" />
               {{ t('common.view') }}
@@ -347,6 +349,12 @@ const externalRefundFormValid = computed(() => {
   return !!externalRefundTarget.value && !!externalRefundForm.external_reference.trim() &&
     !!externalRefundForm.evidence_detail.trim() && Number.isFinite(timestamp) && timestamp <= Date.now() + 5 * 60 * 1000
 })
+
+function canFulfillManualOrder(row: PaymentOrder): boolean {
+  return row.can_open_shop_fulfillment === true && row.order_type === 'manual_shop' && row.status === 'PAID' && row.payment_status === 'PAID'
+    && row.fulfillment_status === 'PENDING' && !row.completed_at && !row.needs_manual_review
+    && !row.refund_amount && !hasRefundHandling(row)
+}
 
 function paymentAmountSymbol(order: PaymentOrder | null | undefined): string {
   return currencySymbol(order?.currency)

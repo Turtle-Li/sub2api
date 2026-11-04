@@ -11,14 +11,17 @@ import ShopNotice from '@/components/shop/ShopNotice.vue'
 import ShopMarkdown from '@/components/shop/ShopMarkdown.vue'
 import { shopAPI } from '@/api/shop'
 import { paymentAPI } from '@/api/payment'
-import { getVisibleMethods } from '@/components/payment/paymentFlow'
+import { clearPaymentRecoverySnapshot, getVisibleMethods, writePaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 import { shopDuration, shopDeliveryLabel, isShopDaypass, type ShopProduct } from '@/types/shop'
 import type { CreateOrderResult } from '@/types/payment'
+import { createIdempotencyKey } from '@/utils/idempotency'
 const route = useRoute()
 const router = useRouter()
 const product = ref<ShopProduct | null>(null)
 const hasDeliveryTime = computed(() => /5\s*分钟\s*[-–—~～至]\s*2\s*小时/.test(`${product.value?.summary || ''}\n${product.value?.description || ''}`))
 const checkout = ref<CreateOrderResult | null>(null)
+const recoveryAvailable = ref(false)
+const checkoutOutcome = ref<'success' | 'cancelled' | 'expired' | null>(null)
 const methods = ref<('alipay' | 'wxpay')[]>([])
 const method = ref<'alipay' | 'wxpay'>('alipay')
 const busy = ref(false)
@@ -48,13 +51,47 @@ async function buy() {
   if (!product.value || busy.value || !methods.value.includes(method.value)) return
   busy.value = true
   error.value = ''
-  if (!attemptKey || attemptMethod !== method.value) { attemptKey = crypto.randomUUID(); attemptMethod = method.value }
   try {
-    checkout.value = (await shopAPI.createOrder({ product_id: product.value.id, product_revision: product.value.revision, payment_type: method.value }, attemptKey)).data
+    if (!attemptKey || attemptMethod !== method.value) { attemptKey = createIdempotencyKey('shop-order'); attemptMethod = method.value }
+    const result = (await shopAPI.createOrder({ product_id: product.value.id, product_revision: product.value.revision, payment_type: method.value }, attemptKey)).data
+    try {
+      writePaymentRecoverySnapshot(window.localStorage, {
+        orderId: result.order_id, amount: result.amount, payAmount: result.pay_amount,
+        qrCode: result.qr_code || '', expiresAt: result.expires_at,
+        paymentType: result.payment_type || method.value, payUrl: result.pay_url || '',
+        checkoutFrameUrl: result.checkout_frame_url, outTradeNo: result.out_trade_no || '',
+        clientSecret: '', intentId: '', currency: 'CNY', countryCode: '', paymentEnv: '',
+        orderType: 'manual_shop', paymentMode: result.payment_mode || '',
+        resumeToken: result.resume_token || '', createdAt: Date.now(),
+      })
+      recoveryAvailable.value = true
+    } catch {
+      // The order exists. Keep its active checkout; disable navigation that
+      // would need the optional browser recovery cache on the return trip.
+      recoveryAvailable.value = false
+    }
+    checkoutOutcome.value = null
+    checkout.value = result
   } catch { error.value = '未能创建订单，请重试。若订单已创建，可到“我的订单”继续付款。' }
   finally { busy.value = false }
 }
-function openOrder() { if (checkout.value) void router.push(`/shop/orders/${checkout.value.order_id}`) }
+function onPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
+  checkoutOutcome.value = outcome
+  if (outcome === 'cancelled' || outcome === 'expired') {
+    attemptKey = ''
+    attemptMethod = ''
+    if (checkout.value && recoveryAvailable.value) {
+      try { clearPaymentRecoverySnapshot(window.localStorage, undefined, { orderId: checkout.value.order_id }) }
+      catch { recoveryAvailable.value = false }
+    }
+  }
+}
+function closeCheckout() {
+  const paidOrderId = checkoutOutcome.value === 'success' ? checkout.value?.order_id : undefined
+  checkout.value = null
+  checkoutOutcome.value = null
+  if (paidOrderId) void router.push(`/shop/orders/${paidOrderId}`)
+}
 watch(() => route.params.id, () => { product.value = null; checkout.value = null; attemptKey = ''; void load() }, { immediate: true })
 </script>
 <template>
@@ -143,7 +180,7 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
       </template>
     </div>
 
-    <BaseDialog v-if="checkout" :show="true" :title="`订单支付 · ¥${checkout.pay_amount.toFixed(2)}`" mobile-sheet @close="openOrder">
+    <BaseDialog v-if="checkout" :show="true" :title="`订单支付 · ¥${checkout.pay_amount.toFixed(2)}`" mobile-sheet @close="closeCheckout">
       <div class="shop-checkout">
       <PaymentStatusPanel
         :key="checkout.order_id"
@@ -156,11 +193,12 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
         :pay-url="checkout.pay_url"
         :checkout-frame-url="checkout.checkout_frame_url"
         :allow-checkout-frame="true"
+        :allow-top-level-redirect="recoveryAvailable"
         order-type="manual_shop"
         currency="CNY"
         :out-trade-no="checkout.out_trade_no"
-        @done="openOrder"
-        @settled="openOrder"
+        @done="closeCheckout"
+        @settled="onPaymentSettled"
       />
       </div>
     </BaseDialog>

@@ -552,6 +552,7 @@ export default {
       payInNewWindow: '请在新窗口中完成支付',
       payInNewWindowHint: '支付页面已在新窗口打开，请在新窗口中完成支付后返回此页面',
       openPayWindow: '重新打开支付页面',
+      popupBlocked: '浏览器拦截了付款窗口，请允许本站弹窗后重试，或在“我的订单”继续付款。',
       refreshQRCode: '刷新支付二维码',
       expiresIn: '剩余支付时间',
       expired: '订单已过期',

@@ -83,7 +83,7 @@ func (h *PaymentHandler) ListOrders(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	presentations, err := h.paymentService.InvoiceOrderPresentations(c.Request.Context(), orders)
+	presentations, err := h.paymentService.AdminOrderPresentations(c.Request.Context(), orders)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -219,6 +219,7 @@ func (h *PaymentHandler) RetryFulfillment(c *gin.Context) {
 }
 
 type AdminPaymentOrderResult struct {
+	CanOpenShopFulfillment  bool                                       `json:"can_open_shop_fulfillment,omitempty"`
 	ID                      int64                                      `json:"id"`
 	UserID                  int64                                      `json:"user_id"`
 	UserEmail               string                                     `json:"user_email,omitempty"`
@@ -289,6 +290,7 @@ func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder, projected .
 		presentation = projected[0]
 	}
 	return &AdminPaymentOrderResult{
+		CanOpenShopFulfillment:  presentation.CanOpenShopFulfillment,
 		ID:                      order.ID,
 		UserID:                  order.UserID,
 		UserEmail:               order.UserEmail,
@@ -342,7 +344,7 @@ func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder, projected .
 }
 
 func (h *PaymentHandler) paymentOrderInvoicePresentation(ctx context.Context, order *dbent.PaymentOrder) (service.PaymentOrderInvoicePresentation, error) {
-	presentations, err := h.paymentService.InvoiceOrderPresentations(ctx, []*dbent.PaymentOrder{order})
+	presentations, err := h.paymentService.AdminOrderPresentations(ctx, []*dbent.PaymentOrder{order})
 	if err != nil {
 		return service.PaymentOrderInvoicePresentation{}, err
 	}

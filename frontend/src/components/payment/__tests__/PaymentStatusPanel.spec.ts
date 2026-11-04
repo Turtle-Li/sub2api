@@ -120,6 +120,37 @@ describe('PaymentStatusPanel', () => {
     vi.useRealTimers()
   })
 
+  it.each([undefined, true, false])('uses a same-window fallback only with recoverable context (allowed: %s)', async allowed => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const payUrl = 'https://pay.totools.cn/checkout/42'
+    resumeOrder.mockResolvedValue({ data: { ...orderFactory('PENDING'), order_id: 42, pay_url: payUrl } })
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const originalLocation = window.location
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, assign } })
+    try {
+      const wrapper = mount(PaymentStatusPanel, {
+        props: { orderId: 42, qrCode: '', payUrl, expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', ...(allowed === undefined ? {} : { allowTopLevelRedirect: allowed }) },
+        global: { stubs: { Icon: true } },
+      })
+      await flushPromises()
+      const button = wrapper.findAll('button').find(item => item.text() === 'payment.qr.openPayWindow')
+      expect(button).toBeDefined()
+      await button?.trigger('click')
+      await flushPromises()
+      expect(resumeOrder).toHaveBeenCalledWith(42)
+      if (allowed !== false) expect(assign).toHaveBeenCalledWith(payUrl)
+      else {
+        expect(assign).not.toHaveBeenCalled()
+        expect(showError).toHaveBeenCalledWith('payment.qr.popupBlocked')
+      }
+      wrapper.unmount()
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
+      open.mockRestore()
+    }
+  })
+
   it('settles a paid manual shop order without waiting for manual delivery', async () => {
     pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-04T12:00:00Z' })
     const wrapper = mount(PaymentStatusPanel, {
@@ -284,6 +315,28 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(wrapper.emitted('success')).toHaveLength(1)
+  })
+
+  it('accepts only same-origin return hints from its own checkout frame without trusting a success flag', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: { orderId: 42, qrCode: '', checkoutFrameUrl: alipayCheckoutFrameUrl(), allowCheckoutFrame: true, expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay' },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+    const source = wrapper.get<HTMLIFrameElement>('[data-test="alipay-checkout-frame"]').element.contentWindow
+    const data = { type: 'sub2api:payment-return-ready', status: 'success', order_id: 999 }
+    window.dispatchEvent(new MessageEvent('message', { data, origin: 'https://other.example', source }))
+    window.dispatchEvent(new MessageEvent('message', { data, origin: window.location.origin, source: window }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    window.dispatchEvent(new MessageEvent('message', { data, origin: window.location.origin, source }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+    expect(pollOrderStatus).toHaveBeenLastCalledWith(42)
+    expect(wrapper.emitted('success')).toBeUndefined()
+    wrapper.unmount()
   })
 
   it('keeps the Alipay frame open while its cross-origin location is unreadable', async () => {
@@ -903,7 +956,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(resumeOrder).toHaveBeenCalledWith(42)
-    expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(open).toHaveBeenCalledWith('', expect.stringMatching(/^paymentPopup-/), expect.any(String))
     expect(open).not.toHaveBeenCalledWith('https://pay.totools.cn/checkout/stale-42', expect.anything(), expect.anything())
     expect(wrapper.get(pendingSelector).exists()).toBe(true)
     expect(close).toHaveBeenCalledTimes(1)
@@ -925,7 +978,7 @@ describe('PaymentStatusPanel', () => {
         pay_url: 'https://pay.totools.cn/checkout/fresh-42',
       },
     })
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const popup = { closed: false, close: vi.fn(), location: { href: '' }, sessionStorage: { setItem: vi.fn() } }
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
 
     const wrapper = mount(PaymentStatusPanel, {
@@ -947,6 +1000,7 @@ describe('PaymentStatusPanel', () => {
 
     expect(resumeOrder).toHaveBeenCalledWith(42)
     expect(popup.location.href).toBe('https://pay.totools.cn/checkout/fresh-42')
+    expect(popup.sessionStorage.setItem).toHaveBeenCalledWith('payment.popup.context.v1', JSON.stringify({ orderId: 42, resumeToken: '' }))
     expect(popup.close).not.toHaveBeenCalled()
     expect(open).not.toHaveBeenCalledWith('https://pay.totools.cn/checkout/stale-42', expect.anything(), expect.anything())
     open.mockRestore()

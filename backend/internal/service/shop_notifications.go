@@ -142,9 +142,11 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		if s.feishu == nil {
 			return errors.New("shop feishu unavailable")
 		}
-		event := "商城订单已付款"
+		event := "代充订单已付款"
 		if job.Event == "input_received" {
-			event = "商城订单已提交资料"
+			event = "代充资料已提交"
+		} else if p.FulfillmentMode == ShopAccountDelivery {
+			event = "成品号已付款，待交付"
 		}
 		if job.Event == "action_review" || p.Name == "商品配置待复核" {
 			event = "商城自动交付待复核"
