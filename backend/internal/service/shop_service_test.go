@@ -358,3 +358,46 @@ func TestShopProductsConfigurableAndCAS(t *testing.T) {
 	_, err = s.SaveProduct(ctx, 0, ShopProduct{Name: "bad link", Price: 10, Enabled: true, FulfillmentMode: ShopSessionTopup, InputURL: "javascript:alert(1)"})
 	require.Error(t, err)
 }
+
+func TestAdminShopFulfillmentOrderProjection(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		mode, status, task        string
+		paid, input, review, want bool
+	}{
+		{ShopAccountDelivery, OrderStatusPaid, ShopQueued, true, false, false, true},
+		{ShopAccountDelivery, OrderStatusPaid, ShopClosed, true, false, false, false},
+		{ShopAccountDelivery, OrderStatusCompleted, ShopCompleted, true, false, false, false},
+		{ShopAccountDelivery, OrderStatusRefundPending, ShopQueued, true, false, false, false},
+		{ShopAccountDelivery, OrderStatusPending, ShopQueued, false, false, false, false},
+		{ShopAccountDelivery, OrderStatusExpired, ShopQueued, false, false, false, false},
+		{ShopAccountDelivery, OrderStatusCancelled, ShopQueued, false, false, false, false},
+		{ShopAccountDelivery, OrderStatusPaid, ShopQueued, true, false, true, false},
+		{ShopSessionTopup, OrderStatusPaid, ShopQueued, true, false, false, false},
+		{ShopSessionTopup, OrderStatusPaid, ShopWaitingInput, true, false, false, false},
+		{ShopSessionTopup, OrderStatusPaid, ShopProcessing, true, true, false, true},
+	} {
+		name := tc.mode + "-" + tc.status + "-" + tc.task
+		if tc.review {
+			name += "-review"
+		}
+		t.Run(name, func(t *testing.T) {
+			shop, pay, o, _ := newShopUnit(t, tc.mode, tc.paid)
+			o = shop.client.PaymentOrder.UpdateOne(o).SetStatus(tc.status).SaveX(ctx)
+			q := shop.client.ShopFulfillment.Update().Where(shopfulfillment.OrderIDEQ(o.ID)).SetStatus(tc.task)
+			if tc.input {
+				q.SetInputCiphertext("opaque-nondecryptable")
+			}
+			q.SaveX(ctx)
+			if tc.review {
+				insertInvoiceUnitRefundAttempt(t, ctx, shop.client, o.ID, "attempt-review", unifiedRefundPending, refundReviewKindSubscription, false, false, true, time.Now())
+			}
+			d, err := shop.Order(ctx, o.ID, 0, true)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, d.CanComplete)
+			page, err := pay.AdminOrderPresentations(ctx, []*dbent.PaymentOrder{o})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, page[o.ID].CanOpenShopFulfillment)
+		})
+	}
+}

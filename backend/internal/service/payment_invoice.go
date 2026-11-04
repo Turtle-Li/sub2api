@@ -165,6 +165,7 @@ type PaymentInvoiceRecord struct {
 // response. Payment and fulfillment truth remain on PaymentOrder; this merely
 // presents trusted timestamps plus the durable refund-review fence.
 type PaymentOrderInvoicePresentation struct {
+	CanOpenShopFulfillment  bool
 	CancellationPending     bool
 	Invoice                 *PaymentInvoiceRecord
 	ProductSnapshot         map[string]any
