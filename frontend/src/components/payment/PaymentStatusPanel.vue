@@ -451,6 +451,8 @@ const props = defineProps<{
   checkoutFrameUrl?: string
   /** Enables the legacy signed frame URL as a top-level-popup fallback hint. */
   allowCheckoutFrame?: boolean
+  /** The return must be able to recover this order before leaving this tab. */
+  allowTopLevelRedirect?: boolean
   orderType?: string
   currency?: string
   outTradeNo?: string
@@ -878,7 +880,8 @@ async function reopenPopup() {
     const opened = window.open('', popupName, getPaymentPopupFeatures())
     bindPaymentPopupContext(opened, { orderId: props.orderId })
     if (opened && !opened.closed) opened.location.href = launchUrl
-    else window.location.assign(launchUrl)
+    else if (props.allowTopLevelRedirect !== false) window.location.assign(launchUrl)
+    else appStore.showError(t('payment.qr.popupBlocked'))
   } finally {
     if (popup && !popup.closed && !navigated && typeof popup.close === 'function') popup.close()
   }

@@ -1,9 +1,11 @@
+import { createIdempotencyKey } from '@/utils/idempotency'
+
 export const PAYMENT_RETURN_READY_MESSAGE = 'sub2api:payment-return-ready'
 export const PAYMENT_POPUP_CONTEXT_KEY = 'payment.popup.context.v1'
 export type PaymentPopupContext = { readonly orderId: number; readonly resumeToken?: string }
 
 export function paymentPopupName(): string {
-  return `paymentPopup-${crypto.randomUUID()}`
+  return createIdempotencyKey('paymentPopup')
 }
 
 export function isPaymentPopup(): boolean {

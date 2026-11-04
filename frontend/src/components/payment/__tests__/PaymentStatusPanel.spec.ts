@@ -120,6 +120,37 @@ describe('PaymentStatusPanel', () => {
     vi.useRealTimers()
   })
 
+  it.each([true, false])('uses a same-window fallback only with recoverable context (allowed: %s)', async allowed => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const payUrl = 'https://pay.totools.cn/checkout/42'
+    resumeOrder.mockResolvedValue({ data: { ...orderFactory('PENDING'), order_id: 42, pay_url: payUrl } })
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const originalLocation = window.location
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, assign } })
+    try {
+      const wrapper = mount(PaymentStatusPanel, {
+        props: { orderId: 42, qrCode: '', payUrl, expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', allowTopLevelRedirect: allowed },
+        global: { stubs: { Icon: true } },
+      })
+      await flushPromises()
+      const button = wrapper.findAll('button').find(item => item.text() === 'payment.qr.openPayWindow')
+      expect(button).toBeDefined()
+      await button?.trigger('click')
+      await flushPromises()
+      expect(resumeOrder).toHaveBeenCalledWith(42)
+      if (allowed) expect(assign).toHaveBeenCalledWith(payUrl)
+      else {
+        expect(assign).not.toHaveBeenCalled()
+        expect(showError).toHaveBeenCalledWith('payment.qr.popupBlocked')
+      }
+      wrapper.unmount()
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
+      open.mockRestore()
+    }
+  })
+
   it('settles a paid manual shop order without waiting for manual delivery', async () => {
     pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-04T12:00:00Z' })
     const wrapper = mount(PaymentStatusPanel, {

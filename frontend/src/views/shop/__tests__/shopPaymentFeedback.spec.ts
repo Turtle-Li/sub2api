@@ -13,7 +13,7 @@ vi.mock('@/api/shop', () => ({ shopAPI: {
   product: async () => ({ data: { id: 1, revision: 1, name: '测试代充', price: 0.1, enabled: true, fulfillment_mode: 'session_topup', duration_value: 1, duration_unit: 'month' } }),
   createOrder,
 } }))
-const PaymentPanel = defineComponent({ name: 'PaymentStatusPanel', emits: ['done', 'settled'], template: '<div data-test="checkout" />' })
+const PaymentPanel = defineComponent({ name: 'PaymentStatusPanel', props: ['allowTopLevelRedirect'], emits: ['done', 'settled'], template: '<div data-test="checkout" />' })
 const options = { global: { stubs: {
   AppLayout: { template: '<main><slot /></main>' },
   RouterLink: { template: '<a><slot /></a>' },
@@ -21,6 +21,7 @@ const options = { global: { stubs: {
   PaymentStatusPanel: PaymentPanel,
 } } }
 enableAutoUnmount(afterEach)
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
@@ -34,6 +35,27 @@ async function openCheckout(wrapper: ReturnType<typeof mount>) {
   await flushPromises()
 }
 describe('shop checkout feedback', () => {
+  it('opens the created checkout without secure-context randomUUID', async () => {
+    vi.stubGlobal('crypto', {})
+    const wrapper = mount(ShopProductView, options)
+    await openCheckout(wrapper)
+    expect(createOrder).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(PaymentPanel).exists()).toBe(true)
+  })
+  it('keeps a successfully created checkout usable when optional recovery storage is full', async () => {
+    const wrapper = mount(ShopProductView, options)
+    const setItem = window.localStorage.setItem.bind(window.localStorage)
+    const write = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === PAYMENT_RECOVERY_STORAGE_KEY) throw new DOMException('full', 'QuotaExceededError')
+      return setItem(key, value)
+    })
+    await openCheckout(wrapper)
+    expect(createOrder).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith(PAYMENT_RECOVERY_STORAGE_KEY, expect.any(String))
+    expect(wrapper.getComponent(PaymentPanel).props('allowTopLevelRedirect')).toBe(false)
+    expect(wrapper.text()).not.toContain('未能创建订单')
+    expect(wrapper.find('button[aria-busy="true"]').exists()).toBe(false)
+  })
   it.each(['cancelled', 'expired'])('stays on the purchase page after %s and creates a fresh attempt only on the next purchase', async outcome => {
     // Given: a checkout is open.
     const wrapper = mount(ShopProductView, options)

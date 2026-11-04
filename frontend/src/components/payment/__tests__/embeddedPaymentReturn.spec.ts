@@ -3,6 +3,7 @@ import { bindPaymentPopupContext, isPaymentPopup, paymentPopupName, readPaymentP
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   sessionStorage.clear()
   document.querySelectorAll('iframe').forEach(frame => frame.remove())
 })
@@ -14,6 +15,12 @@ function blankWindow(): Window {
   return popup
 }
 describe('payment popup ownership', () => {
+  it.each([undefined, {}])('creates independent popup names without secure-context crypto: %s', crypto => {
+    vi.stubGlobal('crypto', crypto)
+    const first = paymentPopupName()
+    expect(first).toMatch(/^paymentPopup-[\w-]+$/)
+    expect(paymentPopupName()).not.toBe(first)
+  })
   it('stamps the exact launch context before navigation and gives independent launches unique names', () => {
     const popup = blankWindow()
     const input = { orderId: 42, resumeToken: 'resume-A' }
