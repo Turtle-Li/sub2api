@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shopStatusLabels, shopDuration, shopNotificationLabels, type ShopOrderDetail } from '@/types/shop'
+import { shopStatusLabels, shopDuration, shopNotificationLabels, shopAutomationLabels, type ShopOrderDetail } from '@/types/shop'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 withDefaults(defineProps<{ order: ShopOrderDetail; showGuide?: boolean; showNotification?: boolean }>(), { showGuide: true, showNotification: true })
 </script>
@@ -13,7 +13,7 @@ withDefaults(defineProps<{ order: ShopOrderDetail; showGuide?: boolean; showNoti
       </div>
       <div class="flex flex-wrap items-center gap-2 sm:justify-end">
         <OrderStatusBadge :status="order.payment_status" />
-        <span class="badge whitespace-nowrap bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200">进度：{{ shopStatusLabels[order.fulfillment_status] }}</span>
+        <span class="badge whitespace-nowrap bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200">进度：{{ order.automation ? shopAutomationLabels[order.automation.status] : order.product.automatic_fulfillment && order.fulfillment_status === 'QUEUED' ? '等待自动处理' : shopStatusLabels[order.fulfillment_status] }}</span>
       </div>
     </div>
     <p v-if="order.status_note" class="mt-4 whitespace-pre-wrap break-words rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{{ order.status_note }}</p>

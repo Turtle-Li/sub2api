@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"time"
 
 	"entgo.io/ent"
@@ -31,6 +32,7 @@ func (ShopProduct) Fields() []ent.Field {
 		field.String("input_url").MaxLen(2048).Default(""),
 		field.Text("input_instructions").Default(""),
 		field.String("guide_key").MaxLen(64).Default(""),
+		field.JSON("payment_actions", json.RawMessage{}).Optional(),
 		field.Bool("enabled").Default(false),
 		field.Int("sort_order").Default(0),
 		field.Int("revision").Positive().Default(1),

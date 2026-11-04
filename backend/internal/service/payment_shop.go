@@ -54,12 +54,15 @@ func (s *PaymentService) CreateShopOrder(ctx context.Context, productID int64, p
 	if !dbent.IsNotFound(err) {
 		return nil, fmt.Errorf("lookup shop checkout: %w", err)
 	}
-	p, err := s.shopService.Product(ctx, productID, false)
+	p, err := s.shopService.checkoutProduct(ctx, productID)
 	if err != nil {
 		return nil, err
 	}
 	if p.Revision != productRevision {
 		return nil, shopConflict()
+	}
+	if err := s.shopService.requireActionsCheckout(ctx, *p); err != nil {
+		return nil, err
 	}
 	req.shopProduct = p
 	req.Amount = p.Price

@@ -44,6 +44,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
 	"github.com/Wei-Shaw/sub2api/ent/shopnotification"
+	"github.com/Wei-Shaw/sub2api/ent/shoporderaction"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
@@ -1058,6 +1059,33 @@ func (f TraverseShopNotification) Traverse(ctx context.Context, q ent.Query) err
 	return fmt.Errorf("unexpected query type %T. expect *ent.ShopNotificationQuery", q)
 }
 
+// The ShopOrderActionFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopOrderActionFunc func(context.Context, *ent.ShopOrderActionQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopOrderActionFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopOrderActionQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopOrderActionQuery", q)
+}
+
+// The TraverseShopOrderAction type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopOrderAction func(context.Context, *ent.ShopOrderActionQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopOrderAction) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopOrderAction) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopOrderActionQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopOrderActionQuery", q)
+}
+
 // The ShopProductFunc type is an adapter to allow the use of ordinary function as a Querier.
 type ShopProductFunc func(context.Context, *ent.ShopProductQuery) (ent.Value, error)
 
@@ -1428,6 +1456,8 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.ShopFulfillmentQuery, predicate.ShopFulfillment, shopfulfillment.OrderOption]{typ: ent.TypeShopFulfillment, tq: q}, nil
 	case *ent.ShopNotificationQuery:
 		return &query[*ent.ShopNotificationQuery, predicate.ShopNotification, shopnotification.OrderOption]{typ: ent.TypeShopNotification, tq: q}, nil
+	case *ent.ShopOrderActionQuery:
+		return &query[*ent.ShopOrderActionQuery, predicate.ShopOrderAction, shoporderaction.OrderOption]{typ: ent.TypeShopOrderAction, tq: q}, nil
 	case *ent.ShopProductQuery:
 		return &query[*ent.ShopProductQuery, predicate.ShopProduct, shopproduct.OrderOption]{typ: ent.TypeShopProduct, tq: q}, nil
 	case *ent.SubscriptionPlanQuery:

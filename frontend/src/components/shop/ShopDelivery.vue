@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-const props = defineProps<{ content: string }>()
+const props = defineProps<{ content: string; apiKey?: boolean }>()
 const shown = ref(false)
 const message = ref('')
 const lines = computed(() => props.content.split('\n').filter(line => line.trim()))
@@ -12,7 +12,7 @@ async function copy(value: string) {
 <template>
   <section class="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6" aria-labelledby="shop-delivery-title">
     <div>
-      <h2 id="shop-delivery-title" class="text-lg font-semibold text-gray-900 dark:text-gray-100">账号已交付</h2>
+      <h2 id="shop-delivery-title" class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ apiKey ? 'API Key 已交付' : '账号已交付' }}</h2>
     </div>
 
     <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
@@ -38,7 +38,7 @@ async function copy(value: string) {
     </template>
 
     <div v-else-if="content" class="mt-5 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-950">
-      <p class="text-sm text-gray-600 dark:text-gray-400">账号信息已隐藏，点击上方按钮查看或复制。</p>
+      <p class="text-sm text-gray-600 dark:text-gray-400">{{ apiKey ? 'API Key 已隐藏，点击上方按钮查看或复制。' : '账号信息已隐藏，点击上方按钮查看或复制。' }}</p>
     </div>
 
     <p v-if="message" class="mt-4 text-sm text-gray-700 dark:text-gray-300" role="status" aria-live="polite">{{ message }}</p>

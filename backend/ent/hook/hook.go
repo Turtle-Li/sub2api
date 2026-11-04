@@ -429,6 +429,18 @@ func (f ShopNotificationFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.V
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopNotificationMutation", m)
 }
 
+// The ShopOrderActionFunc type is an adapter to allow the use of ordinary
+// function as ShopOrderAction mutator.
+type ShopOrderActionFunc func(context.Context, *ent.ShopOrderActionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShopOrderActionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShopOrderActionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopOrderActionMutation", m)
+}
+
 // The ShopProductFunc type is an adapter to allow the use of ordinary
 // function as ShopProduct mutator.
 type ShopProductFunc func(context.Context, *ent.ShopProductMutation) (ent.Value, error)

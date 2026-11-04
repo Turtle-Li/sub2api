@@ -119,6 +119,18 @@
 
 ## Order operations and invoices
 
+- For configurable payment actions and HTTP fulfillment hooks, read
+  `docs/SHOP_PAYMENT_ACTIONS.md` first. The local implementation uses immutable
+  snapshots, a transactional one-task outbox, idempotent adapters, persisted
+  compensation and encrypted buyer delivery. Detailed local Claude review/QA:
+  `docs/operations/SHOP_PAYMENT_HOOKS_IMPLEMENTATION_20261105.md`. It is unreleased;
+  production HTTP agent/mount approval and receiver acceptance remain prerequisites.
+- For DeepSeek24-hour API-key shop delivery, read
+  `docs/operations/DEEPSEEK_DAYPASS_20261105.md`. It is an unreleased candidate:
+  one paid order/key, original paid_at expiry, exact SKU, existing money/review
+  fences, encrypted buyer-only delivery and separate memory-only machine agent.
+  Preserve manual completed-order refunds and the documented production boundary.
+
 - For the configurable shop and manual top-up/account delivery, read
   `docs/SHOP_MANUAL_FULFILLMENT.md`. Use its dedicated `manual_shop` flow and
   payment-to-fulfillment lock order. Never auto-grant API credits/subscriptions,

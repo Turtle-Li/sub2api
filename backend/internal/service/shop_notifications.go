@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/shopnotification"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"github.com/google/uuid"
 )
 
@@ -122,7 +123,10 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 	}
 	p, err := shopSnapshot(f)
 	if err != nil {
-		return err
+		if job.Channel != "feishu" {
+			return err
+		}
+		p = ShopProduct{Name: "商品配置待复核"}
 	}
 	if !runtimegate.SharedWorkAllowed() {
 		return errors.New("shop notification generation draining")
@@ -132,7 +136,7 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		return errors.New("shop notification lease lost")
 	}
 	if job.Channel == "feishu" {
-		if o.PaidAt == nil || (!shopPaidActionAllowed(o) && f.Status != ShopCompleted) {
+		if o.PaidAt == nil || (job.Event != "action_review" && !shopPaidActionAllowed(o) && f.Status != ShopCompleted) {
 			return nil
 		}
 		if s.feishu == nil {
@@ -141,6 +145,9 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		event := "商城订单已付款"
 		if job.Event == "input_received" {
 			event = "商城订单已提交资料"
+		}
+		if job.Event == "action_review" || p.Name == "商品配置待复核" {
+			event = "商城自动交付待复核"
 		}
 		message := fmt.Sprintf("%s\n订单：%s\n商品：%s\n金额：CNY %.2f\n处理状态：%s\n后台：%s", event, o.OutTradeNo, p.Name, o.PayAmount, f.Status, s.frontendURL(ctx, fmt.Sprintf("/admin/shop/orders/%d", o.ID)))
 		return s.feishu.SendText(ctx, message)
@@ -155,6 +162,16 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 	if job.Event == "complete" && (f.Status != ShopCompleted || o.Status != OrderStatusCompleted) {
 		return nil
 	}
+	if job.Event == "complete" {
+		var detail ShopOrderDetail
+		detail.OrderID = o.ID
+		if err = s.attachShopAutomation(ctx, &detail, false); err != nil {
+			return err
+		}
+		if detail.Automation != nil && detail.Automation.Status != shopaction.Succeeded {
+			return nil
+		}
+	}
 	subject := "商城订单已完成"
 	body := "<p>您的商城订单已完成。</p>"
 	if job.Event == "request_input" {
@@ -167,7 +184,7 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		if err != nil {
 			return err
 		}
-		body += "<h3>账号交付信息</h3><pre style=\"white-space:pre-wrap;overflow-wrap:anywhere\">" + html.EscapeString(content) + "</pre>"
+		body += "<h3>交付信息</h3><pre style=\"white-space:pre-wrap;overflow-wrap:anywhere\">" + html.EscapeString(content) + "</pre>"
 	}
 	body += "<p><a href=\"" + html.EscapeString(s.frontendURL(ctx, fmt.Sprintf("/shop/orders/%d", o.ID))) + "\">查看订单</a></p>"
 	if p.GuideKey != "" {
@@ -194,7 +211,12 @@ func NewShopNotificationService(shop *ShopService, locks LeaderLockCache, db *sq
 
 func (s *ShopNotificationService) Start() {
 	s.startOnce.Do(func() {
-		s.wg.Add(1)
+		workers := 1
+		actionsConfigured := s.shop != nil && len(s.shop.actionsCfg.Integrations) > 0
+		if actionsConfigured {
+			workers++
+		}
+		s.wg.Add(workers)
 		go func() {
 			defer s.wg.Done()
 			ticker := time.NewTicker(20 * time.Second)
@@ -208,7 +230,38 @@ func (s *ShopNotificationService) Start() {
 				}
 			}
 		}()
+		if actionsConfigured {
+			go func() {
+				defer s.wg.Done()
+				ticker := time.NewTicker(20 * time.Second)
+				defer ticker.Stop()
+				for {
+					s.runActions()
+					select {
+					case <-s.ctx.Done():
+						return
+					case <-ticker.C:
+					}
+				}
+			}()
+		}
 	})
+}
+
+func (s *ShopNotificationService) runActions() {
+	if !runtimegate.SharedWorkAllowed() || (s.lockCache == nil && s.db == nil) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 55*time.Second)
+	defer cancel()
+	leaseCtx, release, acquired := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, "shop:actions:leader", s.instanceID, shopActionLease)
+	if !acquired {
+		return
+	}
+	defer release()
+	if err := s.shop.RecoverShopActions(leaseCtx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		slog.Warn("shop action recovery incomplete", "error_kind", "DELIVERY_UNAVAILABLE")
+	}
 }
 
 func (s *ShopNotificationService) Stop() {

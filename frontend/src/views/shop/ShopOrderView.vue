@@ -6,7 +6,7 @@ import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import ShopDelivery from '@/components/shop/ShopDelivery.vue'
 import ShopSessionCheck from '@/components/shop/ShopSessionCheck.vue'
 import { shopAPI } from '@/api/shop'
-import type { ShopInputCheck, ShopOrderDetail } from '@/types/shop'
+import { isShopDaypass, shopAutomationLabels, type ShopInputCheck, type ShopOrderDetail } from '@/types/shop'
 import { sanitizeUrl } from '@/utils/url'
 import { previewShopSession } from '@/utils/shopSessionPreview'
 const route = useRoute()
@@ -147,23 +147,23 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
           </dl>
         </section>
 
-        <section v-else-if="order.fulfillment_status === 'COMPLETED' && order.product.fulfillment_mode === 'account_delivery'" class="mt-4 space-y-4">
+        <section v-else-if="order.fulfillment_status === 'COMPLETED' && order.product.fulfillment_mode === 'account_delivery' && order.delivery_kind !== 'none'" class="mt-4 space-y-4">
           <div v-if="order.product.guide_key" class="rounded-xl border border-primary-200 bg-primary-50 p-5 dark:border-primary-800 dark:bg-primary-950 sm:p-6">
-            <h2 class="text-lg font-semibold text-primary-900 dark:text-primary-100">必看：成品号使用指南</h2>
-            <p class="mt-2 text-sm leading-6 text-primary-800 dark:text-primary-200">查看交付内容前，请先了解登录、账号安全和验证设置步骤。</p>
-            <RouterLink :to="`/shop/help/${order.product.guide_key}`" aria-label="必看：成品号使用指南" class="mt-4 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900">阅读使用指南</RouterLink>
+            <h2 class="text-lg font-semibold text-primary-900 dark:text-primary-100">{{ isShopDaypass(order.product) ? 'API Key 使用指南' : '必看：成品号使用指南' }}</h2>
+            <p class="mt-2 text-sm leading-6 text-primary-800 dark:text-primary-200">{{ isShopDaypass(order.product) ? '查看客户端配置、模型名称、并发与 IP 限制。' : '查看交付内容前，请先了解登录、账号安全和验证设置步骤。' }}</p>
+            <RouterLink :to="`/shop/help/${order.product.guide_key}`" :aria-label="isShopDaypass(order.product) ? 'API Key 使用指南' : '必看：成品号使用指南'" class="mt-4 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900">阅读使用指南</RouterLink>
           </div>
-          <ShopDelivery :content="order.delivery_content || ''" />
+          <ShopDelivery :content="order.delivery_content || ''" :api-key="isShopDaypass(order.product)" />
         </section>
 
         <section v-else-if="order.fulfillment_status === 'COMPLETED'" class="mt-4 rounded-xl border border-green-200 bg-white p-5 dark:border-green-900 dark:bg-gray-900 sm:p-6">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">订单已完成</h2>
-          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">充值已完成，可前往 ChatGPT 查看订阅。</p>
+          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">{{ order.delivery_kind === 'none' ? '服务已处理完成，无需领取账号或密钥。' : '充值已完成，可前往 ChatGPT 查看订阅。' }}</p>
         </section>
 
         <section v-else class="mt-4 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">等待人工处理</h2>
-          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">客服正在处理此订单，完成后可在这里查看结果。</p>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '交付待复核' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '正在自动发放 API Key' : order.automation ? shopAutomationLabels[order.automation.status] : order.product.automatic_fulfillment ? '等待自动处理' : '等待人工处理' }}</h2>
+          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '付款已确认，交付需要客服核对。请勿重复购买，可联系客服处理。' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '付款已确认。请稍后刷新状态，Key 和调用方式会显示在这里。有效期从付款时间开始计算。' : order.product.automatic_fulfillment ? '付款已确认。请稍后刷新，交付结果会显示在这里。' : '客服正在处理此订单，完成后可在这里查看结果。' }}</p>
         </section>
       </template>
     </div>

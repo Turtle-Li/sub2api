@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"log/slog"
 	"math"
 	"net/textproto"
@@ -109,6 +110,8 @@ type Config struct {
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
 	UnifiedPayment          UnifiedPaymentConfig          `mapstructure:"unified_payment"`
 	FeishuPaymentAlerts     FeishuPaymentAlertsConfig     `mapstructure:"feishu_payment_alerts"`
+	ShopDaypass             ShopDaypassConfig             `mapstructure:"shop_daypass"`
+	ShopActions             shopaction.Config             `mapstructure:"shop_actions"`
 
 	// Enforce only API-key spending windows in simple mode.
 	SimpleModeKeyRateLimitEnabled bool `mapstructure:"simple_mode_key_rate_limit_enabled" yaml:"simple_mode_key_rate_limit_enabled"`
@@ -147,6 +150,13 @@ type UnifiedPaymentConfig struct {
 // socket and is never accepted through application configuration.
 type FeishuPaymentAlertsConfig struct {
 	Enabled bool `mapstructure:"enabled"`
+}
+
+// Only non-secret activation and the exact merchant SKU are configurable.
+// The dedicated machine credential is read from its own memory-agent socket.
+type ShopDaypassConfig struct {
+	Enabled   bool  `mapstructure:"enabled"`
+	ProductID int64 `mapstructure:"product_id"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2980,6 +2990,9 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("unified_payment.return_url", "")
 	viper.SetDefault("unified_payment.webhook_url", "")
 	viper.SetDefault("feishu_payment_alerts.enabled", false)
+	viper.SetDefault("shop_daypass.enabled", false)
+	viper.SetDefault("shop_daypass.product_id", int64(0))
+	viper.SetDefault("shop_actions.enabled", false)
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its
 	// effective default is true, applied post-unmarshal via a viper.IsSet guard.
@@ -3040,6 +3053,12 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if err := c.validateShopActions(); err != nil {
+		return err
+	}
+	if c.ShopDaypass.Enabled && c.ShopDaypass.ProductID <= 0 {
+		return fmt.Errorf("shop_daypass.product_id must identify the enabled automatic-delivery SKU")
+	}
 	if c.Gateway.MinOutputTokens < 16 {
 		return fmt.Errorf("gateway.min_output_tokens must be at least 16")
 	}

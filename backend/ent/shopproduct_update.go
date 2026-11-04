@@ -4,12 +4,14 @@ package ent
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
@@ -207,6 +209,24 @@ func (_u *ShopProductUpdate) SetNillableGuideKey(v *string) *ShopProductUpdate {
 	if v != nil {
 		_u.SetGuideKey(*v)
 	}
+	return _u
+}
+
+// SetPaymentActions sets the "payment_actions" field.
+func (_u *ShopProductUpdate) SetPaymentActions(v jsontext.Value) *ShopProductUpdate {
+	_u.mutation.SetPaymentActions(v)
+	return _u
+}
+
+// AppendPaymentActions appends value to the "payment_actions" field.
+func (_u *ShopProductUpdate) AppendPaymentActions(v jsontext.Value) *ShopProductUpdate {
+	_u.mutation.AppendPaymentActions(v)
+	return _u
+}
+
+// ClearPaymentActions clears the value of the "payment_actions" field.
+func (_u *ShopProductUpdate) ClearPaymentActions() *ShopProductUpdate {
+	_u.mutation.ClearPaymentActions()
 	return _u
 }
 
@@ -427,6 +447,17 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if value, ok := _u.mutation.GuideKey(); ok {
 		_spec.SetField(shopproduct.FieldGuideKey, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.PaymentActions(); ok {
+		_spec.SetField(shopproduct.FieldPaymentActions, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedPaymentActions(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, shopproduct.FieldPaymentActions, value)
+		})
+	}
+	if _u.mutation.PaymentActionsCleared() {
+		_spec.ClearField(shopproduct.FieldPaymentActions, field.TypeJSON)
+	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)
 	}
@@ -644,6 +675,24 @@ func (_u *ShopProductUpdateOne) SetNillableGuideKey(v *string) *ShopProductUpdat
 	if v != nil {
 		_u.SetGuideKey(*v)
 	}
+	return _u
+}
+
+// SetPaymentActions sets the "payment_actions" field.
+func (_u *ShopProductUpdateOne) SetPaymentActions(v jsontext.Value) *ShopProductUpdateOne {
+	_u.mutation.SetPaymentActions(v)
+	return _u
+}
+
+// AppendPaymentActions appends value to the "payment_actions" field.
+func (_u *ShopProductUpdateOne) AppendPaymentActions(v jsontext.Value) *ShopProductUpdateOne {
+	_u.mutation.AppendPaymentActions(v)
+	return _u
+}
+
+// ClearPaymentActions clears the value of the "payment_actions" field.
+func (_u *ShopProductUpdateOne) ClearPaymentActions() *ShopProductUpdateOne {
+	_u.mutation.ClearPaymentActions()
 	return _u
 }
 
@@ -893,6 +942,17 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 	}
 	if value, ok := _u.mutation.GuideKey(); ok {
 		_spec.SetField(shopproduct.FieldGuideKey, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PaymentActions(); ok {
+		_spec.SetField(shopproduct.FieldPaymentActions, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedPaymentActions(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, shopproduct.FieldPaymentActions, value)
+		})
+	}
+	if _u.mutation.PaymentActionsCleared() {
+		_spec.ClearField(shopproduct.FieldPaymentActions, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)

@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -171,6 +172,12 @@ func (_c *ShopProductCreate) SetNillableGuideKey(v *string) *ShopProductCreate {
 	if v != nil {
 		_c.SetGuideKey(*v)
 	}
+	return _c
+}
+
+// SetPaymentActions sets the "payment_actions" field.
+func (_c *ShopProductCreate) SetPaymentActions(v jsontext.Value) *ShopProductCreate {
+	_c.mutation.SetPaymentActions(v)
 	return _c
 }
 
@@ -524,6 +531,10 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 		_spec.SetField(shopproduct.FieldGuideKey, field.TypeString, value)
 		_node.GuideKey = value
 	}
+	if value, ok := _c.mutation.PaymentActions(); ok {
+		_spec.SetField(shopproduct.FieldPaymentActions, field.TypeJSON, value)
+		_node.PaymentActions = value
+	}
 	if value, ok := _c.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)
 		_node.Enabled = value
@@ -749,6 +760,24 @@ func (u *ShopProductUpsert) SetGuideKey(v string) *ShopProductUpsert {
 // UpdateGuideKey sets the "guide_key" field to the value that was provided on create.
 func (u *ShopProductUpsert) UpdateGuideKey() *ShopProductUpsert {
 	u.SetExcluded(shopproduct.FieldGuideKey)
+	return u
+}
+
+// SetPaymentActions sets the "payment_actions" field.
+func (u *ShopProductUpsert) SetPaymentActions(v jsontext.Value) *ShopProductUpsert {
+	u.Set(shopproduct.FieldPaymentActions, v)
+	return u
+}
+
+// UpdatePaymentActions sets the "payment_actions" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdatePaymentActions() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldPaymentActions)
+	return u
+}
+
+// ClearPaymentActions clears the value of the "payment_actions" field.
+func (u *ShopProductUpsert) ClearPaymentActions() *ShopProductUpsert {
+	u.SetNull(shopproduct.FieldPaymentActions)
 	return u
 }
 
@@ -1036,6 +1065,27 @@ func (u *ShopProductUpsertOne) SetGuideKey(v string) *ShopProductUpsertOne {
 func (u *ShopProductUpsertOne) UpdateGuideKey() *ShopProductUpsertOne {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateGuideKey()
+	})
+}
+
+// SetPaymentActions sets the "payment_actions" field.
+func (u *ShopProductUpsertOne) SetPaymentActions(v jsontext.Value) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetPaymentActions(v)
+	})
+}
+
+// UpdatePaymentActions sets the "payment_actions" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdatePaymentActions() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdatePaymentActions()
+	})
+}
+
+// ClearPaymentActions clears the value of the "payment_actions" field.
+func (u *ShopProductUpsertOne) ClearPaymentActions() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.ClearPaymentActions()
 	})
 }
 
@@ -1499,6 +1549,27 @@ func (u *ShopProductUpsertBulk) SetGuideKey(v string) *ShopProductUpsertBulk {
 func (u *ShopProductUpsertBulk) UpdateGuideKey() *ShopProductUpsertBulk {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateGuideKey()
+	})
+}
+
+// SetPaymentActions sets the "payment_actions" field.
+func (u *ShopProductUpsertBulk) SetPaymentActions(v jsontext.Value) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetPaymentActions(v)
+	})
+}
+
+// UpdatePaymentActions sets the "payment_actions" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdatePaymentActions() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdatePaymentActions()
+	})
+}
+
+// ClearPaymentActions clears the value of the "payment_actions" field.
+func (u *ShopProductUpsertBulk) ClearPaymentActions() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.ClearPaymentActions()
 	})
 }
 

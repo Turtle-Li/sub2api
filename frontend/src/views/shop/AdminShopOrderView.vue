@@ -6,15 +6,17 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import ShopSessionCheck from '@/components/shop/ShopSessionCheck.vue'
+import ShopAutomationPanel from '@/components/shop/ShopAutomationPanel.vue'
 import { useStepUp, isStepUpCancelled } from '@/composables/useStepUp'
 import { shopAPI } from '@/api/shop'
-import { shopNotificationLabels, type ShopAction, type ShopOrderDetail } from '@/types/shop'
+import { shopDeliveryLabel, shopNotificationLabels, type ShopAction, type ShopOrderDetail } from '@/types/shop'
 const route = useRoute()
 const stepUp = useStepUp()
 const order = ref<ShopOrderDetail | null>(null)
 const note = ref('')
 const delivery = ref('')
 const preview = ref(false)
+const revokePreview = ref(false)
 const busy = ref(false)
 const error = ref('')
 const message = ref('')
@@ -63,7 +65,19 @@ async function retry(channel: 'email' | 'feishu') {
   catch { error.value = '通知重试失败，请稍后再试。' }
   finally { busy.value = false }
 }
-watch(() => route.params.id, () => { order.value = null; delivery.value = ''; note.value = ''; preview.value = false; message.value = ''; void load() }, { immediate: true })
+async function manageAutomation(action: 'retry' | 'revoke') {
+  if (!order.value?.automation || busy.value) return
+  const id = order.value.order_id
+  const revision = order.value.automation.claim_revision ?? 0
+  busy.value = true; error.value = ''
+  try {
+    order.value = (await stepUp.run(() => shopAPI.manageAutomation(id, action, revision))).data
+    revokePreview.value = false
+    message.value = action === 'revoke' ? '撤销已排队，请刷新并确认最终状态后再处理退款。' : '原任务已重新排队。'
+  } catch (err) { if (!isStepUpCancelled(err)) error.value = '操作未完成，请刷新核对任务、资金状态及集成配置。' }
+  finally { busy.value = false }
+}
+watch(() => route.params.id, () => { order.value = null; delivery.value = ''; note.value = ''; preview.value = false; revokePreview.value = false; message.value = ''; void load() }, { immediate: true })
 onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; order.value = null; stepUp.onCancel() })
 </script>
 <template>
@@ -95,7 +109,7 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
               <dl class="mt-4 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm sm:grid-cols-[7rem_minmax(0,1fr)]">
                 <dt class="text-gray-500 dark:text-gray-400">用户 ID</dt><dd class="break-all text-gray-800 dark:text-gray-200">{{ order.user_id }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">买家邮箱</dt><dd class="break-all text-gray-800 dark:text-gray-200">{{ order.user_email || '未提供' }}</dd>
-                <dt class="text-gray-500 dark:text-gray-400">履约模式</dt><dd class="text-gray-800 dark:text-gray-200">{{ order.product.fulfillment_mode === 'session_topup' ? '提交资料 · 人工代充' : '人工账号交付' }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">履约模式</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopDeliveryLabel(order.product) }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ new Date(order.created_at).toLocaleString('zh-CN') }}</dd>
                 <dt v-if="order.paid_at" class="text-gray-500 dark:text-gray-400">付款时间</dt><dd v-if="order.paid_at" class="text-gray-800 dark:text-gray-200">{{ new Date(order.paid_at).toLocaleString('zh-CN') }}</dd>
                 <dt v-if="order.completed_at" class="text-gray-500 dark:text-gray-400">完成时间</dt><dd v-if="order.completed_at" class="text-gray-800 dark:text-gray-200">{{ new Date(order.completed_at).toLocaleString('zh-CN') }}</dd>
@@ -125,6 +139,7 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
           </div>
 
           <aside class="space-y-5 lg:sticky lg:top-6" aria-label="订单操作">
+            <ShopAutomationPanel v-if="order.automation" :automation="order.automation" :busy="busy" @retry="manageAutomation('retry')" @revoke="revokePreview = true" />
             <section class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
               <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">当前可执行操作</h2>
               <div class="mt-4 space-y-3">
@@ -164,6 +179,11 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
           </aside>
         </div>
       </template>
+
+      <BaseDialog :show="revokePreview" title="撤销此订单授权" :close-on-click-outside="!busy" :close-on-escape="!busy" :show-close-button="!busy" @close="revokePreview = false">
+        <p class="text-sm leading-6 text-gray-700 dark:text-gray-200">确认后，此订单发放的 API Key 将失效。有效期不会重置，也不会自动退款。其他订单不受影响。</p>
+        <div class="mt-5 flex justify-end gap-3"><button type="button" class="btn btn-secondary min-h-11" :disabled="busy" @click="revokePreview = false">取消</button><button type="button" class="btn btn-danger min-h-11" :disabled="busy" @click="manageAutomation('revoke')">确认撤销</button></div>
+      </BaseDialog>
 
       <BaseDialog :show="preview" :title="order?.product.fulfillment_mode === 'account_delivery' ? '预览交付并确认' : '确认代充完成'" width="wide" :close-on-click-outside="!busy" :close-on-escape="!busy" :show-close-button="!busy" @close="preview = false">
         <div v-if="order">

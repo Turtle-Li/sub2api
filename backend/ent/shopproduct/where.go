@@ -869,6 +869,16 @@ func GuideKeyContainsFold(v string) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldContainsFold(FieldGuideKey, v))
 }
 
+// PaymentActionsIsNil applies the IsNil predicate on the "payment_actions" field.
+func PaymentActionsIsNil() predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIsNull(FieldPaymentActions))
+}
+
+// PaymentActionsNotNil applies the NotNil predicate on the "payment_actions" field.
+func PaymentActionsNotNil() predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotNull(FieldPaymentActions))
+}
+
 // EnabledEQ applies the EQ predicate on the "enabled" field.
 func EnabledEQ(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldEnabled, v))

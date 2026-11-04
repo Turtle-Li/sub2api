@@ -1786,6 +1786,55 @@ var (
 			},
 		},
 	}
+	// ShopOrderActionsColumns holds the columns for the "shop_order_actions" table.
+	ShopOrderActionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "order_id", Type: field.TypeInt64},
+		{Name: "action_key", Type: field.TypeString, Size: 48},
+		{Name: "snapshot", Type: field.TypeString, Size: 2147483647},
+		{Name: "snapshot_hash", Type: field.TypeString, Size: 64},
+		{Name: "deadline_at", Type: field.TypeTime},
+		{Name: "status", Type: field.TypeString, Size: 24, Default: "PENDING"},
+		{Name: "attempts", Type: field.TypeInt, Default: 0},
+		{Name: "claim_revision", Type: field.TypeInt, Default: 0},
+		{Name: "lease_until", Type: field.TypeTime, Nullable: true},
+		{Name: "next_attempt_at", Type: field.TypeTime},
+		{Name: "error_kind", Type: field.TypeString, Size: 48, Default: ""},
+		{Name: "compensation_reason", Type: field.TypeString, Size: 32, Default: ""},
+		{Name: "receipt_ref", Type: field.TypeString, Size: 160, Default: ""},
+		{Name: "result_kind", Type: field.TypeString, Size: 16, Default: "none"},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// ShopOrderActionsTable holds the schema information for the "shop_order_actions" table.
+	ShopOrderActionsTable = &schema.Table{
+		Name:       "shop_order_actions",
+		Columns:    ShopOrderActionsColumns,
+		PrimaryKey: []*schema.Column{ShopOrderActionsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shoporderaction_order_id",
+				Unique:  true,
+				Columns: []*schema.Column{ShopOrderActionsColumns[1]},
+			},
+			{
+				Name:    "shoporderaction_action_key",
+				Unique:  true,
+				Columns: []*schema.Column{ShopOrderActionsColumns[2]},
+			},
+			{
+				Name:    "shoporderaction_status_next_attempt_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrderActionsColumns[6], ShopOrderActionsColumns[10]},
+			},
+			{
+				Name:    "shoporderaction_status_lease_until",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrderActionsColumns[6], ShopOrderActionsColumns[9]},
+			},
+		},
+	}
 	// ShopProductsColumns holds the columns for the "shop_products" table.
 	ShopProductsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1801,6 +1850,7 @@ var (
 		{Name: "input_url", Type: field.TypeString, Size: 2048, Default: ""},
 		{Name: "input_instructions", Type: field.TypeString, Size: 2147483647, Default: ""},
 		{Name: "guide_key", Type: field.TypeString, Size: 64, Default: ""},
+		{Name: "payment_actions", Type: field.TypeJSON, Nullable: true},
 		{Name: "enabled", Type: field.TypeBool, Default: false},
 		{Name: "sort_order", Type: field.TypeInt, Default: 0},
 		{Name: "revision", Type: field.TypeInt, Default: 1},
@@ -1816,7 +1866,7 @@ var (
 			{
 				Name:    "shopproduct_enabled_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{ShopProductsColumns[13], ShopProductsColumns[14]},
+				Columns: []*schema.Column{ShopProductsColumns[14], ShopProductsColumns[15]},
 			},
 		},
 	}
@@ -2414,6 +2464,7 @@ var (
 		SettingsTable,
 		ShopFulfillmentsTable,
 		ShopNotificationsTable,
+		ShopOrderActionsTable,
 		ShopProductsTable,
 		SubscriptionPlansTable,
 		TLSFingerprintProfilesTable,
@@ -2559,6 +2610,9 @@ func init() {
 	}
 	ShopNotificationsTable.Annotation = &entsql.Annotation{
 		Table: "shop_notifications",
+	}
+	ShopOrderActionsTable.Annotation = &entsql.Annotation{
+		Table: "shop_order_actions",
 	}
 	ShopProductsTable.Annotation = &entsql.Annotation{
 		Table: "shop_products",

@@ -16,6 +16,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
 	"github.com/Wei-Shaw/sub2api/ent/shopnotification"
+	"github.com/Wei-Shaw/sub2api/ent/shoporderaction"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -66,11 +67,15 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	require.NoError(t, client.Schema.Create(ctx))
 	// Exercise the authored migration rather than Ent's unconstrained test schema.
-	_, err = db.ExecContext(ctx, "DROP TABLE shop_notifications,shop_fulfillments,shop_products")
+	_, err = db.ExecContext(ctx, "DROP TABLE shop_order_actions,shop_notifications,shop_fulfillments,shop_products")
 	require.NoError(t, err)
 	migration, err := migrations.FS.ReadFile("265_manual_shop.sql")
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(migration))
+	require.NoError(t, err)
+	actionsMigration, err := migrations.FS.ReadFile("266_shop_order_actions.sql")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(actionsMigration))
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, "CREATE TABLE unified_payment_refund_attempts(order_id BIGINT,needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE); CREATE TABLE unified_payment_refund_events(order_id BIGINT,action TEXT NOT NULL)")
 	require.NoError(t, err)
@@ -151,6 +156,55 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 		require.Empty(t, f.DeliveryCiphertext)
 		require.Zero(t, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
 	})
+	t.Run("daypass PostgreSQL claims fence competing workers and lost replies", func(t *testing.T) {
+		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG DeepSeek", Price: 6, DurationValue: 1, DurationUnit: "day", FulfillmentMode: ShopAccountDelivery, GuideKey: ShopDaypassGuide, PaymentActions: daypassTestActions(s)})
+		require.NoError(t, err)
+		s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID}
+		gateway := &daypassTestGateway{lost: true}
+		s.daypass = gateway
+		o := createPaymentInvoicePostgresOrder(t, ctx, client, u, "daypass")
+		o = client.PaymentOrder.UpdateOne(o).SetOrderType(payment.OrderTypeManualShop).SetStatus(OrderStatusPaid).SetAmount(0).SetPayAmount(6).ClearCompletedAt().SaveX(ctx)
+		require.NoError(t, createShopFulfillmentTx(ctx, client, o, *p))
+		require.NoError(t, markShopPaidTx(ctx, client, o))
+		claims := make(chan *shopDaypassClaim, 8)
+		failures := make(chan error, 8)
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				claim, e := s.claimDaypass(ctx, o.ID, time.Now())
+				claims <- claim
+				failures <- e
+			}()
+		}
+		wg.Wait()
+		close(claims)
+		close(failures)
+		for e := range failures {
+			require.NoError(t, e)
+		}
+		var first *shopDaypassClaim
+		for claim := range claims {
+			if claim != nil {
+				require.Nil(t, first)
+				first = claim
+			}
+		}
+		require.NotNil(t, first)
+		require.ErrorIs(t, s.deliverDaypass(ctx, first), errShopDaypassUnavailable)
+		client.ShopOrderAction.Update().Where(shoporderaction.OrderIDEQ(o.ID)).SetLeaseUntil(time.Now().Add(-time.Second)).SetNextAttemptAt(time.Now().Add(-time.Second)).ExecX(ctx)
+		second, err := s.claimDaypass(ctx, o.ID, time.Now())
+		require.NoError(t, err)
+		require.NotNil(t, second)
+		require.ErrorIs(t, s.deliverDaypass(ctx, first), errShopDaypassLeaseLost)
+		require.Zero(t, gateway.revocations)
+		require.NoError(t, s.deliverDaypass(ctx, second))
+		require.Equal(t, OrderStatusCompleted, client.PaymentOrder.GetX(ctx, o.ID).Status)
+		require.Equal(t, 1, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
+		require.Equal(t, o.PaidAt.Unix()+86400, gateway.grant.ExpiresAt)
+	})
+
 	t.Run("concurrent customer submissions preserve one complete version", func(t *testing.T) {
 		o, d := makeOrder(ShopSessionTopup)
 		var wg sync.WaitGroup

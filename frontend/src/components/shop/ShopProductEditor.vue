@@ -1,18 +1,42 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
-import type { ShopProduct, ShopProductInput } from '@/types/shop'
-const props = defineProps<{ product: ShopProduct | null; busy: boolean }>()
+import { computed, reactive, ref, watch } from 'vue'
+import type { ShopIntegrationOption, ShopProduct, ShopProductInput } from '@/types/shop'
+const props = withDefaults(defineProps<{ product: ShopProduct | null; busy: boolean; integrations?: ShopIntegrationOption[] }>(), { integrations: () => [] })
 const emit = defineEmits<{ save: [input: ShopProductInput] }>()
 const defaults = (): ShopProductInput => ({ name: '', category: '', summary: '', description: '', price: 0, duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', input_format: 'session_json', input_url: '', input_instructions: '', guide_key: '', enabled: false, sort_order: 0 })
 const draft = reactive(defaults())
-watch(() => props.product, product => { Object.assign(draft, defaults(), product ?? {}); draft.revision = product?.revision }, { immediate: true })
+const paramsText = ref('{}')
+const actionError = ref('')
+const selectedIntegration = computed({
+  get: () => draft.payment_actions?.[0] ? `${draft.payment_actions[0].integration_ref}@${draft.payment_actions[0].integration_version}` : '',
+  set: (key: string) => {
+    const integration = props.integrations.find(item => `${item.id}@${item.version}` === key)
+    draft.payment_actions = integration ? [{ binding_key: 'primary-delivery', adapter: integration.adapter, integration_ref: integration.id, integration_version: integration.version, params: {} }] : []
+    paramsText.value = '{}'; actionError.value = ''
+    if (integration) draft.fulfillment_mode = 'account_delivery'
+    if (integration?.adapter === 'newapi.daypass.v1') Object.assign(draft, { price: 6, duration_value: 1, duration_unit: 'day', guide_key: 'deepseek-daypass' })
+  }
+})
+watch(() => draft.guide_key, (key) => {
+  if (key === 'deepseek-daypass') Object.assign(draft, { fulfillment_mode: 'account_delivery', price: 6, duration_value: 1, duration_unit: 'day', input_format: 'text', input_url: '', input_instructions: '' })
+})
+watch(() => props.product, product => { Object.assign(draft, defaults(), { payment_actions: [] }, product ?? {}); draft.revision = product?.revision; paramsText.value = JSON.stringify(product?.payment_actions?.[0]?.params ?? {}, null, 2); actionError.value = '' }, { immediate: true })
+function isParams(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function save() {
-  emit('save', { name: draft.name, category: draft.category, summary: draft.summary, description: draft.description, price: draft.price, duration_value: draft.duration_value, duration_unit: draft.duration_unit, fulfillment_mode: draft.fulfillment_mode, input_format: draft.input_format, input_url: draft.input_url, input_instructions: draft.input_instructions, guide_key: draft.guide_key, enabled: draft.enabled, sort_order: draft.sort_order, revision: draft.revision })
+  actionError.value = ''
+  if (draft.payment_actions?.[0]) {
+    try {
+      const params: unknown = JSON.parse(paramsText.value)
+      if (!isParams(params) || new TextEncoder().encode(paramsText.value).length > 4096) throw new Error('invalid params')
+      draft.payment_actions = [{ ...draft.payment_actions[0], params }]
+    } catch { actionError.value = '请输入 4KB 以内的 JSON 对象参数。'; return }
+  }
+  emit('save', { name: draft.name, category: draft.category, summary: draft.summary, description: draft.description, price: draft.price, duration_value: draft.duration_value, duration_unit: draft.duration_unit, fulfillment_mode: draft.fulfillment_mode, input_format: draft.input_format, input_url: draft.input_url, input_instructions: draft.input_instructions, guide_key: draft.guide_key, enabled: draft.enabled, sort_order: draft.sort_order, revision: draft.revision, payment_actions: draft.payment_actions ?? [] })
 }
 </script>
 <template>
   <form id="shop-product-editor" class="space-y-4" @submit.prevent="save">
-    <fieldset :disabled="busy" class="contents">
+    <fieldset :disabled="busy" class="min-w-0 space-y-4">
       <section aria-labelledby="editor-basic" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
         <div class="mb-4">
           <h2 id="editor-basic" class="text-base font-semibold text-gray-900 dark:text-gray-100">基础信息</h2>
@@ -38,6 +62,24 @@ function save() {
         </div>
       </section>
 
+      <section aria-labelledby="editor-payment-action" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
+        <h2 id="editor-payment-action" class="text-base font-semibold text-gray-900 dark:text-gray-100">付款后操作</h2>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">选择人工交付或已登记的自动服务。修改配置只影响新订单。</p>
+        <label for="payment-action" class="mt-4 block text-sm font-medium text-gray-700 dark:text-gray-200">处理方式</label>
+        <select id="payment-action" v-model="selectedIntegration" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
+          <option value="">人工处理</option>
+          <option v-for="item in integrations" :key="`${item.id}@${item.version}`" :value="`${item.id}@${item.version}`">{{ item.adapter === 'newapi.daypass.v1' ? 'DeepSeek 日卡' : 'HTTP 钩子' }} · {{ item.id }} v{{ item.version }}{{ item.enabled ? '' : '（尚未启用）' }}</option>
+          <option v-if="selectedIntegration && !integrations.some(item => `${item.id}@${item.version}` === selectedIntegration)" :value="selectedIntegration">原配置 {{ selectedIntegration }}（当前未登记）</option>
+        </select>
+        <template v-if="draft.payment_actions?.length">
+          <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">自动交付仅支持无需买家补充资料的商品。接口与签名凭据由部署配置管理，本页只填业务参数。</p>
+          <label for="payment-action-params" class="mt-4 block text-sm font-medium text-gray-700 dark:text-gray-200">业务参数（JSON）</label>
+          <textarea id="payment-action-params" v-model="paramsText" rows="4" spellcheck="false" :aria-invalid="!!actionError" aria-describedby="payment-action-help" class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white p-3 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"></textarea>
+          <p id="payment-action-help" class="mt-1 text-xs text-gray-500 dark:text-gray-400">例如 SKU 或服务规格。不要填写 API Key、密码或签名密钥。</p>
+        </template>
+        <p v-if="actionError" role="alert" class="mt-2 text-sm text-red-700 dark:text-red-300">{{ actionError }}</p>
+      </section>
+
       <section aria-labelledby="editor-sales" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
         <div class="mb-4"><h2 id="editor-sales" class="text-base font-semibold text-gray-900 dark:text-gray-100">销售设置</h2><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">价格单位为人民币；启用商品时价格不得低于 0.01。</p></div>
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -56,7 +98,7 @@ function save() {
         </div>
       </section>
 
-      <section aria-labelledby="editor-fulfillment" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
+      <section v-if="!draft.payment_actions?.length" aria-labelledby="editor-fulfillment" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
         <div class="mb-4"><h2 id="editor-fulfillment" class="text-base font-semibold text-gray-900 dark:text-gray-100">履约设置</h2><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">切换模式不会清空其他字段。资料来源仅接受 HTTPS 地址。</p></div>
         <div class="grid gap-4 md:grid-cols-2">
           <div>
@@ -84,7 +126,8 @@ function save() {
         <div class="grid gap-4 md:grid-cols-2">
           <div>
             <label for="guide-key" class="text-sm font-medium text-gray-700 dark:text-gray-200">使用指南</label>
-            <select id="guide-key" v-model="draft.guide_key" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="">不使用指南</option><option value="chatgpt-plus-account">ChatGPT Plus 账号使用指南</option></select>
+            <select id="guide-key" v-model="draft.guide_key" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="">不使用指南</option><option value="chatgpt-plus-account">ChatGPT Plus 账号使用指南</option><option value="deepseek-daypass">DeepSeek API 日卡使用指南</option></select>
+            <p v-if="draft.guide_key === 'deepseek-daypass' && !draft.payment_actions?.length" class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">指南仅用于说明。自动发 Key 还需在“付款后操作”中选择日卡集成。</p>
           </div>
           <div>
             <label for="sort-order" class="text-sm font-medium text-gray-700 dark:text-gray-200">排序值</label>

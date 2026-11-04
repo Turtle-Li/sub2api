@@ -1,0 +1,23 @@
+<section id="receive" class="guide-section">
+  <h2>1. 领取 API Key</h2>
+  <p>付款确认后，系统会在商城订单内自动交付一把独立 API Key。打开「我的订单」，进入日卡订单，显示并复制交付内容。无需注册或登录 New API。</p>
+  <p>Key 是调用凭据，请妥善保存。不要公开分享或放进公开仓库。</p>
+</section>
+<section id="configure" class="guide-section">
+  <h2>2. 配置客户端</h2>
+  <p>在支持 OpenAI 兼容接口的客户端中填写：</p>
+  <dl><dt>Base URL</dt><dd><code>https://ds.turtleligpt.com/v1</code></dd><dt>API Key</dt><dd>订单交付的完整 Key，保留 sk- 前缀</dd><dt>模型 ID</dt><dd><code>deepseek-v4.1-flash</code> 或 <code>deepseek-v4-pro</code></dd></dl>
+  <p>客户端若会自动补上 /v1，请使用 https://ds.turtleligpt.com，避免重复路径。请选择 Chat Completions 兼容模式。日卡支持文本 Chat Completions、Completions 和 Messages 请求，以及流式输出；不含图片、音频或视频生成。</p>
+</section>
+<section id="limits" class="guide-section">
+  <h2>3. 并发与 IP 限制</h2>
+  <p>每把 Key 默认最多同时处理 2 个生成请求。管理员可以为单独的 Key 调整并发。同一 Key 同时只能从同一公网 IP 使用，不能转售或分发给多人共享。</p>
+  <p>切换 Wi-Fi、移动网络或代理节点前，先停止调用，等待 15 分钟后再切换。客户端需保持出口 IP 稳定；IPv4、IPv6 或代理节点轮换也可能被识别为不同 IP。</p>
+  <p>收到并发限制时，等待已有请求结束再试。收到 IP 限制时，检查其他客户端、设备或代理是否仍在调用。</p>
+</section>
+<section id="expiry" class="guide-section">
+  <h2>4. 有效期与售后</h2>
+  <p>价格 ¥6，付款确认时开始计时，有效期 24 小时。每单单独发 Key，重复刷新或通知重试不会延长截止时间。请以交付内容中的具体到期时间为准。</p>
+  <p>有效期内不限 Token 总量，仍受并发、IP、上游可用性及上下文长度限制。到期后 Key 停止调用。</p>
+  <p>如果付款后一直没有收到 Key，请刷新订单并联系客服，提供订单号。请勿向客服发送完整 Key。</p>
+</section>

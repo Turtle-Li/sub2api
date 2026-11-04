@@ -145,7 +145,11 @@ case "${1:-}" in
 import json
 import os
 
-print(json.dumps(os.environ["FAKE_CONTAINER_ENVIRONMENT"].splitlines()))
+items = os.environ["FAKE_CONTAINER_ENVIRONMENT"].splitlines()
+if os.environ.get("FAKE_DAYPASS_NEWLINE_FORGE") == "true":
+    items = [item for item in items if not item.startswith("SHOP_DAYPASS_") and item != "UNRELATED=prefix"]
+    items.append("UNRELATED=prefix\nSHOP_DAYPASS_ENABLED=true\nSHOP_DAYPASS_PRODUCT_ID=8")
+print(json.dumps(items))
 '
         ;;
       *Config.Env*) printf '%s\n' "$environment" ;;
@@ -536,6 +540,13 @@ printf '%s\n' "$*" >>"$FAKE_IMAGE_UPSCALE_HELPER_CALLS"
 [ "${FAKE_IMAGE_UPSCALE_HELPER_FAIL:-false}" != true ]
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-image-upscale-vault-container.sh"
+cat >"${CASE_ROOT}/app/scripts/sub2api-daypass-vault-container.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[ "$1" = ready-auto ]
+[ "${FAKE_DAYPASS_HELPER_FAIL:-false}" != true ]
+EOF
+  chmod +x "${CASE_ROOT}/app/scripts/sub2api-daypass-vault-container.sh"
 }
 
 write_standard_dependencies() {
@@ -882,6 +893,45 @@ write_runtime_metadata sub2api-green unless-stopped candidate-network \
 run_external_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+# Day-pass credentials use their own read-only mount and exact configured SKU.
+for daypass_case in valid wrong-source read-write duplicate missing-sku wrong-sku raw-bearer injected-bearer locked-agent newline-forgery; do
+  new_case "external-daypass-$daypass_case"
+  write_standard_dependencies
+  write_external_runtime_files
+  write_container sub2api-green true healthy false 0 sub2api:current
+  write_container sub2api-daypass-vault true healthy false 0 sub2api:current
+  daypass_mount='volume|sub2api_daypass_vault|/run/sub2api-daypass-vault|false'
+  daypass_environment=$'SHOP_DAYPASS_ENABLED=true\nSHOP_DAYPASS_PRODUCT_ID=8'
+  case "$daypass_case" in
+    wrong-source) daypass_mount='volume|sub2api_feishu_vault|/run/sub2api-daypass-vault|false' ;;
+    read-write) daypass_mount='volume|sub2api_daypass_vault|/run/sub2api-daypass-vault|true' ;;
+    duplicate) daypass_mount="$daypass_mount"$'\n'"$daypass_mount" ;;
+    missing-sku) daypass_environment='SHOP_DAYPASS_ENABLED=true' ;;
+    wrong-sku) daypass_environment=$'SHOP_DAYPASS_ENABLED=true\nSHOP_DAYPASS_PRODUCT_ID=9' ;;
+    raw-bearer) daypass_environment="$daypass_environment"$'\nSHOP_DAYPASS_BEARER=synthetic-raw-secret' ;;
+    injected-bearer) daypass_environment="$daypass_environment"$'\nDAYPASS_SHOP_BEARER=synthetic-raw-secret' ;;
+    newline-forgery) daypass_environment=$'UNRELATED=prefix\nSHOP_DAYPASS_ENABLED=true\nSHOP_DAYPASS_PRODUCT_ID=8' ;;
+  esac
+  write_runtime_metadata sub2api-green unless-stopped candidate-network \
+    "$(external_mounts sub2api-green)"$'\n'"$daypass_mount" \
+    "$(dual_environment)"$'\n'"$daypass_environment"
+  if [ "$daypass_case" = valid ]; then
+    SHOP_DAYPASS_ENABLED=true SHOP_DAYPASS_PRODUCT_ID=8 run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+    assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+  else
+    daypass_agent_failure=false
+    daypass_newline_forgery=false
+    [ "$daypass_case" != locked-agent ] || daypass_agent_failure=true
+    [ "$daypass_case" != newline-forgery ] || daypass_newline_forgery=true
+    if SHOP_DAYPASS_ENABLED=true SHOP_DAYPASS_PRODUCT_ID=8 FAKE_DAYPASS_HELPER_FAIL="$daypass_agent_failure" FAKE_DAYPASS_NEWLINE_FORGE="$daypass_newline_forgery" \
+      run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+      fail "runtime guard accepted day-pass drift: $daypass_case"
+    fi
+    assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+  fi
+  assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+done
 
 # Both enabled switches require their exact approved volumes. Missing or
 # substituted sources must fail before the guard can restart or isolate the

@@ -47,6 +47,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
 	"github.com/Wei-Shaw/sub2api/ent/shopnotification"
+	"github.com/Wei-Shaw/sub2api/ent/shoporderaction"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
@@ -153,6 +154,7 @@ func checkColumn(t, c string) error {
 			setting.Table:                       setting.ValidColumn,
 			shopfulfillment.Table:               shopfulfillment.ValidColumn,
 			shopnotification.Table:              shopnotification.ValidColumn,
+			shoporderaction.Table:               shoporderaction.ValidColumn,
 			shopproduct.Table:                   shopproduct.ValidColumn,
 			subscriptionplan.Table:              subscriptionplan.ValidColumn,
 			tlsfingerprintprofile.Table:         tlsfingerprintprofile.ValidColumn,

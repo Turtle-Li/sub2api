@@ -12,7 +12,7 @@ import ShopMarkdown from '@/components/shop/ShopMarkdown.vue'
 import { shopAPI } from '@/api/shop'
 import { paymentAPI } from '@/api/payment'
 import { getVisibleMethods } from '@/components/payment/paymentFlow'
-import { shopDuration, shopModeLabels, type ShopProduct } from '@/types/shop'
+import { shopDuration, shopDeliveryLabel, isShopDaypass, type ShopProduct } from '@/types/shop'
 import type { CreateOrderResult } from '@/types/payment'
 const route = useRoute()
 const router = useRouter()
@@ -82,7 +82,7 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
         <header class="mb-6 max-w-3xl">
           <div class="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
             <span class="badge bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">{{ product.category }}</span>
-            <span>{{ shopModeLabels[product.fulfillment_mode] }}</span>
+            <span>{{ shopDeliveryLabel(product) }}</span>
           </div>
           <h1 class="mt-3 break-words text-2xl font-semibold leading-tight text-gray-900 dark:text-gray-100 sm:text-[28px]">{{ product.name }}</h1>
           <p v-if="product.summary" class="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-gray-600 dark:text-gray-400">{{ product.summary }}</p>
@@ -114,7 +114,7 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
               </div>
             </dl>
 
-            <ShopNotice :show-delivery-time="!hasDeliveryTime" />
+            <ShopNotice :show-delivery-time="!hasDeliveryTime" :automatic="product.automatic_fulfillment" :daypass="isShopDaypass(product)" />
 
             <fieldset class="mt-5" :disabled="busy">
               <legend class="text-sm font-medium text-gray-900 dark:text-gray-100">支付方式</legend>

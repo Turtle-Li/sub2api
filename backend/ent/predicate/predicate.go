@@ -111,6 +111,9 @@ type ShopFulfillment func(*sql.Selector)
 // ShopNotification is the predicate function for shopnotification builders.
 type ShopNotification func(*sql.Selector)
 
+// ShopOrderAction is the predicate function for shoporderaction builders.
+type ShopOrderAction func(*sql.Selector)
+
 // ShopProduct is the predicate function for shopproduct builders.
 type ShopProduct func(*sql.Selector)
 

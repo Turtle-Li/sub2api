@@ -321,6 +321,10 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 		return err
 	}
 	if locked.OrderType == payment.OrderTypeManualShop {
+		locked, err = client.PaymentOrder.Get(txCtx, locked.ID)
+		if err != nil {
+			return err
+		}
 		if err := markShopPaidTx(txCtx, client, locked); err != nil {
 			return err
 		}

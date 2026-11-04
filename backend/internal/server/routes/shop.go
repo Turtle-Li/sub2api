@@ -38,11 +38,13 @@ func RegisterShopRoutes(v1 *gin.RouterGroup, h *handler.ShopHandler, jwt middlew
 	ops := v1.Group("/admin/shop")
 	ops.Use(shopNoStore, shopAdminJWT, gin.HandlerFunc(admin), limits.Global(), gin.HandlerFunc(audit), middleware.AdminComplianceGuard(settings))
 	ops.GET("/products", h.AdminProducts)
+	ops.GET("/action-integrations", h.ActionIntegrations)
 	ops.POST("/products", h.SaveProduct)
 	ops.PUT("/products/:id", h.SaveProduct)
 	ops.GET("/orders", h.Orders)
 	ops.GET("/orders/:id", h.AdminOrder)
 	ops.POST("/orders/:id/input/reveal", h.RevealInput)
 	ops.POST("/orders/:id/action", h.Action)
+	ops.POST("/orders/:id/automation", h.ManageAutomation)
 	ops.POST("/orders/:id/notifications/retry", h.RetryNotifications)
 }

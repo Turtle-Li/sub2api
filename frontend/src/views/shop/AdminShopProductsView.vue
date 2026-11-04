@@ -4,8 +4,9 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ShopProductEditor from '@/components/shop/ShopProductEditor.vue'
 import { shopAPI } from '@/api/shop'
-import { shopDuration, shopModeLabels, type ShopProduct, type ShopProductInput } from '@/types/shop'
+import { shopDuration, shopDeliveryLabel, type ShopIntegrationOption, type ShopProduct, type ShopProductInput } from '@/types/shop'
 const products = ref<ShopProduct[]>([])
+const integrations = ref<ShopIntegrationOption[]>([])
 const selected = ref<ShopProduct | null>(null)
 const editing = ref(false)
 const busy = ref(false)
@@ -14,7 +15,7 @@ const error = ref('')
 async function load() {
   loading.value = true
   error.value = ''
-  try { products.value = (await shopAPI.adminProducts()).data }
+  try { products.value = (await shopAPI.adminProducts()).data; integrations.value = (await shopAPI.actionIntegrations()).data }
   catch { error.value = '商品加载失败，请重试。' }
   finally { loading.value = false }
 }
@@ -42,7 +43,7 @@ onMounted(load)
       <header class="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight text-gray-950 dark:text-gray-50">商店商品</h1>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">配置人工服务的价格、时长、履约方式和使用指南。</p>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">配置商品价格、时长、付款后操作和使用指南。</p>
         </div>
         <button type="button" :disabled="busy || loading" class="min-h-11 shrink-0 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-gray-950" @click="edit(null)">新增商品</button>
       </header>
@@ -84,7 +85,7 @@ onMounted(load)
               <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                 <tr v-for="product in products" :key="product.id" class="align-middle hover:bg-gray-50/80 dark:hover:bg-gray-800/40">
                   <td class="max-w-xs px-4 py-3.5"><p class="break-words font-medium text-gray-900 dark:text-gray-100">{{ product.name || '未命名商品' }}</p><p class="mt-1 break-words text-xs text-gray-500 dark:text-gray-400">{{ product.category || '未设置分类' }}</p></td>
-                  <td class="px-3 py-3.5 text-gray-700 dark:text-gray-200">{{ shopModeLabels[product.fulfillment_mode] }}</td>
+                  <td class="px-3 py-3.5 text-gray-700 dark:text-gray-200">{{ shopDeliveryLabel(product) }}</td>
                   <td class="whitespace-nowrap px-3 py-3.5"><p class="font-medium text-gray-900 dark:text-gray-100">¥{{ product.price.toFixed(2) }}</p><p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ shopDuration(product) }}</p></td>
                   <td class="px-3 py-3.5 text-gray-700 dark:text-gray-200">{{ product.sort_order }}</td>
                   <td class="px-3 py-3.5"><span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" :class="product.enabled ? 'bg-primary-50 text-primary-800 dark:bg-primary-950/60 dark:text-primary-200' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"><span class="h-1.5 w-1.5 rounded-full" :class="product.enabled ? 'bg-primary-500' : 'bg-gray-400'" aria-hidden="true"></span>{{ product.enabled ? '已上线' : '草稿 / 停用' }}</span></td>
@@ -103,7 +104,7 @@ onMounted(load)
               </div>
               <dl class="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
                 <dt class="text-gray-500 dark:text-gray-400">价格</dt><dd class="text-gray-800 dark:text-gray-200">¥{{ product.price.toFixed(2) }} / {{ shopDuration(product) }}</dd>
-                <dt class="text-gray-500 dark:text-gray-400">模式</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopModeLabels[product.fulfillment_mode] }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">模式</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopDeliveryLabel(product) }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">排序</dt><dd class="text-gray-800 dark:text-gray-200">{{ product.sort_order }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">更新</dt><dd class="text-gray-800 dark:text-gray-200">{{ new Date(product.updated_at).toLocaleString('zh-CN') }}</dd>
               </dl>
@@ -116,7 +117,7 @@ onMounted(load)
       <BaseDialog :show="editing" :title="selected ? '编辑商品' : '新增商品'" width="wide" :close-on-click-outside="!busy" :close-on-escape="!busy" :show-close-button="!busy" @close="editing = false">
         <div>
           <div v-if="error" role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-800 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">{{ error }}</div>
-          <ShopProductEditor :key="selected?.id ?? 'new'" :product="selected" :busy="busy" @save="save" />
+          <ShopProductEditor :key="selected?.id ?? 'new'" :product="selected" :busy="busy" :integrations="integrations" @save="save" />
         </div>
         <template #footer>
           <div class="flex flex-wrap items-center justify-between gap-3">

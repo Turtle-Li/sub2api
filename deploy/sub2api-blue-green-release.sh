@@ -110,6 +110,12 @@ FEISHU_ENABLED=false
 FEISHU_VAULT_VOLUME=sub2api_feishu_vault
 CONTAINER_FEISHU_VAULT_PATH=/run/sub2api-feishu-vault
 FEISHU_VAULT_MOUNT_ARGS=()
+SHOP_DAYPASS_ENABLED="${SHOP_DAYPASS_ENABLED:-false}"
+SHOP_DAYPASS_PRODUCT_ID="${SHOP_DAYPASS_PRODUCT_ID:-0}"
+DAYPASS_VAULT_MOUNT_ARGS=()
+DAYPASS_VAULT_VOLUME=sub2api_daypass_vault
+CONTAINER_DAYPASS_VAULT_PATH=/run/sub2api-daypass-vault
+DAYPASS_VAULT_HELPER="${APP_DIR}/scripts/sub2api-daypass-vault-container.sh"
 # Existing approved enrollment is Alipay sandbox. A method expansion must be
 # explicit in the public runtime configuration, never an application default.
 UNIFIED_PAYMENT_PAYMENT_METHODS="${UNIFIED_PAYMENT_PAYMENT_METHODS:-alipay}"
@@ -941,6 +947,7 @@ container_matches_local_compatibility_container() {
   new_temp_file
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
+  container_matches_daypass_runtime "$container" "$inspect_mounts" || return 1
   bot_mount_count="$(awk -F '|' -v target="$CONTAINER_FEISHU_VAULT_PATH" '$3 == target { n++ } END { print n+0 }' "$inspect_mounts")"
   if [ "$FEISHU_ENABLED" = true ]; then
     [ "$bot_mount_count" -eq 1 ] || return 1
@@ -1034,6 +1041,59 @@ resolve_feishu_expectation() {
   fi
 }
 
+validate_daypass_runtime() {
+  local sidecar_image
+  require_bool SHOP_DAYPASS_ENABLED "$SHOP_DAYPASS_ENABLED"
+  [[ "$SHOP_DAYPASS_PRODUCT_ID" =~ ^[0-9]+$ ]] || die "invalid day-pass SKU"
+  [ "${SHOP_DAYPASS_BEARER+x}" != x ] || die "raw day-pass bearer is forbidden"
+  [ "${DAYPASS_SHOP_BEARER+x}" != x ] || die "raw day-pass bearer is forbidden"
+  if [ "$SHOP_DAYPASS_ENABLED" = true ]; then
+    [[ "$SHOP_DAYPASS_PRODUCT_ID" =~ ^[1-9][0-9]*$ ]] || die "day-pass SKU is required"
+    [ -x "$DAYPASS_VAULT_HELPER" ] && [ ! -L "$DAYPASS_VAULT_HELPER" ] || die "day-pass agent helper is missing"
+    sidecar_image="$(docker inspect sub2api-daypass-vault --format '{{.Config.Image}}')" || die "day-pass agent is missing"
+    bash "$DAYPASS_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null || die "day-pass agent is locked or invalid"
+    DAYPASS_VAULT_MOUNT_ARGS=(--mount "type=volume,source=$DAYPASS_VAULT_VOLUME,target=$CONTAINER_DAYPASS_VAULT_PATH,readonly")
+  fi
+}
+
+container_matches_daypass_runtime() {
+  local container="$1" mounts_file="$2" enabled flags product count
+  flags="$(docker inspect "$container" --format '{{json .Config.Env}}' | python3 -c '
+import json, re, sys
+try:
+    environment = json.load(sys.stdin)
+except (TypeError, ValueError):
+    raise SystemExit(1)
+if not isinstance(environment, list) or any(not isinstance(item, str) for item in environment):
+    raise SystemExit(1)
+for name in ("SHOP_DAYPASS_BEARER", "DAYPASS_SHOP_BEARER"):
+    if any(item == name or item.startswith(name + "=") for item in environment):
+        raise SystemExit(1)
+def one(name, default):
+    matches = [item[len(name)+1:] for item in environment if item.startswith(name+"=")]
+    if name in environment or len(matches) > 1:
+        raise SystemExit(1)
+    return matches[0] if matches else default
+enabled = one("SHOP_DAYPASS_ENABLED", "false")
+product = one("SHOP_DAYPASS_PRODUCT_ID", "0")
+if enabled not in ("true", "false") or not re.fullmatch(r"[0-9]+", product):
+    raise SystemExit(1)
+if enabled == "true" and not re.fullmatch(r"[1-9][0-9]*", product):
+    raise SystemExit(1)
+print(enabled + "|" + product)
+')" || return 1
+  IFS='|' read -r enabled product <<<"$flags"
+  [ "$enabled" = "$SHOP_DAYPASS_ENABLED" ] || return 1
+  count="$(awk -F '|' -v target="$CONTAINER_DAYPASS_VAULT_PATH" '$3==target {n++} END {print n+0}' "$mounts_file")"
+  if [ "$enabled" = true ]; then
+    [ "$product" = "$SHOP_DAYPASS_PRODUCT_ID" ] || return 1
+    [ "$count" = 1 ] || return 1
+    grep -qxF "volume|$DAYPASS_VAULT_VOLUME|$CONTAINER_DAYPASS_VAULT_PATH|false" "$mounts_file" || return 1
+  else
+    [ "$count" = 0 ] || return 1
+  fi
+}
+
 container_matches_feishu_env() {
   local inspect_env="$1" count actual
   ! grep -q '^SUB2API_FEISHU_WEBHOOK_URL=' "$inspect_env" || return 1
@@ -1083,6 +1143,12 @@ make_runtime_env_file() {
   while IFS= read -r line || [ -n "$line" ]; do
     key="${line%%=*}"
 	case "$key" in
+      SHOP_DAYPASS_ENABLED|SHOP_DAYPASS_PRODUCT_ID)
+        continue
+        ;;
+      SHOP_DAYPASS_BEARER|DAYPASS_SHOP_BEARER)
+        die "raw day-pass bearer is forbidden"
+        ;;
       SUB2API_FEISHU_ENABLED)
         continue
         ;;
@@ -1158,6 +1224,7 @@ make_runtime_env_file() {
 	write_batch_image_delivery_cos_overrides "$output_file"
   write_url_allowlist_overrides "$output_file"
   printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
+  printf 'SHOP_DAYPASS_ENABLED=%s\nSHOP_DAYPASS_PRODUCT_ID=%s\n' "$SHOP_DAYPASS_ENABLED" "$SHOP_DAYPASS_PRODUCT_ID" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
 }
 
@@ -1197,12 +1264,14 @@ container_matches_external_runtime() {
   new_temp_file
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
+  container_matches_daypass_runtime "$container" "$inspect_mounts" || return 1
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
   expected_mount_count=3
   [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 3))
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$IMAGE_UPSCALE_VAULT_REQUIRED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$SHOP_DAYPASS_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   if [ "$FEISHU_ENABLED" = true ]; then
     grep -qxF "volume|$FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" "$inspect_mounts" || return 1
@@ -1290,11 +1359,13 @@ container_matches_local_runtime() {
   new_temp_file
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
+  container_matches_daypass_runtime "$container" "$inspect_mounts" || return 1
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
   expected_mount_count=4
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$IMAGE_UPSCALE_VAULT_REQUIRED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$SHOP_DAYPASS_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   if [ "$FEISHU_ENABLED" = true ]; then
     grep -qxF "volume|$FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" "$inspect_mounts" || return 1
@@ -1351,6 +1422,7 @@ create_external_target() {
       "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
       "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
+    "${DAYPASS_VAULT_MOUNT_ARGS[@]+${DAYPASS_VAULT_MOUNT_ARGS[@]}}" \
       --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	  --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
@@ -1367,6 +1439,7 @@ create_external_target() {
     "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
     "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
+    "${DAYPASS_VAULT_MOUNT_ARGS[@]+${DAYPASS_VAULT_MOUNT_ARGS[@]}}" \
     --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	--mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
     --restart "$restart_policy" \
@@ -1387,6 +1460,7 @@ create_local_target() {
 	  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
       "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
+    "${DAYPASS_VAULT_MOUNT_ARGS[@]+${DAYPASS_VAULT_MOUNT_ARGS[@]}}" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$HEALTH_TOKEN_FILE,target=$CONTAINER_HEALTH_TOKEN_PATH,readonly" \
@@ -1401,6 +1475,7 @@ create_local_target() {
 	"${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
     "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
+    "${DAYPASS_VAULT_MOUNT_ARGS[@]+${DAYPASS_VAULT_MOUNT_ARGS[@]}}" \
     --restart unless-stopped \
     "$NEW_IMAGE" >/dev/null
   fi
@@ -1912,6 +1987,7 @@ fi
 validate_unified_payment_runtime
 validate_batch_image_delivery_cos_runtime
 validate_image_upscale_runtime
+validate_daypass_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env
   validate_external_ca_file
@@ -2098,6 +2174,7 @@ else
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
           "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
+    "${DAYPASS_VAULT_MOUNT_ARGS[@]+${DAYPASS_VAULT_MOUNT_ARGS[@]}}" \
 		  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$HEALTH_TOKEN_FILE,target=$CONTAINER_HEALTH_TOKEN_PATH,readonly" \
@@ -2111,6 +2188,7 @@ else
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
           "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
+    "${DAYPASS_VAULT_MOUNT_ARGS[@]+${DAYPASS_VAULT_MOUNT_ARGS[@]}}" \
 		  --restart no "$NEW_IMAGE" >/dev/null
 		container_matches_local_compatibility_container "$NEW_CONTAINER" \
 		  || die "local precreated target failed fixed-egress or Feishu configuration verification"

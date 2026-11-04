@@ -13,17 +13,67 @@ import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import { isManualShopPaymentConfirmed } from '@/components/payment/manualShopPayment'
 const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), createOrder: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
 const checkoutAPI = vi.hoisted(() => ({ getCheckoutInfo: vi.fn() }))
+const route = vi.hoisted(() => ({ params: { id: '42' }, path: '/shop/help/chatgpt-plus-account' }))
 vi.mock('@/api/shop', () => ({ shopAPI: api }))
 vi.mock('@/api/payment', () => ({ paymentAPI: checkoutAPI }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ contactInfo: '测试客服入口' }) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: '42' } }), useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/composables/useStepUp', () => ({ useStepUp: () => ({ run: (fn: () => Promise<unknown>) => fn(), onCancel: vi.fn() }), isStepUpCancelled: () => false }))
 const product: ShopProduct = { id: 1, name: '测试商品', category: 'Gemini', summary: '', description: '', price: 12, currency: 'CNY', duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', input_format: 'session_json', input_url: '', input_instructions: '', guide_key: '', enabled: true, sort_order: 0, revision: 1, created_at: '', updated_at: '' }
 const order = (): ShopOrderDetail => ({ order_id: 42, out_trade_no: 'shop-test-42', product, user_id: 8, pay_amount: 12, currency: 'CNY', payment_status: 'PAID', fulfillment_status: 'WAITING_INPUT', revision: 3, input_revision: 0, input_account: '', created_at: '2026-11-04T12:00:00Z', status_note: '', email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: true, can_start: false, can_complete: false, can_reveal_input: false })
 const global = { stubs: { AppLayout: { template: '<main><slot /></main>' }, RouterLink: { template: '<a><slot /></a>' }, ShopOrderSummary: true, TotpStepUpDialog: true, BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' } } }
 enableAutoUnmount(afterEach)
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
+describe('automatic day-pass surfaces', () => {
+  const daypass = { ...product, name: 'DeepSeek 24 小时日卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
+  it('shows the paid clock and key restrictions without the manual delivery estimate', async () => {
+    api.product.mockResolvedValue({ data: daypass })
+    const wrapper = mount(ShopProductView, { global })
+    await flushPromises()
+    expect(wrapper.text()).toContain('付款时开始计时')
+    expect(wrapper.text()).toContain('默认 2 并发')
+    expect(wrapper.text()).toContain('同一 IP')
+    expect(wrapper.text()).not.toContain('5分钟')
+    expect(wrapper.text()).not.toContain('2小时操作')
+  })
+  it('refreshes automatic delivery into a buyer-only masked key with the API guide', async () => {
+    api.order.mockResolvedValueOnce({ data: { ...order(), product: daypass, fulfillment_status: 'QUEUED', can_submit: false } })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在自动发放 API Key')
+    expect(wrapper.text()).toContain('有效期从付款时间开始计算')
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    api.order.mockResolvedValueOnce({ data: { ...order(), product: daypass, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', can_submit: false, delivery_content: 'API Key: sk-fictional-daypass' } })
+    await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('a[aria-label="API Key 使用指南"]').attributes('to')).toBe('/shop/help/deepseek-daypass')
+    expect(wrapper.text()).not.toContain('sk-fictional-daypass')
+    expect(wrapper.text()).toContain('API Key 已交付')
+    expect(wrapper.text()).not.toContain('账号已交付')
+    expect(wrapper.text()).not.toContain('成品号使用指南')
+    expect(api.submitInput).not.toHaveBeenCalled()
+  })
+  it('prefills the fixed product contract when the admin selects automatic day-pass delivery', async () => {
+    const wrapper = mount(ShopProductEditor, { props: { product: null, busy: false } })
+    await wrapper.get('#guide-key').setValue('deepseek-daypass')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ price: 6, duration_value: 1, duration_unit: 'day', fulfillment_mode: 'account_delivery', guide_key: 'deepseek-daypass', enabled: false })
+  })
+  it('renders working API guide anchors and the formal endpoint without account login steps', () => {
+    route.path = '/shop/help/deepseek-daypass'
+    const wrapper = mount(ShopGuideView, { global })
+    const article = wrapper.get('article')
+    expect(article.text()).toContain('https://ds.turtleligpt.com/v1')
+    expect(article.text()).toContain('deepseek-v4.1-flash')
+    expect(article.text()).toContain('deepseek-v4-pro')
+    expect(article.text()).not.toContain('outlook')
+    for (const link of wrapper.findAll('a[href^="#"]')) {
+      expect(article.element.contains(wrapper.get(link.attributes('href')).element)).toBe(true)
+    }
+    expect(article.findAll('img')).toHaveLength(0)
+  })
+})
 describe('manual shop surfaces', () => {
   it('offers configured payment methods without an available field and submits the selected method', async () => {
     const limit = { currency: 'CNY', fee_rate: 0, daily_limit: 0, single_min: 0.1, single_max: 0.1 }

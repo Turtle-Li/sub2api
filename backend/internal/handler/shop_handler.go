@@ -50,6 +50,34 @@ func shopID(c *gin.Context) (int64, bool) {
 
 func (h *ShopHandler) Products(c *gin.Context)      { h.products(c, false) }
 func (h *ShopHandler) AdminProducts(c *gin.Context) { h.products(c, true) }
+
+func (h *ShopHandler) ActionIntegrations(c *gin.Context) {
+	response.Success(c, h.shop.ActionIntegrations())
+}
+
+func (h *ShopHandler) ManageAutomation(c *gin.Context) {
+	if !middleware.EnforceStepUp(c, h.totp, h.users, h.settings) {
+		return
+	}
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	id, ok := shopID(c)
+	if !ok {
+		return
+	}
+	var input service.ShopAutomationInput
+	if !decodeShopRequest(c, &input, 4096) {
+		return
+	}
+	out, err := h.shop.ManageAutomation(c.Request.Context(), id, subject.UserID, input)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, out)
+}
 func (h *ShopHandler) products(c *gin.Context, admin bool) {
 	items, err := h.shop.Products(c.Request.Context(), admin)
 	if err != nil {

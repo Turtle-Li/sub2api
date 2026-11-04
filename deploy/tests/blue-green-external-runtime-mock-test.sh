@@ -33,6 +33,10 @@ BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF='vault://secret/data/test/sub2api-batc
 BATCH_IMAGE_DELIVERY_COS_SOCKET='/run/sub2api-upscale-vault/public.sock'
 
 cleanup() {
+  local result=$?
+  if [ "$result" != 0 ] && [ -f "$OUTPUT" ]; then
+    tail -n 40 "$OUTPUT" >&2
+  fi
   rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
@@ -228,6 +232,7 @@ case "$command_name" in
     [ -d "$(path_for "$name")" ] || exit 1
     [ -n "$format" ] || exit 0
     case "$format" in
+      *'json .Config.Env'*) python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().splitlines()))' <"$(path_for "$name")/env" ;;
       *Config.Env*) cat "$(path_for "$name")/env" ;;
       *Config.Image*) meta "$name" image ;;
       *HostConfig.RestartPolicy.Name*) meta "$name" restart ;;

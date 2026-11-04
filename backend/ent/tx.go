@@ -84,6 +84,8 @@ type Tx struct {
 	ShopFulfillment *ShopFulfillmentClient
 	// ShopNotification is the client for interacting with the ShopNotification builders.
 	ShopNotification *ShopNotificationClient
+	// ShopOrderAction is the client for interacting with the ShopOrderAction builders.
+	ShopOrderAction *ShopOrderActionClient
 	// ShopProduct is the client for interacting with the ShopProduct builders.
 	ShopProduct *ShopProductClient
 	// SubscriptionPlan is the client for interacting with the SubscriptionPlan builders.
@@ -272,6 +274,7 @@ func (tx *Tx) init() {
 	tx.Setting = NewSettingClient(tx.config)
 	tx.ShopFulfillment = NewShopFulfillmentClient(tx.config)
 	tx.ShopNotification = NewShopNotificationClient(tx.config)
+	tx.ShopOrderAction = NewShopOrderActionClient(tx.config)
 	tx.ShopProduct = NewShopProductClient(tx.config)
 	tx.SubscriptionPlan = NewSubscriptionPlanClient(tx.config)
 	tx.TLSFingerprintProfile = NewTLSFingerprintProfileClient(tx.config)

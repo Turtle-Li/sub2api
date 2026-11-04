@@ -363,6 +363,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: false, title: '商城', requiresPayment: false }
   },
   {
+    path: '/shop/help/deepseek-daypass',
+    name: 'ShopDaypassGuide',
+    component: () => import('@/views/shop/ShopGuideView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: 'API 日卡使用指南', requiresPayment: false }
+  },
+  {
     path: '/admin/shop/products',
     name: 'AdminShopProducts',
     component: () => import('@/views/shop/AdminShopProductsView.vue'),

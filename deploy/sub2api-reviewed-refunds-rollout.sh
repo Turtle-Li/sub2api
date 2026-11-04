@@ -306,7 +306,7 @@ isolated_vault_sidecar_is_safe() {
   local container_id="$1" container_name="$2" volume public_dir admin_dir allowed_ref
   local command health mounts tmpfs expected_tmpfs
 
-  # These two credential agents carry the application source label but have no
+  # These credential agents carry the application source label but have no
   # network, writable root filesystem, or application command.  Exempt them
   # only when their complete installed-container profile is intact.
   case "$container_name" in
@@ -315,6 +315,12 @@ isolated_vault_sidecar_is_safe() {
       public_dir='/run/sub2api-payment-vault'
       admin_dir='/run/sub2api-payment-vault-admin'
       allowed_ref='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+      ;;
+    /sub2api-daypass-vault)
+      volume='sub2api_daypass_vault'
+      public_dir='/run/sub2api-daypass-vault'
+      admin_dir='/run/sub2api-daypass-vault-admin'
+      allowed_ref='vault://secret/data/ops/newapi/daypass#bearer'
       ;;
     /sub2api-feishu-vault)
       volume='sub2api_feishu_vault'

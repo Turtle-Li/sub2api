@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import content from '@/content/shop/chatgpt-plus-account.html?raw'
+import daypassContent from '@/content/shop/deepseek-daypass.html?raw'
 
-const html = DOMPurify.sanitize(content)
-const sections = [
+const route = useRoute()
+const daypass = computed(() => route.path === '/shop/help/deepseek-daypass')
+const html = computed(() => DOMPurify.sanitize(daypass.value ? daypassContent : content))
+const sections = computed(() => daypass.value ? [
+  { id: 'receive', title: '领取 API Key' },
+  { id: 'configure', title: '配置客户端' },
+  { id: 'limits', title: '并发与 IP 限制' },
+  { id: 'expiry', title: '有效期与售后' }
+] : [
   { id: 'prepare', title: '开始前准备' },
   { id: 'email-login', title: '登录微软邮箱' },
   { id: 'chatgpt-login', title: '登录 ChatGPT' },
@@ -12,7 +22,7 @@ const sections = [
   { id: 'checklist', title: '完成检查' },
   { id: 'faq', title: '常见问题' },
   { id: 'warranty', title: '售后与质保' }
-]
+])
 </script>
 <template>
   <AppLayout>
@@ -21,8 +31,8 @@ const sections = [
 
       <header class='guide-header'>
         <p class='guide-eyebrow'>使用指南</p>
-        <h1>ChatGPT Plus 成品号使用指南</h1>
-        <p class='guide-intro'>从准备、登录到安全设置，按章节查阅完整步骤。</p>
+        <h1>{{ daypass ? 'DeepSeek API 日卡使用指南' : 'ChatGPT Plus 成品号使用指南' }}</h1>
+        <p class='guide-intro'>{{ daypass ? '领取 Key，配置客户端，了解调用限制与有效期。' : '从准备、登录到安全设置，按章节查阅完整步骤。' }}</p>
       </header>
 
       <div class='guide-layout'>

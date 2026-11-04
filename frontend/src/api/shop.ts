@@ -1,6 +1,6 @@
 import { apiClient } from './client'
 import type { CreateOrderResult } from '@/types/payment'
-import type { ShopAction, ShopInputCheck, ShopOrderDetail, ShopProduct, ShopProductInput } from '@/types/shop'
+import type { ShopAction, ShopInputCheck, ShopIntegrationOption, ShopOrderDetail, ShopProduct, ShopProductInput } from '@/types/shop'
 
 export const shopAPI = {
   products: () => apiClient.get<ShopProduct[]>('/shop/products'),
@@ -11,6 +11,8 @@ export const shopAPI = {
   checkInput: (id: number, input: { content: string; revision: number }) => apiClient.post<ShopInputCheck>(`/shop/orders/${id}/input/check`, input),
   submitInput: (id: number, input: { content: string; revision: number }) => apiClient.post<ShopOrderDetail>(`/shop/orders/${id}/input`, input),
   adminProducts: () => apiClient.get<ShopProduct[]>('/admin/shop/products'),
+  actionIntegrations: () => apiClient.get<ShopIntegrationOption[]>('/admin/shop/action-integrations'),
+  manageAutomation: (id: number, action: 'retry' | 'revoke', claim_revision: number) => apiClient.post<ShopOrderDetail>(`/admin/shop/orders/${id}/automation`, { action, claim_revision }),
   saveProduct: (id: number | null, input: ShopProductInput) => id === null
     ? apiClient.post<ShopProduct>('/admin/shop/products', input)
     : apiClient.put<ShopProduct>(`/admin/shop/products/${id}`, input),

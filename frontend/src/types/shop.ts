@@ -1,4 +1,24 @@
 import type { OrderStatus } from './payment'
+
+export interface ShopIntegrationOption { id: string; version: number; adapter: string; enabled: boolean }
+export interface ShopPaymentAction { binding_key: string; adapter: string; integration_ref: string; integration_version: number; params: Record<string, unknown> }
+export type ShopAutomationState = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'REVIEW_REQUIRED' | 'CANCELLED' | 'COMPENSATING' | 'REVOKED'
+export interface ShopAutomationStatus {
+  status: ShopAutomationState
+  result_kind: 'none' | 'text'
+  action_id?: string
+  attempts?: number
+  claim_revision?: number
+  next_attempt_at?: string
+  error_kind?: string
+  can_retry?: boolean
+  can_revoke?: boolean
+  revoke_required?: boolean
+}
+export const shopAutomationLabels: Record<ShopAutomationState, string> = {
+  PENDING: '等待自动处理', RUNNING: '正在自动交付', SUCCEEDED: '自动交付完成',
+  REVIEW_REQUIRED: '交付待复核', CANCELLED: '自动交付已停止', COMPENSATING: '正在撤销授权', REVOKED: '授权已撤销'
+}
 export type ShopMode = 'session_topup' | 'account_delivery'
 export type ShopStatus = 'WAITING_PAYMENT' | 'WAITING_INPUT' | 'QUEUED' | 'PROCESSING' | 'NEEDS_INPUT' | 'COMPLETED' | 'CLOSED'
 export type ShopNotificationStatus = 'NOT_SENT' | 'PENDING' | 'SENDING' | 'SENT' | 'FAILED'
@@ -16,12 +36,14 @@ export interface ShopProduct {
   input_format: 'session_json' | 'text'
   input_url: string
   input_instructions: string
-  guide_key: '' | 'chatgpt-plus-account'
+  guide_key: '' | 'chatgpt-plus-account' | 'deepseek-daypass'
   enabled: boolean
   sort_order: number
   revision: number
   created_at: string
   updated_at: string
+  payment_actions?: ShopPaymentAction[]
+  automatic_fulfillment?: boolean
 }
 export type ShopProductInput = Omit<ShopProduct, 'id' | 'currency' | 'created_at' | 'updated_at' | 'revision'> & { revision?: number }
 export interface ShopInputCheck {
@@ -56,6 +78,8 @@ export interface ShopOrderDetail {
   can_start: boolean
   can_complete: boolean
   can_reveal_input: boolean
+  automation?: ShopAutomationStatus
+  delivery_kind?: 'none' | 'text'
 }
 export interface ShopAction {
   action: 'start' | 'request_input' | 'complete'
@@ -72,6 +96,8 @@ export const shopNotificationLabels: Record<ShopNotificationStatus, string> = {
   NOT_SENT: '未发送', PENDING: '等待发送', SENDING: '发送中', SENT: '已发送', FAILED: '发送失败'
 }
 export const shopModeLabels: Record<ShopMode, string> = { session_topup: '提交资料 · 人工代充', account_delivery: '人工账号交付' }
+export function isShopDaypass(product: ShopProduct): boolean { return product.guide_key === 'deepseek-daypass' }
+export function shopDeliveryLabel(product: ShopProduct): string { return product.automatic_fulfillment ? (isShopDaypass(product) ? '付款后自动发放 API Key' : '付款后自动交付') : shopModeLabels[product.fulfillment_mode] }
 export function shopDuration(product: ShopProduct): string {
   return `${product.duration_value} ${ { month: '个月', day: '天', year: '年' }[product.duration_unit] }`
 }
