@@ -76,7 +76,7 @@ export const paymentAPI = {
   },
 
   /** Get current user's orders */
-  getMyOrders(params?: { page?: number; page_size?: number; status?: string; payment_status?: string; fulfillment_status?: string; invoice_status?: string }) {
+  getMyOrders(params?: { order_type?: string; page?: number; page_size?: number; status?: string; payment_status?: string; fulfillment_status?: string; invoice_status?: string }) {
     return apiClient.get<BasePaginationResponse<PaymentOrder>>('/payment/orders/my', { params })
   },
 

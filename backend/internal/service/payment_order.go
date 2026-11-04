@@ -151,7 +151,7 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		s.notificationEmailService.RememberRecipientLocale(ctx, req.UserID, user.Email, req.Locale)
 	}
 	orderAmount := req.Amount
-	if req.OrderType == payment.OrderTypeCollection {
+	if req.OrderType == payment.OrderTypeCollection || req.OrderType == payment.OrderTypeManualShop {
 		orderAmount = 0 // cash collection must never imply wallet credit
 	}
 	limitAmount := req.Amount
@@ -163,6 +163,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		limitAmount = plan.Price
 	}
 	feeRate := cfg.RechargeFeeRate
+	if req.OrderType == payment.OrderTypeManualShop {
+		feeRate = 0
+	}
 	methodCurrency := payment.DefaultPaymentCurrency
 	if opts != nil && opts.ownerTest != nil {
 		methodCurrency = payment.DefaultPaymentCurrency
@@ -240,6 +243,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 	if req.OrderType == payment.OrderTypeResetCard && selectedCurrency != payment.DefaultPaymentCurrency {
 		return nil, ErrResetCardCurrencyUnsupported
 	}
+	if req.OrderType == payment.OrderTypeManualShop && (sel == nil || sel.ProviderKey != payment.TypeUnifiedPay || selectedCurrency != "CNY" || methodCurrency != "CNY") {
+		return nil, infraerrors.ServiceUnavailable("SHOP_PAYMENT_UNAVAILABLE", "商城目前需要配置人民币统一收银台")
+	}
 	if selectedCurrency != methodCurrency {
 		if req.CouponCode != "" {
 			return nil, infraerrors.Conflict("COUPON_QUOTE_CHANGED", "payment currency changed; apply the coupon again")
@@ -265,6 +271,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		}
 	}
 	dbOpts := createOrderDatabaseOptionsFrom(opts)
+	if req.OrderType == payment.OrderTypeManualShop {
+		dbOpts = &createOrderDatabaseOptions{fixedOutTradeNo: shopOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash), shopIdempotent: true}
+	}
 	if req.OrderType == payment.OrderTypeResetCard {
 		dbOpts = &createOrderDatabaseOptions{
 			fixedOutTradeNo:     resetCardOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash),
@@ -284,6 +293,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		if req.OrderType == payment.OrderTypeResetCard && errors.Is(err, errResetCardOrderInsertConflict) {
 			return s.replayResetCardOrder(ctx, req)
 		}
+		if req.OrderType == payment.OrderTypeManualShop && errors.Is(err, errShopOrderInsertConflict) {
+			return s.replayShopOrder(ctx, req)
+		}
 		return nil, err
 	}
 	if opts != nil && opts.ownerTest != nil {
@@ -295,6 +307,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 	}
 	if req.OrderType == payment.OrderTypeResetCard && !created {
 		return s.replayResetCardOrderRecord(ctx, order, req)
+	}
+	if req.OrderType == payment.OrderTypeManualShop && !created {
+		return s.replayShopOrderRecord(ctx, order, req)
 	}
 	if req.OrderType == payment.OrderTypeResetCard {
 		resp, invokeErr := s.invokeResetCardProvider(ctx, order, req, cfg)
@@ -347,6 +362,11 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 	}
 	// 订单类型必须走白名单：未知类型会跳过充值开关与倍率计算，履约时却仍按余额到账。
 	switch req.OrderType {
+	case payment.OrderTypeManualShop:
+		if req.shopProduct == nil || req.shopProduct.Price != req.Amount || !req.shopProduct.Enabled || req.Amount <= 0 {
+			return nil, infraerrors.BadRequest("SHOP_PRODUCT_INVALID", "商品不可购买")
+		}
+		return nil, nil
 	case payment.OrderTypeBalance:
 		if cfg.BalanceDisabled {
 			return nil, infraerrors.Forbidden("BALANCE_PAYMENT_DISABLED", "balance recharge has been disabled")
@@ -1161,9 +1181,11 @@ type createOrderDatabaseOptions struct {
 	providerSnapshot    map[string]any
 	lockOwnerTestUser   bool
 	resetCardIdempotent bool
+	shopIdempotent      bool
 }
 
 var errResetCardOrderInsertConflict = errors.New("reset card order insert conflict")
+var errShopOrderInsertConflict = errors.New("shop order insert conflict")
 
 type resetCardOrderSnapshotSource struct {
 	plan                *dbent.SubscriptionPlan
@@ -1306,6 +1328,29 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	}
 	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
+	if opts != nil && opts.shopIdempotent {
+		lockedUserQuery := tx.User.Query().Where(user.IDEQ(req.UserID))
+		if tx.Client().Driver().Dialect() == dialect.Postgres {
+			lockedUserQuery.ForUpdate()
+		}
+		lockedUser, lockErr := lockedUserQuery.Only(ctx)
+		if lockErr != nil {
+			return nil, false, fmt.Errorf("lock shop buyer: %w", lockErr)
+		}
+		if lockedUser.Status != StatusActive {
+			return nil, false, infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
+		}
+		existing, lookupErr := tx.PaymentOrder.Query().Where(paymentorder.OutTradeNoEQ(opts.fixedOutTradeNo)).Only(ctx)
+		if lookupErr == nil {
+			return existing, false, nil
+		}
+		if !dbent.IsNotFound(lookupErr) {
+			return nil, false, lookupErr
+		}
+		if err := revalidateShopProductTx(ctx, tx.Client(), req.shopProduct); err != nil {
+			return nil, false, err
+		}
+	}
 	if opts != nil && opts.resetCardIdempotent {
 		if opts.fixedOutTradeNo == "" {
 			return nil, false, ErrIdempotencyKeyRequired
@@ -1428,6 +1473,11 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	if tm <= 0 {
 		tm = defaultOrderTimeoutMin
 	}
+	// The unified gateway requires a full five minutes at dispatch. Reserve
+	// headroom for the catalog transaction and network round trip at the minimum.
+	if req.OrderType == payment.OrderTypeManualShop && tm < 6 {
+		tm = 6
+	}
 	now := time.Now()
 	exp := now.Add(time.Duration(tm) * time.Minute)
 	if resetCardSource != nil {
@@ -1519,6 +1569,11 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		b.SetProductSnapshot(buildPaymentBalanceProductSnapshot(req.Amount, orderAmount, payAmount, cfg.RechargeOptions))
 	} else if req.OrderType == payment.OrderTypeCollection {
 		b.SetProductSnapshot(map[string]any{"name": "自定义收款", "type": payment.OrderTypeCollection, "credited_amount": 0, "pay_amount": payAmount})
+	} else if req.OrderType == payment.OrderTypeManualShop {
+		if req.shopProduct == nil {
+			return nil, false, infraerrors.BadRequest("SHOP_PRODUCT_INVALID", "missing shop product")
+		}
+		b.SetProductSnapshot(map[string]any{"schema_version": 1, "kind": payment.OrderTypeManualShop, "name": req.shopProduct.Name, "description": req.shopProduct.Summary, "product_id": req.shopProduct.ID, "price": req.shopProduct.Price, "pay_amount": payAmount, "currency": "CNY", "credited_amount": 0, "duration_value": req.shopProduct.DurationValue, "duration_unit": req.shopProduct.DurationUnit, "fulfillment_mode": req.shopProduct.FulfillmentMode})
 	}
 	if req.CouponCode != "" {
 		if req.couponQuote == nil {
@@ -1540,6 +1595,9 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	order, err := b.Save(ctx)
 	if err != nil {
 		if opts != nil && opts.fixedOutTradeNo != "" && dbent.IsConstraintError(err) {
+			if opts.shopIdempotent {
+				return nil, false, errShopOrderInsertConflict
+			}
 			if opts.resetCardIdempotent {
 				return nil, false, errResetCardOrderInsertConflict
 			}
@@ -1551,6 +1609,11 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	order, err = tx.PaymentOrder.UpdateOneID(order.ID).SetRechargeCode(code).Save(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("set recharge code: %w", err)
+	}
+	if req.OrderType == payment.OrderTypeManualShop {
+		if err := createShopFulfillmentTx(txCtx, tx.Client(), order, *req.shopProduct); err != nil {
+			return nil, false, fmt.Errorf("create shop fulfillment: %w", err)
+		}
 	}
 	if req.CouponCode != "" {
 		if err := applyPaymentDiscountSnapshot(order, req.couponQuote); err != nil {
@@ -1999,6 +2062,9 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 			WithMetadata(map[string]string{"provider": sel.ProviderKey, "instance_id": sel.InstanceID})
 	}
 	subject := s.buildPaymentSubject(plan, limitAmount, cfg, sel)
+	if req.OrderType == payment.OrderTypeManualShop {
+		subject = "商城商品"
+	}
 	if req.OrderType == payment.OrderTypeResetCard {
 		subject = "订阅重置卡"
 	}

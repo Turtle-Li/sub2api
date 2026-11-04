@@ -1,6 +1,7 @@
 <template>
   <AppLayout>
     <div class="space-y-4">
+      <RouterLink to="/admin/shop/products" class="btn btn-secondary">商城人工服务商品配置</RouterLink>
       <div class="inline-flex rounded-lg bg-gray-100 p-1 dark:bg-dark-800" role="tablist" :aria-label="t('payment.admin.productConfig')">
         <button
           v-for="tab in catalogTabs"

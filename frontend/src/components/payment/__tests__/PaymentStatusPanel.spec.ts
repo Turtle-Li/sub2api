@@ -120,6 +120,21 @@ describe('PaymentStatusPanel', () => {
     vi.useRealTimers()
   })
 
+  it('settles a paid manual shop order without waiting for manual delivery', async () => {
+    pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-04T12:00:00Z' })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: { orderId: 42, qrCode: 'https://qr.alipay.com/qr-42', expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', orderType: 'manual_shop' },
+      global: { stubs: { Icon: true, RouterLink: { template: '<a><slot /></a>' } } },
+    })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(wrapper.emitted('settled')).toContainEqual(['success'])
+    expect(wrapper.text()).toContain('查看人工交付订单')
+    expect(wrapper.text()).not.toContain('payment.orders.creditedAmount')
+    wrapper.unmount()
+  })
+
   it('keeps RECHARGING in the payment processing state', async () => {
     pollOrderStatus.mockResolvedValue(orderFactory('RECHARGING'))
 

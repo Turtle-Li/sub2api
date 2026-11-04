@@ -12,6 +12,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -54,6 +55,7 @@ func (s *PaymentService) RecoverPendingPaymentOrderFulfillments(ctx context.Cont
 	staleLeaseBefore := now.Add(-paymentFulfillmentLeaseDuration)
 	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
+			paymentorder.OrderTypeNEQ(payment.OrderTypeManualShop),
 			paymentorder.PaidAtNotNil(),
 			paymentFulfillmentRecoveryNoRefundReview(),
 			paymentFulfillmentRecoveryNoResetCardGrantExpiryManualReview(),
@@ -218,7 +220,7 @@ func (s *PaymentService) acquireRecoveryPaymentFulfillmentLease(ctx context.Cont
 }
 
 func isPaymentFulfillmentRecoveryClaimable(order *dbent.PaymentOrder, now time.Time) bool {
-	if order == nil || order.PaidAt == nil || psIsRefundStatus(order.Status) || isResetCardGrantExpiryManualReview(order) || isPaymentDiscountManualReview(order) {
+	if order == nil || order.OrderType == payment.OrderTypeManualShop || order.PaidAt == nil || psIsRefundStatus(order.Status) || isResetCardGrantExpiryManualReview(order) || isPaymentDiscountManualReview(order) {
 		return false
 	}
 	switch order.Status {

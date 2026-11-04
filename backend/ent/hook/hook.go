@@ -405,6 +405,42 @@ func (f SettingFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SettingMutation", m)
 }
 
+// The ShopFulfillmentFunc type is an adapter to allow the use of ordinary
+// function as ShopFulfillment mutator.
+type ShopFulfillmentFunc func(context.Context, *ent.ShopFulfillmentMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShopFulfillmentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShopFulfillmentMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopFulfillmentMutation", m)
+}
+
+// The ShopNotificationFunc type is an adapter to allow the use of ordinary
+// function as ShopNotification mutator.
+type ShopNotificationFunc func(context.Context, *ent.ShopNotificationMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShopNotificationFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShopNotificationMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopNotificationMutation", m)
+}
+
+// The ShopProductFunc type is an adapter to allow the use of ordinary
+// function as ShopProduct mutator.
+type ShopProductFunc func(context.Context, *ent.ShopProductMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShopProductFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShopProductMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopProductMutation", m)
+}
+
 // The SubscriptionPlanFunc type is an adapter to allow the use of ordinary
 // function as SubscriptionPlan mutator.
 type SubscriptionPlanFunc func(context.Context, *ent.SubscriptionPlanMutation) (ent.Value, error)

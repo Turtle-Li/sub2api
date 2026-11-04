@@ -119,6 +119,10 @@
 
 ## Order operations and invoices
 
+- For the configurable shop and manual top-up/account delivery, read
+  `docs/SHOP_MANUAL_FULFILLMENT.md`. Use its dedicated `manual_shop` flow and
+  payment-to-fulfillment lock order. Never auto-grant API credits/subscriptions,
+  log Session/account secrets, or route shop refunds through balance recovery.
 - For order display, purchase snapshots and manual invoice requests, read
   `docs/ORDER_OPERATIONS_20260910.md` and `docs/INVOICING.md`. Payment and
   entitlement delivery are independent persisted facts; never rewrite financial

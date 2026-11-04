@@ -129,6 +129,7 @@ func provideCleanup(
 	paymentMonthlyResetCardDelivery *service.PaymentMonthlyResetCardDeliveryService,
 	paymentRefundReconciliation *service.PaymentRefundReconciliationService,
 	invoiceNotifications *service.InvoiceNotificationService,
+	shopNotifications *service.ShopNotificationService,
 	feishuPaymentIncidents *service.FeishuPaymentIncidentService,
 	paidFallbackOps *service.PaidFallbackOpsService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
@@ -410,6 +411,12 @@ func provideCleanup(
 			{"InvoiceNotificationService", func() error {
 				if invoiceNotifications != nil {
 					invoiceNotifications.Stop()
+				}
+				return nil
+			}},
+			{"ShopNotificationService", func() error {
+				if shopNotifications != nil {
+					shopNotifications.Stop()
 				}
 				return nil
 			}},

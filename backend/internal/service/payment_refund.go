@@ -503,6 +503,9 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
+	if o.OrderType == payment.OrderTypeManualShop {
+		return nil, nil, infraerrors.BadRequest("SHOP_REFUND_MANUAL_ONLY", "商城订单请先联系人工售后核对交付，再通过支付渠道退款；不能扣除 API 余额")
+	}
 	if !refundStateValid(o) {
 		return nil, nil, infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
 	}

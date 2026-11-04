@@ -528,7 +528,7 @@ func SanitizedPaymentOrderProductSnapshot(order *dbent.PaymentOrder) map[string]
 		return nil
 	}
 	out := make(map[string]any)
-	for _, key := range []string{"kind", "label", "description", "name", "product_name", "currency", "validity_unit", "group_name"} {
+	for _, key := range []string{"kind", "label", "description", "name", "product_name", "currency", "validity_unit", "group_name", "duration_unit", "fulfillment_mode"} {
 		if value, ok := sanitizedInvoiceSnapshotString(order.ProductSnapshot[key]); ok {
 			out[key] = value
 		}
@@ -540,6 +540,7 @@ func SanitizedPaymentOrderProductSnapshot(order *dbent.PaymentOrder) map[string]
 		"request_amount", "list_price", "price", "discount_percent", "credited_amount", "pay_amount",
 		"estimated_rate_multiplier", "estimated_tokens", "plan_id", "order_amount", "validity_days",
 		"subscription_days", "group_id", "quantity", "unit_price", "daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
+		"product_id", "duration_value",
 	} {
 		if value, ok := sanitizedInvoiceSnapshotNumber(order.ProductSnapshot[key]); ok {
 			out[key] = value

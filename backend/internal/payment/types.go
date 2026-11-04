@@ -60,6 +60,7 @@ const (
 	OrderTypeSubscription = "subscription"
 	OrderTypeResetCard    = "reset_card"
 	OrderTypeCollection   = "collection"
+	OrderTypeManualShop   = "manual_shop"
 )
 
 // Entity statuses shared across users, groups, etc.

@@ -1,10 +1,12 @@
 <template>
   <AppLayout>
     <div class="space-y-4">
+      <RouterLink to="/shop" class="btn btn-secondary">商城</RouterLink>
       <!-- Filters -->
       <div class="card p-4">
         <div class="flex flex-wrap items-center gap-3">
           <Select :aria-label="t('payment.orders.status')" v-model="currentFilter" :options="statusFilters" class="w-36" @change="handleFilterChange" />
+          <Select v-model="orderTypeFilter" :options="[{ value: '', label: '全部订单类型' }, { value: 'manual_shop', label: '商城订单' }, { value: 'balance', label: '余额充值' }, { value: 'subscription', label: '站内订阅' }, { value: 'reset_card', label: '重置卡' }]" aria-label="订单类型" class="w-44" @change="handleFilterChange" />
           <Select v-model="fulfillmentFilter" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentFilterLabel')" class="w-44" @change="handleFilterChange" />
           <Select v-model="invoiceFilter" :options="invoiceOptions" :aria-label="t('payment.invoice.currentStatus')" class="w-44" @change="handleFilterChange" />
           <div class="flex flex-1 items-center justify-end gap-2">
@@ -383,6 +385,7 @@ const currentFilter = ref('')
 const fulfillmentFilter = ref('')
 const invoiceFilter = ref('')
 const detailOrder = ref<PaymentOrder | null>(null)
+const orderTypeFilter = ref('')
 const detailPaymentDiscount = computed(() => detailOrder.value?.product_snapshot?.payment_discount)
 const fulfillmentOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allFulfillments') },
@@ -397,6 +400,7 @@ function handleFilterChange() { pagination.page = 1; fetchOrders() }
 let detailRequestSequence = 0
 function closeDetails() { detailRequestSequence++; detailOrder.value = null }
 async function openDetails(order: PaymentOrder) {
+  if (order.order_type === 'manual_shop') { await router.push(`/shop/orders/${order.id}`); return }
   const sequence = ++detailRequestSequence
   detailOrder.value = order
   try {
@@ -450,6 +454,7 @@ async function fetchOrders(options: { silent?: boolean } = {}) {
       page_size: pagination.page_size,
       status: currentFilter.value || undefined,
       fulfillment_status: fulfillmentFilter.value || undefined,
+      order_type: orderTypeFilter.value || undefined,
       invoice_status: invoiceFilter.value || undefined,
     })
     if (request !== listRequest) return

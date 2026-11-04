@@ -113,6 +113,7 @@
             </div>
           </div>
         </div>
+        <RouterLink v-if="order?.order_type === 'manual_shop' && order.id" :to="`/shop/orders/${order.id}`" class="btn btn-primary mt-4 w-full">查看商城订单</RouterLink>
         <!-- Actions -->
         <div class="flex gap-3">
           <button class="btn btn-secondary flex-1" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
@@ -125,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import { isManualShopPaymentConfirmed } from '@/components/payment/manualShopPayment'
 import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -209,7 +211,7 @@ const localeCode = computed(() => {
   return undefined
 })
 
-const isSuccess = computed(() => normalizeOrderStatus(order.value?.status) === 'COMPLETED')
+const isSuccess = computed(() => normalizeOrderStatus(order.value?.status) === 'COMPLETED' || isManualShopPaymentConfirmed(order.value))
 
 const isPaidFulfillmentFailure = computed(() => {
   return !!order.value && paymentFact(order.value) === 'PAID' && fulfillmentFact(order.value) === 'FAILED'
@@ -267,6 +269,7 @@ const statusTitle = computed(() => {
 })
 
 const statusHint = computed(() => {
+  if (isManualShopPaymentConfirmed(order.value)) return '付款已确认，请在商城订单查看人工交付进度。'
   if (isPaidFulfillmentFailure.value || isManualReview.value) return ''
   if (isPending.value) return t('payment.result.processingHint')
   if (isUnknown.value) return t('payment.result.unknown')
@@ -469,10 +472,9 @@ function clearRecoveryForTerminal(nextOrder?: ResolvedOrder | null): void {
   const status = normalizeOrderStatus(nextOrder.status)
   const wasExplicitlyUnpaidTerminal = paymentFact(nextOrder) === 'UNPAID'
     && ['CANCELLED', 'EXPIRED', 'FAILED'].includes(status)
-  // PAID/RECHARGING and paid FAILED orders remain recoverable. A completed
-  // order is the sole success terminal state; unpaid terminal states are safe
-  // to remove only after the server has actually reported them.
-  if (status === 'COMPLETED' || wasExplicitlyUnpaidTerminal) {
+  // Automatic fulfillment stays recoverable until completed; manual shop
+  // checkout ends at trusted PAID. Never clear recovery from browser hints.
+  if (status === 'COMPLETED' || isManualShopPaymentConfirmed(nextOrder) || wasExplicitlyUnpaidTerminal) {
     const match = recoveryMatch(nextOrder)
     if (match) {
       clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, match)

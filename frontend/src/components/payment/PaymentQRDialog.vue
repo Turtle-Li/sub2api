@@ -37,13 +37,14 @@
         <Icon name="check" size="lg" class="text-green-500" />
       </div>
       <p class="text-lg font-bold text-gray-900 dark:text-white">{{ t('payment.result.success') }}</p>
+      <RouterLink v-if="paidOrder?.order_type === 'manual_shop'" :to="`/shop/orders/${paidOrder.id}`" class="btn btn-primary">查看人工交付订单</RouterLink>
       <div v-if="paidOrder" class="w-full rounded-xl bg-gray-50 p-4 dark:bg-dark-800">
         <div class="space-y-2 text-sm">
           <div class="flex justify-between">
             <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
             <span class="font-medium text-gray-900 dark:text-white">#{{ paidOrder.id }}</span>
           </div>
-          <div class="flex justify-between">
+          <div v-if="paidOrder.order_type !== 'manual_shop'" class="flex justify-between">
             <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</span>
             <span class="font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ paidOrder.amount.toFixed(2) }}</span>
           </div>

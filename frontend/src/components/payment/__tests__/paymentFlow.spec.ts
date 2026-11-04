@@ -735,7 +735,7 @@ describe('buildCreateOrderPayload', () => {
 })
 
 describe('readPaymentRecoverySnapshot', () => {
-  it('restores an unexpired snapshot when the resume token matches', () => {
+  it.each(['balance', 'manual_shop'] as const)('restores an unexpired %s snapshot when the resume token matches', (orderType) => {
     const snapshot: PaymentRecoverySnapshot = {
       orderId: 33,
       amount: 18,
@@ -751,7 +751,7 @@ describe('readPaymentRecoverySnapshot', () => {
       countryCode: '',
       paymentEnv: '',
       payAmount: 18,
-      orderType: 'balance',
+      orderType,
       paymentMode: 'popup',
       resumeToken: 'resume-33',
       createdAt: Date.UTC(2099, 0, 1, 0, 0, 0),
@@ -763,6 +763,7 @@ describe('readPaymentRecoverySnapshot', () => {
     })
 
     expect(restored?.orderId).toBe(33)
+    expect(restored?.orderType).toBe(orderType)
     expect(restored?.checkoutFrameUrl).toBe(snapshot.checkoutFrameUrl)
   })
 

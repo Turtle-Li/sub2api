@@ -545,7 +545,7 @@ function isSnapshotLike(value: unknown): value is Partial<PaymentRecoverySnapsho
 }
 
 function normalizeOrderType(value: unknown): OrderType | '' {
-  return value === 'subscription' || value === 'reset_card' || value === 'balance' ? value : 'balance'
+  return value === 'manual_shop' || value === 'subscription' || value === 'reset_card' || value === 'balance' ? value : 'balance'
 }
 
 function normalizePaymentDiscount(value: unknown): PaymentDiscountSnapshot | undefined {

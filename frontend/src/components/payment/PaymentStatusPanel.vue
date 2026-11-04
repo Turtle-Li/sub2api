@@ -26,6 +26,7 @@
             <Icon name="check" size="lg" class="text-green-500" />
           </div>
           <p class="text-lg font-bold text-gray-900 dark:text-white">{{ props.orderType === 'subscription' ? t('payment.result.subscriptionSuccess') : t('payment.result.success') }}</p>
+          <RouterLink v-if="paidOrder?.order_type === 'manual_shop'" :to="`/shop/orders/${paidOrder.id}`" class="btn btn-primary">付款已确认，查看人工交付订单</RouterLink>
           <div v-if="paidOrder" class="w-full rounded-xl bg-gray-50 p-4 dark:bg-dark-800">
             <div class="space-y-2 text-sm">
               <div class="flex items-start justify-between gap-3">
@@ -406,6 +407,7 @@
 </template>
 
 <script setup lang="ts">
+import { isManualShopPaymentConfirmed } from './manualShopPayment'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePaymentStore } from '@/stores/payment'
@@ -699,7 +701,7 @@ function clearAuthoritativeTerminalState(orderId: number): void {
 
 function terminalOutcomeFor(order: PaymentOrder): PaymentOutcome | null {
   const status = normalizeStatus(order.status)
-  if (status === 'COMPLETED') return 'success'
+  if (status === 'COMPLETED' || isManualShopPaymentConfirmed(order)) return 'success'
   if (status === 'CANCELLED') return 'cancelled'
   if (status === 'EXPIRED' || (status === 'FAILED' && paymentFact(order) === 'UNPAID')) return 'expired'
   return null

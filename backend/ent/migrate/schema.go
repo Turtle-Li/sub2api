@@ -1713,6 +1713,113 @@ var (
 		Columns:    SettingsColumns,
 		PrimaryKey: []*schema.Column{SettingsColumns[0]},
 	}
+	// ShopFulfillmentsColumns holds the columns for the "shop_fulfillments" table.
+	ShopFulfillmentsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "order_id", Type: field.TypeInt64, Unique: true},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "product_id", Type: field.TypeInt64},
+		{Name: "product_snapshot", Type: field.TypeJSON},
+		{Name: "status", Type: field.TypeString, Size: 24, Default: "WAITING_PAYMENT"},
+		{Name: "revision", Type: field.TypeInt, Default: 1},
+		{Name: "input_revision", Type: field.TypeInt, Default: 0},
+		{Name: "input_ciphertext", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "input_account", Type: field.TypeString, Size: 320, Default: ""},
+		{Name: "input_submitted_at", Type: field.TypeTime, Nullable: true},
+		{Name: "delivery_ciphertext", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "status_note", Type: field.TypeString, Size: 2000, Default: ""},
+		{Name: "processed_by", Type: field.TypeInt64, Nullable: true},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// ShopFulfillmentsTable holds the schema information for the "shop_fulfillments" table.
+	ShopFulfillmentsTable = &schema.Table{
+		Name:       "shop_fulfillments",
+		Columns:    ShopFulfillmentsColumns,
+		PrimaryKey: []*schema.Column{ShopFulfillmentsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopfulfillment_user_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShopFulfillmentsColumns[2], ShopFulfillmentsColumns[15]},
+			},
+			{
+				Name:    "shopfulfillment_status_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShopFulfillmentsColumns[5], ShopFulfillmentsColumns[15]},
+			},
+		},
+	}
+	// ShopNotificationsColumns holds the columns for the "shop_notifications" table.
+	ShopNotificationsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "order_id", Type: field.TypeInt64},
+		{Name: "event", Type: field.TypeString, Size: 32},
+		{Name: "revision", Type: field.TypeInt},
+		{Name: "channel", Type: field.TypeString, Size: 16},
+		{Name: "status", Type: field.TypeString, Size: 16, Default: "PENDING"},
+		{Name: "attempts", Type: field.TypeInt, Default: 0},
+		{Name: "claim_token", Type: field.TypeString, Size: 36, Default: ""},
+		{Name: "claimed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "next_attempt_at", Type: field.TypeTime},
+		{Name: "error_kind", Type: field.TypeString, Size: 48, Default: ""},
+		{Name: "sent_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// ShopNotificationsTable holds the schema information for the "shop_notifications" table.
+	ShopNotificationsTable = &schema.Table{
+		Name:       "shop_notifications",
+		Columns:    ShopNotificationsColumns,
+		PrimaryKey: []*schema.Column{ShopNotificationsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopnotification_order_id_event_revision_channel",
+				Unique:  true,
+				Columns: []*schema.Column{ShopNotificationsColumns[1], ShopNotificationsColumns[2], ShopNotificationsColumns[3], ShopNotificationsColumns[4]},
+			},
+			{
+				Name:    "shopnotification_status_next_attempt_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShopNotificationsColumns[5], ShopNotificationsColumns[9]},
+			},
+		},
+	}
+	// ShopProductsColumns holds the columns for the "shop_products" table.
+	ShopProductsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "name", Type: field.TypeString, Size: 160},
+		{Name: "category", Type: field.TypeString, Size: 80, Default: ""},
+		{Name: "summary", Type: field.TypeString, Size: 600, Default: ""},
+		{Name: "description", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "price_fen", Type: field.TypeInt64, Default: 0},
+		{Name: "duration_value", Type: field.TypeInt, Default: 1},
+		{Name: "duration_unit", Type: field.TypeString, Size: 10, Default: "month"},
+		{Name: "fulfillment_mode", Type: field.TypeString, Size: 24},
+		{Name: "input_format", Type: field.TypeString, Size: 16, Default: "session_json"},
+		{Name: "input_url", Type: field.TypeString, Size: 2048, Default: ""},
+		{Name: "input_instructions", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "guide_key", Type: field.TypeString, Size: 64, Default: ""},
+		{Name: "enabled", Type: field.TypeBool, Default: false},
+		{Name: "sort_order", Type: field.TypeInt, Default: 0},
+		{Name: "revision", Type: field.TypeInt, Default: 1},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// ShopProductsTable holds the schema information for the "shop_products" table.
+	ShopProductsTable = &schema.Table{
+		Name:       "shop_products",
+		Columns:    ShopProductsColumns,
+		PrimaryKey: []*schema.Column{ShopProductsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopproduct_enabled_sort_order",
+				Unique:  false,
+				Columns: []*schema.Column{ShopProductsColumns[13], ShopProductsColumns[14]},
+			},
+		},
+	}
 	// SubscriptionPlansColumns holds the columns for the "subscription_plans" table.
 	SubscriptionPlansColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -2305,6 +2412,9 @@ var (
 		RedeemCodesTable,
 		SecuritySecretsTable,
 		SettingsTable,
+		ShopFulfillmentsTable,
+		ShopNotificationsTable,
+		ShopProductsTable,
 		SubscriptionPlansTable,
 		TLSFingerprintProfilesTable,
 		UsageCleanupTasksTable,
@@ -2443,6 +2553,15 @@ func init() {
 	}
 	SettingsTable.Annotation = &entsql.Annotation{
 		Table: "settings",
+	}
+	ShopFulfillmentsTable.Annotation = &entsql.Annotation{
+		Table: "shop_fulfillments",
+	}
+	ShopNotificationsTable.Annotation = &entsql.Annotation{
+		Table: "shop_notifications",
+	}
+	ShopProductsTable.Annotation = &entsql.Annotation{
+		Table: "shop_products",
 	}
 	SubscriptionPlansTable.Annotation = &entsql.Annotation{
 		Table: "subscription_plans",

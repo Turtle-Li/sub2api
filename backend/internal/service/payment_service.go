@@ -73,6 +73,7 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
+	shopProduct     *ShopProduct
 	CouponCode      string
 	CouponRevision  string
 	couponQuote     *PaymentDiscountQuote
@@ -259,6 +260,7 @@ type PaymentService struct {
 	unifiedPayment                *unifiedpay.Gateway
 	unifiedWebhookInbox           UnifiedWebhookInboxStore
 	invoiceFeishuSender           FeishuPaymentTextSender
+	shopService                   *ShopService
 	resetCardNow                  func() time.Time
 	refundReviewNow               func() time.Time
 }

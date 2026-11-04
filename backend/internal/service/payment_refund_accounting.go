@@ -519,6 +519,9 @@ func (s *PaymentService) reviewRefundWithClient(ctx context.Context, client *dbe
 		}
 		return nil, err
 	}
+	if order.OrderType == payment.OrderTypeManualShop {
+		return manualRefundReview(order, now, "SHOP_REFUND_MANUAL_ONLY", "商城订单需要人工售后核对交付，不能使用余额或订阅退款"), nil
+	}
 	if order.OrderType == payment.OrderTypeCollection {
 		return manualRefundReview(order, now, "COLLECTION_REFUND_MANUAL_ONLY", "collection payments do not support automatic wallet refunds; reconcile with the payment channel"), nil
 	}

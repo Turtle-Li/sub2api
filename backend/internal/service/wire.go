@@ -1091,6 +1091,8 @@ var ProviderSet = wire.NewSet(
 	ProvidePaymentOrderExpiryService,
 	ProvidePaymentMonthlyResetCardDeliveryService,
 	ProvideInvoiceNotificationService,
+	NewShopService,
+	ProvideShopNotificationService,
 	ProvideFeishuPaymentIncidentService,
 	ProvidePaidFallbackOpsService,
 	ProvideBalanceNotifyService,
@@ -1145,9 +1147,10 @@ func ProvideBalanceNotifyService(emailService *EmailService, settingRepo Setting
 // ProvidePaymentService creates PaymentService and attaches notification email delivery.
 // The strict P19 concurrency fence is a production prerequisite, so Wire
 // propagates configuration errors instead of starting with it silently absent.
-func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, concurrencyService *ConcurrencyService, unifiedGateway *unifiedpay.Gateway, unifiedInbox UnifiedWebhookInboxStore) (*PaymentService, error) {
+func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, concurrencyService *ConcurrencyService, unifiedGateway *unifiedpay.Gateway, unifiedInbox UnifiedWebhookInboxStore, shopService *ShopService) (*PaymentService, error) {
 	svc := NewPaymentService(entClient, registry, loadBalancer, redeemService, subscriptionSvc, configService, userRepo, groupRepo, affiliateService)
 	svc.SetNotificationEmailService(notificationEmailService)
+	svc.shopService = shopService
 	svc.SetAuthCacheInvalidator(authCacheInvalidator)
 	svc.SetBalanceAuthorizationCacheInvalidator(billingCacheService)
 	if err := svc.SetConcurrencyAuthorizationFence(concurrencyService); err != nil {
@@ -1178,6 +1181,12 @@ func ProvidePaymentMonthlyResetCardDeliveryService(entClient *dbent.Client, lock
 // recovery loop. It intentionally does not share the financial expiry worker.
 func ProvideInvoiceNotificationService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *InvoiceNotificationService {
 	svc := NewInvoiceNotificationService(paymentSvc, lockCache, db)
+	svc.Start()
+	return svc
+}
+
+func ProvideShopNotificationService(shop *ShopService, locks LeaderLockCache, db *sql.DB) *ShopNotificationService {
+	svc := NewShopNotificationService(shop, locks, db)
 	svc.Start()
 	return svc
 }

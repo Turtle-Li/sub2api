@@ -122,6 +122,17 @@ describe('PaymentResultView', () => {
     vi.useRealTimers()
   })
 
+  it('shows paid shop progress and does not refresh wallet for manual delivery', async () => {
+    routeState.query = { order_id: '42' }
+    pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-04T12:00:00Z' })
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true, RouterLink: { template: '<a><slot /></a>' } } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('payment.result.success')
+    expect(wrapper.text()).toContain('查看商城订单')
+    expect(wrapper.text()).not.toContain('payment.result.processing')
+    expect(refreshUser).not.toHaveBeenCalled()
+  })
+
   it('restores the current local order after the unified payment fixed return URL', async () => {
     routeState.query = {}
     window.localStorage.setItem(

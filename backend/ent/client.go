@@ -48,6 +48,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
+	"github.com/Wei-Shaw/sub2api/ent/shopnotification"
+	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
@@ -133,6 +136,12 @@ type Client struct {
 	SecuritySecret *SecuritySecretClient
 	// Setting is the client for interacting with the Setting builders.
 	Setting *SettingClient
+	// ShopFulfillment is the client for interacting with the ShopFulfillment builders.
+	ShopFulfillment *ShopFulfillmentClient
+	// ShopNotification is the client for interacting with the ShopNotification builders.
+	ShopNotification *ShopNotificationClient
+	// ShopProduct is the client for interacting with the ShopProduct builders.
+	ShopProduct *ShopProductClient
 	// SubscriptionPlan is the client for interacting with the SubscriptionPlan builders.
 	SubscriptionPlan *SubscriptionPlanClient
 	// TLSFingerprintProfile is the client for interacting with the TLSFingerprintProfile builders.
@@ -197,6 +206,9 @@ func (c *Client) init() {
 	c.RedeemCode = NewRedeemCodeClient(c.config)
 	c.SecuritySecret = NewSecuritySecretClient(c.config)
 	c.Setting = NewSettingClient(c.config)
+	c.ShopFulfillment = NewShopFulfillmentClient(c.config)
+	c.ShopNotification = NewShopNotificationClient(c.config)
+	c.ShopProduct = NewShopProductClient(c.config)
 	c.SubscriptionPlan = NewSubscriptionPlanClient(c.config)
 	c.TLSFingerprintProfile = NewTLSFingerprintProfileClient(c.config)
 	c.UsageCleanupTask = NewUsageCleanupTaskClient(c.config)
@@ -332,6 +344,9 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		RedeemCode:                    NewRedeemCodeClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
+		ShopFulfillment:               NewShopFulfillmentClient(cfg),
+		ShopNotification:              NewShopNotificationClient(cfg),
+		ShopProduct:                   NewShopProductClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
@@ -394,6 +409,9 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		RedeemCode:                    NewRedeemCodeClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
+		ShopFulfillment:               NewShopFulfillmentClient(cfg),
+		ShopNotification:              NewShopNotificationClient(cfg),
+		ShopProduct:                   NewShopProductClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
@@ -442,8 +460,9 @@ func (c *Client) Use(hooks ...Hook) {
 		c.PaymentInvoiceDocument, c.PaymentInvoiceRequest, c.PaymentOrder,
 		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
 		c.Proxy, c.ProxyPool, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
-		c.User, c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
+		c.ShopFulfillment, c.ShopNotification, c.ShopProduct, c.SubscriptionPlan,
+		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
+		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
 		c.UserPlatformQuota, c.UserSubscription,
 	} {
 		n.Use(hooks...)
@@ -463,8 +482,9 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.PaymentInvoiceDocument, c.PaymentInvoiceRequest, c.PaymentOrder,
 		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
 		c.Proxy, c.ProxyPool, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
-		c.User, c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
+		c.ShopFulfillment, c.ShopNotification, c.ShopProduct, c.SubscriptionPlan,
+		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
+		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
 		c.UserPlatformQuota, c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
@@ -540,6 +560,12 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.SecuritySecret.mutate(ctx, m)
 	case *SettingMutation:
 		return c.Setting.mutate(ctx, m)
+	case *ShopFulfillmentMutation:
+		return c.ShopFulfillment.mutate(ctx, m)
+	case *ShopNotificationMutation:
+		return c.ShopNotification.mutate(ctx, m)
+	case *ShopProductMutation:
+		return c.ShopProduct.mutate(ctx, m)
 	case *SubscriptionPlanMutation:
 		return c.SubscriptionPlan.mutate(ctx, m)
 	case *TLSFingerprintProfileMutation:
@@ -5747,6 +5773,405 @@ func (c *SettingClient) mutate(ctx context.Context, m *SettingMutation) (Value, 
 	}
 }
 
+// ShopFulfillmentClient is a client for the ShopFulfillment schema.
+type ShopFulfillmentClient struct {
+	config
+}
+
+// NewShopFulfillmentClient returns a client for the ShopFulfillment from the given config.
+func NewShopFulfillmentClient(c config) *ShopFulfillmentClient {
+	return &ShopFulfillmentClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `shopfulfillment.Hooks(f(g(h())))`.
+func (c *ShopFulfillmentClient) Use(hooks ...Hook) {
+	c.hooks.ShopFulfillment = append(c.hooks.ShopFulfillment, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `shopfulfillment.Intercept(f(g(h())))`.
+func (c *ShopFulfillmentClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ShopFulfillment = append(c.inters.ShopFulfillment, interceptors...)
+}
+
+// Create returns a builder for creating a ShopFulfillment entity.
+func (c *ShopFulfillmentClient) Create() *ShopFulfillmentCreate {
+	mutation := newShopFulfillmentMutation(c.config, OpCreate)
+	return &ShopFulfillmentCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ShopFulfillment entities.
+func (c *ShopFulfillmentClient) CreateBulk(builders ...*ShopFulfillmentCreate) *ShopFulfillmentCreateBulk {
+	return &ShopFulfillmentCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ShopFulfillmentClient) MapCreateBulk(slice any, setFunc func(*ShopFulfillmentCreate, int)) *ShopFulfillmentCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ShopFulfillmentCreateBulk{err: fmt.Errorf("calling to ShopFulfillmentClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ShopFulfillmentCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ShopFulfillmentCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ShopFulfillment.
+func (c *ShopFulfillmentClient) Update() *ShopFulfillmentUpdate {
+	mutation := newShopFulfillmentMutation(c.config, OpUpdate)
+	return &ShopFulfillmentUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ShopFulfillmentClient) UpdateOne(_m *ShopFulfillment) *ShopFulfillmentUpdateOne {
+	mutation := newShopFulfillmentMutation(c.config, OpUpdateOne, withShopFulfillment(_m))
+	return &ShopFulfillmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ShopFulfillmentClient) UpdateOneID(id int64) *ShopFulfillmentUpdateOne {
+	mutation := newShopFulfillmentMutation(c.config, OpUpdateOne, withShopFulfillmentID(id))
+	return &ShopFulfillmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ShopFulfillment.
+func (c *ShopFulfillmentClient) Delete() *ShopFulfillmentDelete {
+	mutation := newShopFulfillmentMutation(c.config, OpDelete)
+	return &ShopFulfillmentDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ShopFulfillmentClient) DeleteOne(_m *ShopFulfillment) *ShopFulfillmentDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ShopFulfillmentClient) DeleteOneID(id int64) *ShopFulfillmentDeleteOne {
+	builder := c.Delete().Where(shopfulfillment.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ShopFulfillmentDeleteOne{builder}
+}
+
+// Query returns a query builder for ShopFulfillment.
+func (c *ShopFulfillmentClient) Query() *ShopFulfillmentQuery {
+	return &ShopFulfillmentQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeShopFulfillment},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ShopFulfillment entity by its id.
+func (c *ShopFulfillmentClient) Get(ctx context.Context, id int64) (*ShopFulfillment, error) {
+	return c.Query().Where(shopfulfillment.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ShopFulfillmentClient) GetX(ctx context.Context, id int64) *ShopFulfillment {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ShopFulfillmentClient) Hooks() []Hook {
+	return c.hooks.ShopFulfillment
+}
+
+// Interceptors returns the client interceptors.
+func (c *ShopFulfillmentClient) Interceptors() []Interceptor {
+	return c.inters.ShopFulfillment
+}
+
+func (c *ShopFulfillmentClient) mutate(ctx context.Context, m *ShopFulfillmentMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ShopFulfillmentCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ShopFulfillmentUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ShopFulfillmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ShopFulfillmentDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ShopFulfillment mutation op: %q", m.Op())
+	}
+}
+
+// ShopNotificationClient is a client for the ShopNotification schema.
+type ShopNotificationClient struct {
+	config
+}
+
+// NewShopNotificationClient returns a client for the ShopNotification from the given config.
+func NewShopNotificationClient(c config) *ShopNotificationClient {
+	return &ShopNotificationClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `shopnotification.Hooks(f(g(h())))`.
+func (c *ShopNotificationClient) Use(hooks ...Hook) {
+	c.hooks.ShopNotification = append(c.hooks.ShopNotification, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `shopnotification.Intercept(f(g(h())))`.
+func (c *ShopNotificationClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ShopNotification = append(c.inters.ShopNotification, interceptors...)
+}
+
+// Create returns a builder for creating a ShopNotification entity.
+func (c *ShopNotificationClient) Create() *ShopNotificationCreate {
+	mutation := newShopNotificationMutation(c.config, OpCreate)
+	return &ShopNotificationCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ShopNotification entities.
+func (c *ShopNotificationClient) CreateBulk(builders ...*ShopNotificationCreate) *ShopNotificationCreateBulk {
+	return &ShopNotificationCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ShopNotificationClient) MapCreateBulk(slice any, setFunc func(*ShopNotificationCreate, int)) *ShopNotificationCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ShopNotificationCreateBulk{err: fmt.Errorf("calling to ShopNotificationClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ShopNotificationCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ShopNotificationCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ShopNotification.
+func (c *ShopNotificationClient) Update() *ShopNotificationUpdate {
+	mutation := newShopNotificationMutation(c.config, OpUpdate)
+	return &ShopNotificationUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ShopNotificationClient) UpdateOne(_m *ShopNotification) *ShopNotificationUpdateOne {
+	mutation := newShopNotificationMutation(c.config, OpUpdateOne, withShopNotification(_m))
+	return &ShopNotificationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ShopNotificationClient) UpdateOneID(id int64) *ShopNotificationUpdateOne {
+	mutation := newShopNotificationMutation(c.config, OpUpdateOne, withShopNotificationID(id))
+	return &ShopNotificationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ShopNotification.
+func (c *ShopNotificationClient) Delete() *ShopNotificationDelete {
+	mutation := newShopNotificationMutation(c.config, OpDelete)
+	return &ShopNotificationDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ShopNotificationClient) DeleteOne(_m *ShopNotification) *ShopNotificationDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ShopNotificationClient) DeleteOneID(id int64) *ShopNotificationDeleteOne {
+	builder := c.Delete().Where(shopnotification.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ShopNotificationDeleteOne{builder}
+}
+
+// Query returns a query builder for ShopNotification.
+func (c *ShopNotificationClient) Query() *ShopNotificationQuery {
+	return &ShopNotificationQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeShopNotification},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ShopNotification entity by its id.
+func (c *ShopNotificationClient) Get(ctx context.Context, id int64) (*ShopNotification, error) {
+	return c.Query().Where(shopnotification.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ShopNotificationClient) GetX(ctx context.Context, id int64) *ShopNotification {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ShopNotificationClient) Hooks() []Hook {
+	return c.hooks.ShopNotification
+}
+
+// Interceptors returns the client interceptors.
+func (c *ShopNotificationClient) Interceptors() []Interceptor {
+	return c.inters.ShopNotification
+}
+
+func (c *ShopNotificationClient) mutate(ctx context.Context, m *ShopNotificationMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ShopNotificationCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ShopNotificationUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ShopNotificationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ShopNotificationDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ShopNotification mutation op: %q", m.Op())
+	}
+}
+
+// ShopProductClient is a client for the ShopProduct schema.
+type ShopProductClient struct {
+	config
+}
+
+// NewShopProductClient returns a client for the ShopProduct from the given config.
+func NewShopProductClient(c config) *ShopProductClient {
+	return &ShopProductClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `shopproduct.Hooks(f(g(h())))`.
+func (c *ShopProductClient) Use(hooks ...Hook) {
+	c.hooks.ShopProduct = append(c.hooks.ShopProduct, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `shopproduct.Intercept(f(g(h())))`.
+func (c *ShopProductClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ShopProduct = append(c.inters.ShopProduct, interceptors...)
+}
+
+// Create returns a builder for creating a ShopProduct entity.
+func (c *ShopProductClient) Create() *ShopProductCreate {
+	mutation := newShopProductMutation(c.config, OpCreate)
+	return &ShopProductCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ShopProduct entities.
+func (c *ShopProductClient) CreateBulk(builders ...*ShopProductCreate) *ShopProductCreateBulk {
+	return &ShopProductCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ShopProductClient) MapCreateBulk(slice any, setFunc func(*ShopProductCreate, int)) *ShopProductCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ShopProductCreateBulk{err: fmt.Errorf("calling to ShopProductClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ShopProductCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ShopProductCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ShopProduct.
+func (c *ShopProductClient) Update() *ShopProductUpdate {
+	mutation := newShopProductMutation(c.config, OpUpdate)
+	return &ShopProductUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ShopProductClient) UpdateOne(_m *ShopProduct) *ShopProductUpdateOne {
+	mutation := newShopProductMutation(c.config, OpUpdateOne, withShopProduct(_m))
+	return &ShopProductUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ShopProductClient) UpdateOneID(id int64) *ShopProductUpdateOne {
+	mutation := newShopProductMutation(c.config, OpUpdateOne, withShopProductID(id))
+	return &ShopProductUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ShopProduct.
+func (c *ShopProductClient) Delete() *ShopProductDelete {
+	mutation := newShopProductMutation(c.config, OpDelete)
+	return &ShopProductDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ShopProductClient) DeleteOne(_m *ShopProduct) *ShopProductDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ShopProductClient) DeleteOneID(id int64) *ShopProductDeleteOne {
+	builder := c.Delete().Where(shopproduct.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ShopProductDeleteOne{builder}
+}
+
+// Query returns a query builder for ShopProduct.
+func (c *ShopProductClient) Query() *ShopProductQuery {
+	return &ShopProductQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeShopProduct},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ShopProduct entity by its id.
+func (c *ShopProductClient) Get(ctx context.Context, id int64) (*ShopProduct, error) {
+	return c.Query().Where(shopproduct.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ShopProductClient) GetX(ctx context.Context, id int64) *ShopProduct {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ShopProductClient) Hooks() []Hook {
+	return c.hooks.ShopProduct
+}
+
+// Interceptors returns the client interceptors.
+func (c *ShopProductClient) Interceptors() []Interceptor {
+	return c.inters.ShopProduct
+}
+
+func (c *ShopProductClient) mutate(ctx context.Context, m *ShopProductMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ShopProductCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ShopProductUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ShopProductUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ShopProductDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ShopProduct mutation op: %q", m.Op())
+	}
+}
+
 // SubscriptionPlanClient is a client for the SubscriptionPlan schema.
 type SubscriptionPlanClient struct {
 	config
@@ -7510,10 +7935,10 @@ type (
 		ErrorPassthroughRule, Group, IdempotencyRecord, IdentityAdoptionDecision,
 		PaymentAuditLog, PaymentInvoiceDocument, PaymentInvoiceRequest, PaymentOrder,
 		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
-		ProxyPool, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Hook
+		ProxyPool, RedeemCode, SecuritySecret, Setting, ShopFulfillment,
+		ShopNotification, ShopProduct, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, AccountPool, Announcement, AnnouncementRead,
@@ -7523,10 +7948,10 @@ type (
 		ErrorPassthroughRule, Group, IdempotencyRecord, IdentityAdoptionDecision,
 		PaymentAuditLog, PaymentInvoiceDocument, PaymentInvoiceRequest, PaymentOrder,
 		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
-		ProxyPool, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Interceptor
+		ProxyPool, RedeemCode, SecuritySecret, Setting, ShopFulfillment,
+		ShopNotification, ShopProduct, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Interceptor
 	}
 )
 

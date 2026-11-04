@@ -339,6 +339,48 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/shop',
+    name: 'Shop',
+    component: () => import('@/views/shop/ShopView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: '商城', requiresPayment: false }
+  },
+  {
+    path: '/shop/products/:id',
+    name: 'ShopProduct',
+    component: () => import('@/views/shop/ShopProductView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: '商城', requiresPayment: false }
+  },
+  {
+    path: '/shop/orders/:id',
+    name: 'ShopOrder',
+    component: () => import('@/views/shop/ShopOrderView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: '商城', requiresPayment: false }
+  },
+  {
+    path: '/shop/help/chatgpt-plus-account',
+    name: 'ShopGuide',
+    component: () => import('@/views/shop/ShopGuideView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: '商城', requiresPayment: false }
+  },
+  {
+    path: '/admin/shop/products',
+    name: 'AdminShopProducts',
+    component: () => import('@/views/shop/AdminShopProductsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: '商城', requiresPayment: false }
+  },
+  {
+    path: '/admin/shop/orders',
+    name: 'AdminShopOrders',
+    component: () => import('@/views/shop/AdminShopOrdersView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: '商城', requiresPayment: false }
+  },
+  {
+    path: '/admin/shop/orders/:id',
+    name: 'AdminShopOrder',
+    component: () => import('@/views/shop/AdminShopOrderView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: '商城', requiresPayment: false }
+  },
+  {
     path: '/orders',
     name: 'OrderList',
     component: () => import('@/views/user/UserOrdersView.vue'),

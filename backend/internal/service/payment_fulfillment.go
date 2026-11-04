@@ -320,6 +320,11 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 	if err := writePaymentAuditTx(txCtx, client, locked.ID, "ORDER_PAID", pk, map[string]any{"tradeNo": tradeNo, "paidAmount": paid}); err != nil {
 		return err
 	}
+	if locked.OrderType == payment.OrderTypeManualShop {
+		if err := markShopPaidTx(txCtx, client, locked); err != nil {
+			return err
+		}
+	}
 	if previousStatus == OrderStatusExpired || previousStatus == OrderStatusFailed {
 		if err := writePaymentAuditTx(txCtx, client, locked.ID, "ORDER_RECOVERED", pk, map[string]any{
 			"previous_status": previousStatus,
@@ -390,6 +395,8 @@ func (s *PaymentService) executeFulfillmentWithLeaseAcquirer(ctx context.Context
 		return infraerrors.Conflict("COUPON_MANUAL_REVIEW", "coupon capacity must be resolved before fulfillment")
 	}
 	switch o.OrderType {
+	case payment.OrderTypeManualShop:
+		return nil // Payment confirmation already queued manual fulfillment atomically.
 	case payment.OrderTypeCollection:
 		return s.executeCollectionFulfillment(ctx, o, acquire)
 	case payment.OrderTypeSubscription:
@@ -857,7 +864,7 @@ func paymentSnapshotInt64(value any) (int64, bool) {
 
 func isSupportedPaymentOrderType(orderType string) bool {
 	return orderType == payment.OrderTypeBalance || orderType == payment.OrderTypeSubscription ||
-		orderType == payment.OrderTypeCollection || orderType == payment.OrderTypeResetCard
+		orderType == payment.OrderTypeCollection || orderType == payment.OrderTypeResetCard || orderType == payment.OrderTypeManualShop
 }
 
 func (s *PaymentService) rejectUnsupportedOrderType(ctx context.Context, o *dbent.PaymentOrder) {
@@ -2045,6 +2052,9 @@ func (s *PaymentService) RetryFulfillment(ctx context.Context, oid int64) error 
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if o.OrderType == payment.OrderTypeManualShop {
+		return infraerrors.BadRequest("SHOP_MANUAL_ACTION_REQUIRED", "请在商城订单中手动处理")
 	}
 	if o.PaidAt == nil {
 		return infraerrors.BadRequest("INVALID_STATUS", "order is not paid")
