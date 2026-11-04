@@ -59,127 +59,117 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
 </script>
 <template>
   <AppLayout>
-    <div class="mx-auto max-w-5xl space-y-5">
-      <div>
-        <RouterLink
-          to="/shop"
-          class="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-300 dark:hover:bg-dark-800 dark:hover:text-white"
-        >
-          <Icon name="chevronLeft" size="sm" />
-          <span>返回商城</span>
-        </RouterLink>
+    <div class="mx-auto w-full max-w-[1180px] px-4 py-6 sm:px-6 lg:py-8">
+      <RouterLink to="/shop" class="mb-5 inline-flex min-h-11 items-center gap-2 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-gray-400 dark:hover:text-gray-100 dark:focus:ring-offset-gray-950">
+        <Icon name="chevronLeft" class="h-4 w-4" />
+        返回商店
+      </RouterLink>
+
+      <div v-if="loading" class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]" aria-busy="true" aria-label="正在加载商品">
+        <div class="h-72 animate-pulse rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"></div>
+        <div class="h-80 animate-pulse rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"></div>
       </div>
 
-      <div v-if="loading" role="status" class="card flex items-center justify-center gap-2.5 py-16 text-sm text-gray-500 dark:text-gray-400">
-        <Icon name="clock" size="md" class="animate-spin text-primary-500" />
-        <span>正在加载商品…</span>
-      </div>
+      <section v-else-if="!product" class="rounded-xl border border-red-200 bg-white p-6 dark:border-red-900 dark:bg-gray-900" role="alert">
+        <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">无法显示商品</h1>
+        <p class="mt-2 text-sm text-red-700 dark:text-red-300">{{ error }}</p>
+        <button type="button" class="mt-5 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-medium text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900" @click="load">
+          重新加载
+        </button>
+      </section>
 
-      <div v-if="error && !product" role="alert" class="card flex flex-col items-start justify-between gap-4 border-red-200/80 p-5 sm:flex-row sm:items-center dark:border-red-900/40">
-        <p class="text-sm text-gray-700 dark:text-gray-200">{{ error }}</p>
-        <button v-if="!product" class="btn btn-secondary min-h-[44px] shrink-0 px-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500" @click="load">重试</button>
-      </div>
+      <template v-else>
+        <header class="mb-6 max-w-3xl">
+          <div class="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <span class="badge bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">{{ product.category }}</span>
+            <span>{{ shopModeLabels[product.fulfillment_mode] }}</span>
+          </div>
+          <h1 class="mt-3 break-words text-2xl font-semibold leading-tight text-gray-900 dark:text-gray-100 sm:text-[28px]">{{ product.name }}</h1>
+          <p v-if="product.summary" class="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-gray-600 dark:text-gray-400">{{ product.summary }}</p>
+        </header>
 
-      <template v-if="product">
-        <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <section class="card min-w-0 overflow-hidden border border-gray-200/80 p-5 sm:p-8 dark:border-dark-700">
-            <h1 class="break-words text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">{{ product.name }}</h1>
-
-            <div class="mt-3 flex flex-wrap items-center gap-2">
-              <span
-                v-if="product.category"
-                class="inline-flex items-center rounded-md bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700 dark:bg-primary-950/60 dark:text-primary-300"
-              >
-                {{ product.category }}
-              </span>
-              <span class="inline-flex items-center gap-1.5 rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-300">
-                <Icon :name="product.fulfillment_mode === 'session_topup' ? 'key' : 'user'" size="xs" class="text-primary-600 dark:text-primary-400" />
-                <span>{{ shopModeLabels[product.fulfillment_mode] }}</span>
-              </span>
+        <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <article class="min-w-0 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">商品详情</h2>
+            <div v-if="product.description" class="mt-5 min-w-0 text-sm leading-7 text-gray-700 dark:text-gray-300">
+              <ShopMarkdown :content="product.description" />
             </div>
+            <p v-else class="mt-5 text-sm text-gray-500 dark:text-gray-400">暂无更多商品说明。</p>
+          </article>
 
-            <p
-              v-if="product.summary"
-              class="mt-5 whitespace-pre-wrap break-words text-sm leading-6 text-gray-600 dark:text-gray-300"
-            >{{ product.summary }}</p>
-
-            <div class="mt-6 border-t border-gray-100 pt-6 dark:border-dark-700/80">
-              <div class="min-w-0 break-words">
-                <ShopMarkdown v-if="product.description" :content="product.description" />
-                <p v-else class="text-sm text-gray-500 dark:text-gray-400">暂无详细说明，可联系客服了解商品。</p>
-              </div>
-            </div>
-          </section>
-
-          <aside class="card min-w-0 space-y-5 border border-gray-200/80 p-5 sm:p-6 lg:sticky lg:top-6 dark:border-dark-700">
-            <div class="border-b border-gray-100 pb-4 dark:border-dark-700/80">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-xs font-medium text-gray-500 dark:text-gray-400">售价</span>
-              </div>
-              <div class="mt-2 flex items-baseline gap-1.5">
-                <strong class="text-2xl font-bold tabular-nums text-gray-900 sm:text-3xl dark:text-white">¥{{ product.price.toFixed(2) }}</strong>
-                <span class="text-sm text-gray-500 dark:text-gray-400">/ {{ shopDuration(product) }}</span>
-              </div>
-            </div>
-
-            <RouterLink
-              v-if="product.guide_key"
-              :to="`/shop/help/${product.guide_key}`"
-              class="flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-primary-200 bg-primary-50/70 px-3.5 py-2.5 text-sm font-medium text-primary-900 transition-colors hover:bg-primary-100/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-primary-800/60 dark:bg-primary-950/40 dark:text-primary-200 dark:hover:bg-primary-900/50"
-            >
-              <span class="inline-flex items-center gap-2">
-                <Icon name="book" size="sm" class="shrink-0 text-primary-600 dark:text-primary-400" />
-                <span>购买前查看使用教程</span>
-              </span>
-              <span class="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary-600 px-2 py-0.5 text-xs font-semibold text-white dark:bg-primary-400 dark:text-dark-950">
-                <span>必看</span>
-                <Icon name="chevronRight" size="xs" />
-              </span>
+          <aside class="min-w-0 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 lg:sticky lg:top-6" aria-label="购买商品">
+            <RouterLink v-if="product.guide_key" :to="`/shop/help/${product.guide_key}`" class="mb-5 flex min-h-11 items-center justify-between gap-3 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-sm font-medium text-primary-800 hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:border-primary-800 dark:bg-primary-950 dark:text-primary-200 dark:focus:ring-offset-gray-900">
+              <span>购买前请阅读使用指南</span>
+              <Icon name="arrowRight" class="h-4 w-4 shrink-0" />
             </RouterLink>
 
-            <fieldset class="space-y-2.5">
-              <legend class="flex items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-white">
-                <Icon name="creditCard" size="sm" class="text-gray-400 dark:text-gray-500" />
-                <span>支付方式</span>
-              </legend>
-              <div v-if="methods.length" class="grid grid-cols-2 gap-2.5">
-                <label
-                  v-for="item in methods"
-                  :key="item"
-                  class="relative flex min-h-[44px] cursor-pointer items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition-colors focus-within:ring-2 focus-within:ring-primary-500 focus-within:ring-offset-1 dark:focus-within:ring-offset-dark-800"
-                  :class="method === item ? 'border-primary-500 bg-primary-50/60 text-primary-900 dark:border-primary-400 dark:bg-primary-950/40 dark:text-white' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-200 dark:hover:bg-dark-700'"
-                >
-                  <input v-model="method" type="radio" :value="item" name="payment-method" class="sr-only">
-                  <span class="inline-flex items-center gap-2"><img :src="item === 'alipay' ? alipayIcon : wxpayIcon" alt="" class="h-5 w-5 shrink-0"><span>{{ item === 'alipay' ? '支付宝' : '微信' }}</span></span>
-                  <Icon v-if="method === item" name="check" size="sm" class="shrink-0 text-primary-600 dark:text-primary-400" />
+            <dl class="flex items-end justify-between gap-4 border-b border-gray-200 pb-5 dark:border-gray-800">
+              <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">价格</dt>
+                <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">¥{{ product.price.toFixed(2) }}</dd>
+              </div>
+              <div class="text-right">
+                <dt class="text-xs text-gray-500 dark:text-gray-400">时长</dt>
+                <dd class="mt-1 text-sm font-medium text-gray-800 dark:text-gray-200">{{ shopDuration(product) }}</dd>
+              </div>
+            </dl>
+
+            <ShopNotice :show-delivery-time="!hasDeliveryTime" />
+
+            <fieldset class="mt-5" :disabled="busy">
+              <legend class="text-sm font-medium text-gray-900 dark:text-gray-100">支付方式</legend>
+              <div class="mt-3 space-y-2">
+                <label v-if="methods.includes('alipay')" class="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors" :class="method === 'alipay' ? 'border-primary-500 bg-primary-50 dark:bg-primary-950' : 'border-gray-200 dark:border-gray-700'">
+                  <input v-model="method" type="radio" name="payment-method" value="alipay" class="h-5 w-5 shrink-0 accent-primary-700 focus:ring-primary-500" :disabled="busy || !methods.includes('alipay')" />
+                  <img :src="alipayIcon" alt="" class="h-5 w-5 shrink-0" />
+                  <span class="font-medium text-gray-800 dark:text-gray-200">支付宝</span>
+                  <span v-if="!methods.includes('alipay')" class="ml-auto text-xs text-gray-500 dark:text-gray-400">暂不可用</span>
+                </label>
+                <label v-if="methods.includes('wxpay')" class="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors" :class="method === 'wxpay' ? 'border-primary-500 bg-primary-50 dark:bg-primary-950' : 'border-gray-200 dark:border-gray-700'">
+                  <input v-model="method" type="radio" name="payment-method" value="wxpay" class="h-5 w-5 shrink-0 accent-primary-700 focus:ring-primary-500" :disabled="busy || !methods.includes('wxpay')" />
+                  <img :src="wxpayIcon" alt="" class="h-5 w-5 shrink-0" />
+                  <span class="font-medium text-gray-800 dark:text-gray-200">微信支付</span>
+                  <span v-if="!methods.includes('wxpay')" class="ml-auto text-xs text-gray-500 dark:text-gray-400">暂不可用</span>
                 </label>
               </div>
-              <p v-else class="rounded-xl border border-gray-200/80 bg-gray-50 px-3.5 py-3 text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-800/60 dark:text-gray-400">暂无可用支付方式</p>
             </fieldset>
 
-            <p v-if="error" role="alert" class="text-sm leading-6 text-red-700 dark:text-red-300">{{ error }}</p>
-            <button
-              class="btn btn-primary min-h-[44px] w-full text-base font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
-              :disabled="busy || !methods.length || !product.enabled || product.price <= 0"
-              @click="buy"
-            >
-              {{ busy ? '正在创建订单…' : '购买' }}
-            </button>
+            <p v-if="!methods.length" class="mt-3 text-sm text-gray-600 dark:text-gray-400">暂无可用支付方式，请稍后再试。</p>
 
-            <div class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700/80">
-              <div class="flex items-start gap-2 text-xs leading-5 text-gray-600 dark:text-gray-300">
-                <Icon name="mail" size="sm" class="mt-0.5 shrink-0 text-primary-600 dark:text-primary-400" />
-                <p>{{ product.fulfillment_mode === 'session_topup' ? '付款 → 提交完整资料 → 等待人工处理 → 邮件通知' : '付款 → 等待人工发货 → 在订单和邮箱查看交付信息' }}</p>
-              </div>
-              <ShopNotice :show-delivery-time="!hasDeliveryTime" />
-            </div>
+            <button type="button" class="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900" :disabled="busy || !methods.includes(method) || !product.enabled || product.price <= 0" :aria-busy="busy" @click="buy">
+              购买
+            </button>
+            <p v-if="error" class="mt-3 break-words text-sm leading-6 text-red-700 dark:text-red-300" role="alert">{{ error }}</p>
           </aside>
         </div>
       </template>
     </div>
 
-    <BaseDialog :show="!!checkout" title="商城订单付款" mobile-sheet @close="openOrder">
-      <PaymentStatusPanel v-if="checkout" :key="checkout.order_id" :order-id="checkout.order_id" :amount="checkout.amount" :pay-amount="checkout.pay_amount" :qr-code="checkout.qr_code || ''" :expires-at="checkout.expires_at" :payment-type="checkout.payment_type || method" :pay-url="checkout.pay_url" :checkout-frame-url="checkout.checkout_frame_url" :allow-checkout-frame="true" order-type="manual_shop" currency="CNY" :out-trade-no="checkout.out_trade_no" @done="openOrder" @settled="openOrder" />
+    <BaseDialog v-if="checkout" :show="true" :title="`订单支付 · ¥${checkout.pay_amount.toFixed(2)}`" mobile-sheet @close="openOrder">
+      <div class="shop-checkout">
+      <PaymentStatusPanel
+        :key="checkout.order_id"
+        :order-id="checkout.order_id"
+        :amount="checkout.amount"
+        :pay-amount="checkout.pay_amount"
+        :qr-code="checkout.qr_code || ''"
+        :expires-at="checkout.expires_at"
+        :payment-type="checkout.payment_type || method"
+        :pay-url="checkout.pay_url"
+        :checkout-frame-url="checkout.checkout_frame_url"
+        :allow-checkout-frame="true"
+        order-type="manual_shop"
+        currency="CNY"
+        :out-trade-no="checkout.out_trade_no"
+        @done="openOrder"
+        @settled="openOrder"
+      />
+      </div>
     </BaseDialog>
   </AppLayout>
 </template>
+<style scoped>
+.shop-checkout :deep(.card) { padding: 1rem; box-shadow: none; }
+.shop-checkout :deep(.card > .space-y-4 > :not([hidden]) ~ :not([hidden])) { margin-top: .75rem; }
+.shop-checkout :deep(button) { min-height: 44px; }
+</style>

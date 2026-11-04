@@ -1,22 +1,26 @@
 <template>
   <AppLayout>
-    <div class="space-y-4">
-      <RouterLink to="/shop" class="btn btn-secondary">商城</RouterLink>
-      <!-- Filters -->
-      <div class="card p-4">
-        <div class="flex flex-wrap items-center gap-3">
-          <Select :aria-label="t('payment.orders.status')" v-model="currentFilter" :options="statusFilters" class="w-36" @change="handleFilterChange" />
-          <Select v-model="orderTypeFilter" :options="[{ value: '', label: '全部订单类型' }, { value: 'manual_shop', label: '商城订单' }, { value: 'balance', label: '余额充值' }, { value: 'subscription', label: '站内订阅' }, { value: 'reset_card', label: '重置卡' }]" aria-label="订单类型" class="w-44" @change="handleFilterChange" />
-          <Select v-model="fulfillmentFilter" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentFilterLabel')" class="w-44" @change="handleFilterChange" />
-          <Select v-model="invoiceFilter" :options="invoiceOptions" :aria-label="t('payment.invoice.currentStatus')" class="w-44" @change="handleFilterChange" />
-          <div class="flex flex-1 items-center justify-end gap-2">
-            <button @click="fetchOrders()" :disabled="loading" class="btn btn-secondary" :title="t('common.refresh')">
-              <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
-            </button>
-            <button v-if="canShowPaymentEntry" class="btn btn-primary" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
-          </div>
+    <div class="user-orders mx-auto max-w-6xl space-y-5">
+      <header class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm text-gray-500 dark:text-gray-400">共 <span class="font-medium tabular-nums text-gray-900 dark:text-white">{{ pagination.total }}</span> 笔订单</p>
+        <div class="flex flex-wrap gap-2">
+          <RouterLink to="/shop" class="btn btn-secondary min-h-[44px]">前往商城</RouterLink>
+          <button v-if="canShowPaymentEntry" class="btn btn-secondary min-h-[44px]" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
         </div>
-      </div>
+      </header>
+      <!-- Filters -->
+      <details :open="filtersInitiallyOpen" class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+        <summary class="cursor-pointer text-sm font-medium text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary-600 dark:text-white">筛选订单<span v-if="activeFilterCount" class="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">已选 {{ activeFilterCount }} 项</span></summary>
+        <div class="mt-4 grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[repeat(4,minmax(0,1fr))_44px]">
+          <div class="min-w-0 space-y-1.5"><p class="text-xs text-gray-500 dark:text-gray-400">支付状态</p><Select :aria-label="t('payment.orders.status')" v-model="currentFilter" :options="statusFilters" class="w-full" @change="handleFilterChange" /></div>
+          <div class="min-w-0 space-y-1.5"><p class="text-xs text-gray-500 dark:text-gray-400">订单类型</p><Select v-model="orderTypeFilter" :options="[{ value: '', label: '全部订单类型' }, { value: 'manual_shop', label: '商城订单' }, { value: 'balance', label: '余额充值' }, { value: 'subscription', label: '站内订阅' }, { value: 'reset_card', label: '重置卡' }]" aria-label="订单类型" class="w-full" @change="handleFilterChange" /></div>
+          <div class="min-w-0 space-y-1.5"><p class="text-xs text-gray-500 dark:text-gray-400">履约状态</p><Select v-model="fulfillmentFilter" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentFilterLabel')" class="w-full" @change="handleFilterChange" /></div>
+          <div class="min-w-0 space-y-1.5"><p class="text-xs text-gray-500 dark:text-gray-400">发票状态</p><Select v-model="invoiceFilter" :options="invoiceOptions" :aria-label="t('payment.invoice.currentStatus')" class="w-full" @change="handleFilterChange" /></div>
+          <button type="button" @click="fetchOrders()" :disabled="loading" class="btn btn-secondary min-h-[44px] min-w-[44px]" :title="t('common.refresh')" :aria-label="t('common.refresh')">
+            <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
+          </button>
+        </div>
+      </details>
 
       <!-- Table -->
       <OrderTable :orders="orders" :loading="loading">
@@ -28,6 +32,7 @@
               :cancellation-pending="isCancellationPending(row)"
             />
             <OrderLifecycleBadge
+              v-if="row.status !== 'PAID' || paymentFact(row) !== 'PAID'"
               :data-test="`order-payment-fact-${row.id}`"
               kind="payment"
               :value="paymentFact(row)"
@@ -381,11 +386,13 @@ const loading = ref(false)
 const actionLoading = ref(false)
 const orders = ref<PaymentOrder[]>([])
 const refundEligibleProviders = ref<Set<string>>(new Set())
+const filtersInitiallyOpen = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 768px)').matches : true
 const currentFilter = ref('')
 const fulfillmentFilter = ref('')
 const invoiceFilter = ref('')
 const detailOrder = ref<PaymentOrder | null>(null)
 const orderTypeFilter = ref('')
+const activeFilterCount = computed(() => [currentFilter.value, orderTypeFilter.value, fulfillmentFilter.value, invoiceFilter.value].filter(Boolean).length)
 const detailPaymentDiscount = computed(() => detailOrder.value?.product_snapshot?.payment_discount)
 const fulfillmentOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allFulfillments') },
@@ -886,3 +893,7 @@ onUnmounted(() => {
   locallyCancelledOrderIds.value = new Set()
 })
 </script>
+<style scoped>
+.user-orders :deep(button) { min-height: 44px; }
+.user-orders summary { min-height: 44px; align-content: center; }
+</style>

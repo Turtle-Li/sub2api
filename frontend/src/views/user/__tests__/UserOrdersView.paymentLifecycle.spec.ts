@@ -353,6 +353,17 @@ describe('UserOrdersView pending payment lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('shows a paid order once while its payment fact is also paid', async () => {
+    rows = [pendingOrder(new Date(start.getTime() + 60_000).toISOString(), {
+      status: 'PAID', payment_status: 'PAID', fulfillment_status: 'PENDING',
+    })]
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.status.paid')
+    expect(wrapper.find('[data-test="order-payment-fact-51"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('keeps the paid fact separate from a completed order status', async () => {
     rows = [pendingOrder(new Date(start.getTime() + 60_000).toISOString(), {
       status: 'COMPLETED',

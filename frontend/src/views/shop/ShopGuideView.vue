@@ -16,136 +16,883 @@ const sections = [
 </script>
 <template>
   <AppLayout>
-    <div class="guide-page mx-auto max-w-6xl">
-      <RouterLink to="/shop" class="guide-back">← 返回商城</RouterLink>
-      <header class="guide-header">
+    <div class='guide-page'>
+      <a class='guide-skip' href='#guide-content'>跳到指南正文</a>
+
+      <header class='guide-header'>
+        <p class='guide-eyebrow'>使用指南</p>
         <h1>ChatGPT Plus 成品号使用指南</h1>
-        <p>从首次登录到安全设置，按步骤完成即可。</p>
+        <p class='guide-intro'>从准备、登录到安全设置，按章节查阅完整步骤。</p>
       </header>
-      <div class="guide-layout">
-        <aside class="guide-sidebar">
-          <nav aria-label="教程目录" class="guide-desktop-nav">
-            <p>本页内容</p>
-            <ol><li v-for="section in sections" :key="section.id"><a :href="`#${section.id}`">{{ section.title }}</a></li></ol>
+
+      <div class='guide-layout'>
+        <aside class='guide-sidebar'>
+          <nav class='guide-desktop-nav' aria-label='指南章节'>
+            <p class='guide-nav-title'>章节目录</p>
+            <ol class='guide-nav-list'>
+              <li v-for='(section, index) in sections' :key='section.id'>
+                <a :href='`#${section.id}`'>
+                  <span class='guide-nav-number' aria-hidden='true'>{{ index + 1 }}</span>
+                  <span>{{ section.title }}</span>
+                </a>
+              </li>
+            </ol>
           </nav>
-          <details class="guide-mobile-nav">
-            <summary>跳转到章节</summary>
-            <nav aria-label="教程目录"><ol><li v-for="section in sections" :key="section.id"><a :href="`#${section.id}`">{{ section.title }}</a></li></ol></nav>
-          </details>
         </aside>
-        <article class="account-guide" aria-label="成品号操作步骤" v-html="html" />
+
+        <div class='guide-reading-column'>
+          <details class='guide-mobile-nav'>
+            <summary>
+              <span>本章导航</span>
+              <span class='guide-mobile-nav-hint'>选择章节</span>
+            </summary>
+            <nav aria-label='手机指南章节'>
+              <ol class='guide-nav-list'>
+                <li v-for='(section, index) in sections' :key='section.id'>
+                  <a :href='`#${section.id}`'>
+                    <span class='guide-nav-number' aria-hidden='true'>{{ index + 1 }}</span>
+                    <span>{{ section.title }}</span>
+                  </a>
+                </li>
+              </ol>
+            </nav>
+          </details>
+
+          <article id='guide-content' class='guide-article' tabindex='-1' v-html='html'></article>
+        </div>
       </div>
     </div>
   </AppLayout>
 </template>
-
 <style scoped>
 .guide-page {
-  --guide-ink: theme('colors.gray.900');
+  --guide-surface: theme('colors.white');
+  --guide-subtle: theme('colors.gray.50');
+  --guide-heading: theme('colors.gray.900');
+  --guide-text: theme('colors.gray.800');
   --guide-muted: theme('colors.gray.600');
-  --guide-line: theme('colors.gray.200');
-  --guide-paper: theme('colors.white');
-  --guide-soft: theme('colors.gray.50');
-  --guide-accent: theme('colors.primary.700');
-  --guide-tint: theme('colors.primary.50');
-  color: var(--guide-ink);
+  --guide-border: theme('colors.gray.200');
+  --guide-border-strong: theme('colors.gray.300');
+  --guide-primary: theme('colors.primary.600');
+  --guide-primary-strong: theme('colors.primary.700');
+  --guide-primary-soft: theme('colors.primary.50');
+  --guide-focus: theme('colors.primary.500');
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+  color: var(--guide-text);
 }
+
 .dark .guide-page {
-  --guide-ink: theme('colors.gray.100');
-  --guide-muted: theme('colors.gray.300');
-  --guide-line: theme('colors.dark.700');
-  --guide-paper: theme('colors.dark.900');
-  --guide-soft: theme('colors.dark.800');
-  --guide-accent: theme('colors.primary.300');
-  --guide-tint: theme('colors.primary.950');
+  --guide-surface: theme('colors.dark.900');
+  --guide-subtle: theme('colors.dark.800');
+  --guide-heading: theme('colors.white');
+  --guide-text: theme('colors.gray.200');
+  --guide-muted: theme('colors.gray.400');
+  --guide-border: theme('colors.dark.700');
+  --guide-border-strong: theme('colors.dark.600');
+  --guide-primary: theme('colors.primary.400');
+  --guide-primary-strong: theme('colors.primary.300');
+  --guide-primary-soft: theme('colors.dark.800');
+  --guide-focus: theme('colors.primary.400');
 }
-.guide-back { color: var(--guide-accent); font-size: .875rem; }
-.guide-back:hover { text-decoration: underline; text-underline-offset: 4px; }
-.guide-header { padding: 1.75rem 0 2.5rem; }
-.guide-header h1 { max-width: 24ch; font-size: clamp(1.65rem, 2.5vw, 2.25rem); font-weight: 750; line-height: 1.35; letter-spacing: -.025em; text-wrap: balance; }
-.guide-header p { margin-top: .8rem; color: var(--guide-muted); line-height: 1.7; }
-.guide-layout { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); align-items: start; gap: 2.5rem; }
-.guide-sidebar { position: sticky; top: 6rem; }
-.guide-desktop-nav p { margin-bottom: .7rem; color: var(--guide-muted); font-size: .75rem; }
-.guide-desktop-nav a { display: block; padding: .65rem 0; font-size: .875rem; color: var(--guide-muted); line-height: 1.6; }
-.guide-desktop-nav a:hover { color: var(--guide-accent); }
-.guide-mobile-nav { display: none; }
-.account-guide { min-width: 0; padding: 2rem 2.5rem; border: 1px solid var(--guide-line); border-radius: 16px; background: var(--guide-paper); font-size: .9375rem; line-height: 1.9; overflow-wrap: anywhere; }
-.account-guide :deep(p) { margin: .8rem 0; }
-.account-guide :deep(strong) { font-weight: 650; }
-.account-guide :deep(a) { color: var(--guide-accent); text-decoration: underline; text-underline-offset: 4px; }
-.account-guide :deep(a:hover) { text-decoration-thickness: 2px; }
-.guide-page :deep(a:focus-visible), .guide-page :deep(summary:focus-visible) { outline: 2px solid var(--guide-accent); outline-offset: 4px; border-radius: 4px; }
-.account-guide :deep(.guide-overview > p) { margin-top: 0; color: var(--guide-muted); }
-.account-guide :deep(.guide-route) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; padding: 1.4rem 0 .5rem; list-style: none; }
-.account-guide :deep(.guide-route a) { display: block; text-decoration: none; }
-.account-guide :deep(.guide-route span) { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--guide-tint); color: var(--guide-accent); font-size: .875rem; font-weight: 700; }
-.account-guide :deep(.guide-route strong) { display: block; margin-top: .6rem; color: var(--guide-ink); font-size: .9375rem; }
-.account-guide :deep(.guide-route small) { display: block; margin-top: .3rem; font-size: .75rem; line-height: 1.7; color: var(--guide-muted); }
-.account-guide :deep(.guide-section) { padding-top: 2.5rem; margin-top: 2.5rem; border-top: 1px solid var(--guide-line); scroll-margin-top: 6rem; }
-.account-guide :deep(h2) { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; font-size: 1.4rem; font-weight: 750; line-height: 1.5; letter-spacing: -.015em; }
-.account-guide :deep(.guide-section-number) { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 2rem; height: 2rem; border-radius: 8px; color: var(--guide-accent); background: var(--guide-tint); font-size: 1rem; font-weight: 700; }
-.account-guide :deep(h3) { margin: 1.75rem 0 .75rem; font-size: 1.0625rem; font-weight: 700; line-height: 1.7; }
-.account-guide :deep(h4) { margin: 1.5rem 0 .6rem; font-size: .9375rem; font-weight: 700; }
-.account-guide :deep(.guide-step + .guide-step) { margin-top: 2rem; }
-.account-guide :deep(ol:not(.guide-route)), .account-guide :deep(ul:not(.guide-checklist)) { padding-left: 1.4rem; }
-.account-guide :deep(ol:not(.guide-route)) { list-style: decimal; }
-.account-guide :deep(ul:not(.guide-checklist)) { list-style: disc; }
-.account-guide :deep(li + li) { margin-top: .5rem; }
-.account-guide :deep(.guide-route li + li) { margin-top: 0; }
-.account-guide :deep(.guide-preparation > div) { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 1rem; padding: .9rem 0; border-bottom: 1px solid var(--guide-line); }
-.account-guide :deep(.guide-preparation dt) { font-weight: 650; }
-.account-guide :deep(.guide-preparation dd) { color: var(--guide-muted); }
-.account-guide :deep(.guide-hint) { color: var(--guide-muted); font-size: .8125rem; line-height: 1.85; }
-.account-guide :deep(kbd), .account-guide :deep(code) { padding: .1rem .3rem; border: 1px solid var(--guide-line); border-radius: 4px; background: var(--guide-soft); font-size: .8em; }
-.account-guide :deep(.guide-callout) { margin: 1.25rem 0; padding: 1rem 1.25rem; border-radius: 12px; background: var(--guide-tint); color: var(--guide-accent); }
-.account-guide :deep(.guide-callout > strong) { display: block; }
-.account-guide :deep(.guide-callout p) { margin: .3rem 0 0; font-size: .875rem; line-height: 1.8; }
-.account-guide :deep(figure) { margin: 1.4rem 0 1.6rem; }
-.account-guide :deep(figure > a) { display: block; cursor: zoom-in; }
-.account-guide :deep(img) { display: block; width: 100%; height: auto; border: 1px solid var(--guide-line); border-radius: 10px; }
-.account-guide :deep(figcaption) { margin-top: .65rem; color: var(--guide-muted); font-size: .75rem; line-height: 1.7; text-align: center; }
-.account-guide :deep(.guide-table-wrap) { max-width: 100%; overflow-x: auto; margin: 1rem 0; }
-.account-guide :deep(table) { width: 100%; border-collapse: collapse; font-size: .875rem; line-height: 1.8; text-align: left; }
-.account-guide :deep(th) { padding: .8rem 1rem; background: var(--guide-soft); font-weight: 650; }
-.account-guide :deep(td) { padding: .8rem 1rem; border-bottom: 1px solid var(--guide-line); vertical-align: top; }
-.account-guide :deep(th:first-child), .account-guide :deep(td:first-child) { width: 38%; }
-.account-guide :deep(.guide-methods), .account-guide :deep(.guide-faq) { margin: 1rem 0; border-top: 1px solid var(--guide-line); }
-.account-guide :deep(details) { border-bottom: 1px solid var(--guide-line); }
-.account-guide :deep(summary) { padding: 1rem 0; font-size: .9375rem; font-weight: 600; cursor: pointer; }
-.account-guide :deep(summary::marker) { color: var(--guide-accent); }
-.account-guide :deep(.guide-details-body) { padding: 0 0 1rem; }
-.account-guide :deep(.guide-details-body > p:first-child) { margin-top: 0; }
-.account-guide :deep(.guide-faq .guide-details-body) { color: var(--guide-muted); }
-.account-guide :deep(.guide-checklist) { padding: 0; list-style: none; }
-.account-guide :deep(.guide-checklist li) { position: relative; padding-left: 1.8rem; }
-.account-guide :deep(.guide-checklist li::before) { content: ''; position: absolute; top: .48rem; left: .1rem; width: .75rem; height: .45rem; border-left: 2px solid var(--guide-accent); border-bottom: 2px solid var(--guide-accent); transform: rotate(-45deg); }
-.account-guide :deep(.guide-warranty) { font-size: .875rem; color: var(--guide-muted); }
-.account-guide :deep(.guide-warranty h2), .account-guide :deep(.guide-warranty h3) { color: var(--guide-ink); }
-@media (max-width: 1023px) {
-  .guide-layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
-  .guide-sidebar { position: static; }
-  .guide-desktop-nav { display: none; }
-  .guide-mobile-nav { display: block; padding: .8rem 1rem; border: 1px solid var(--guide-line); border-radius: 12px; background: var(--guide-paper); font-size: .875rem; }
-  .guide-mobile-nav summary { cursor: pointer; color: var(--guide-accent); font-weight: 600; }
-  .guide-mobile-nav nav { margin-top: .75rem; }
-  .guide-mobile-nav a { display: block; padding: .6rem 0; color: var(--guide-muted); }
-  .guide-header { padding-bottom: 1.75rem; }
-  .account-guide { padding: 1.75rem; }
+
+.guide-skip {
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: var(--guide-surface);
+  color: var(--guide-primary-strong);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.14);
+  transform: translateY(-160%);
 }
-@media (max-width: 639px) {
-  .guide-header h1 { font-size: 1.65rem; }
-  .guide-header p { font-size: .875rem; }
-  .account-guide { padding: 1.25rem; border-radius: 12px; font-size: .9375rem; line-height: 1.85; }
-  .account-guide :deep(.guide-route) { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
-  .account-guide :deep(.guide-route a) { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); column-gap: .8rem; }
-  .account-guide :deep(.guide-route span) { grid-row: span 2; }
-  .account-guide :deep(.guide-route strong) { margin-top: 0; }
-  .account-guide :deep(.guide-route small) { margin-top: .15rem; }
-  .account-guide :deep(.guide-section) { padding-top: 2rem; margin-top: 2rem; }
-  .account-guide :deep(h2) { font-size: 1.2rem; }
-  .account-guide :deep(.guide-preparation > div) { grid-template-columns: minmax(0, 1fr); gap: .3rem; }
-  .account-guide :deep(.guide-callout) { padding: .9rem 1rem; }
-  .account-guide :deep(th), .account-guide :deep(td) { padding: .65rem .5rem; }
+
+.guide-skip:focus {
+  transform: translateY(0);
+}
+
+.guide-header {
+  max-width: 1024px;
+  margin: 0 auto 30px;
+  padding: 0 0 26px;
+  border-bottom: 1px solid var(--guide-border);
+}
+
+.guide-eyebrow {
+  margin: 0 0 8px;
+  color: var(--guide-primary);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.guide-header h1 {
+  margin: 0;
+  color: var(--guide-heading);
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.guide-intro {
+  margin: 10px 0 0;
+  color: var(--guide-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.guide-layout {
+  display: grid;
+  grid-template-columns: 216px minmax(0, 760px);
+  gap: 44px;
+  justify-content: center;
+  align-items: start;
+}
+
+.guide-sidebar,
+.guide-reading-column {
+  min-width: 0;
+}
+
+.guide-desktop-nav {
+  position: sticky;
+  top: 24px;
+}
+
+.guide-nav-title {
+  margin: 0 0 12px;
+  color: var(--guide-heading);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.guide-nav-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--guide-border);
+}
+
+.guide-nav-list li {
+  border-bottom: 1px solid var(--guide-border);
+}
+
+.guide-nav-list a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 6px;
+  border-radius: 6px;
+  color: var(--guide-muted);
+  font-size: 14px;
+  line-height: 1.45;
+  text-decoration: none;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.guide-nav-list a:hover {
+  background: var(--guide-subtle);
+  color: var(--guide-heading);
+}
+
+.guide-nav-number {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--guide-border);
+  border-radius: 50%;
+  color: var(--guide-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-mobile-nav {
+  display: none;
+}
+
+.guide-article {
+  min-width: 0;
+  max-width: 760px;
+  padding: 36px 40px 40px;
+  border: 1px solid var(--guide-border);
+  border-radius: 12px;
+  background: var(--guide-surface);
+  color: var(--guide-text);
+  font-size: 16px;
+  line-height: 1.85;
+  overflow-wrap: break-word;
+}
+
+.guide-article:focus {
+  outline: none;
+}
+
+.guide-article :deep(p),
+.guide-article :deep(ul),
+.guide-article :deep(ol),
+.guide-article :deep(dl),
+.guide-article :deep(blockquote) {
+  margin-top: 0;
+  margin-bottom: 18px;
+}
+
+.guide-article :deep(ul),
+.guide-article :deep(ol) {
+  padding-left: 1.5em;
+}
+
+.guide-article :deep(li + li) {
+  margin-top: 7px;
+}
+
+.guide-article :deep(a) {
+  color: var(--guide-primary-strong);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.guide-article :deep(a:hover) {
+  text-decoration-thickness: 2px;
+}
+
+.guide-article :deep(a:focus-visible) {
+  outline: 2px solid var(--guide-focus);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.guide-article :deep(strong) {
+  color: var(--guide-heading);
+  font-weight: 600;
+}
+
+.guide-article :deep(.guide-overview) {
+  padding-bottom: 34px;
+  border-bottom: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-overview > p) {
+  margin-bottom: 24px;
+  color: var(--guide-muted);
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.guide-article :deep(.guide-route) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--guide-border);
+  border-radius: 10px;
+  background: var(--guide-subtle);
+  list-style: none;
+}
+
+.guide-article :deep(.guide-route li) {
+  min-width: 0;
+  margin: 0;
+}
+
+.guide-article :deep(.guide-route li + li) {
+  margin: 0;
+  border-left: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-route a) {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  column-gap: 10px;
+  align-content: center;
+  min-height: 112px;
+  padding: 18px 16px;
+  color: var(--guide-text);
+  text-decoration: none;
+}
+
+.guide-article :deep(.guide-route a:hover) {
+  background: var(--guide-primary-soft);
+  text-decoration: none;
+}
+
+.guide-article :deep(.guide-route a:focus-visible) {
+  outline-offset: -3px;
+}
+
+.guide-article :deep(.guide-route a > span) {
+  grid-row: 1 / span 2;
+  padding-top: 2px;
+  color: var(--guide-primary);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-article :deep(.guide-route strong) {
+  grid-column: 2;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.guide-article :deep(.guide-route small) {
+  grid-column: 2;
+  margin-top: 5px;
+  color: var(--guide-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.guide-article :deep(.guide-section) {
+  min-width: 0;
+  padding: 42px 0;
+  border-bottom: 1px solid var(--guide-border);
+  scroll-margin-top: 88px;
+}
+
+.guide-article :deep(.guide-section:last-child) {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.guide-article :deep(.guide-section h2) {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 0 24px;
+  color: var(--guide-heading);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.015em;
+}
+
+.guide-article :deep(.guide-section-number) {
+  flex: none;
+  color: var(--guide-primary);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.guide-article :deep(h3) {
+  margin: 30px 0 12px;
+  color: var(--guide-heading);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.guide-article :deep(h4) {
+  margin: 24px 0 10px;
+  color: var(--guide-heading);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.guide-article :deep(.guide-step) {
+  margin: 24px 0;
+  padding: 3px 0 3px 20px;
+  border-left: 2px solid var(--guide-border-strong);
+}
+
+.guide-article :deep(.guide-step > :first-child) {
+  margin-top: 0;
+}
+
+.guide-article :deep(.guide-step > :last-child) {
+  margin-bottom: 0;
+}
+
+.guide-article :deep(.guide-preparation) {
+  display: grid;
+  grid-template-columns: minmax(116px, 0.34fr) minmax(0, 1fr);
+  margin: 22px 0;
+  border-bottom: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-preparation dt),
+.guide-article :deep(.guide-preparation dd) {
+  min-width: 0;
+  margin: 0;
+  padding: 13px 0;
+  border-top: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-preparation dt) {
+  padding-right: 18px;
+  color: var(--guide-heading);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.guide-article :deep(.guide-preparation dd) {
+  color: var(--guide-text);
+}
+
+.guide-article :deep(.guide-hint) {
+  margin: 18px 0;
+  padding: 12px 16px;
+  border-left: 3px solid var(--guide-primary);
+  background: var(--guide-subtle);
+  color: var(--guide-muted);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.guide-article :deep(.guide-callout) {
+  margin: 22px 0;
+  padding: 16px 18px;
+  border: 1px solid var(--guide-border);
+  border-radius: 8px;
+  background: var(--guide-primary-soft);
+}
+
+.guide-article :deep(.guide-callout > :last-child),
+.guide-article :deep(.guide-hint > :last-child) {
+  margin-bottom: 0;
+}
+
+.guide-article :deep(code),
+.guide-article :deep(kbd) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.guide-article :deep(code) {
+  padding: 2px 5px;
+  border: 1px solid var(--guide-border);
+  border-radius: 4px;
+  background: var(--guide-subtle);
+  color: var(--guide-heading);
+  overflow-wrap: anywhere;
+}
+
+.guide-article :deep(kbd) {
+  display: inline-block;
+  min-width: 1.8em;
+  padding: 1px 6px;
+  border: 1px solid var(--guide-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--guide-surface);
+  color: var(--guide-heading);
+  line-height: 1.6;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.guide-article :deep(pre) {
+  max-width: 100%;
+  margin: 18px 0;
+  padding: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--guide-border);
+  border-radius: 8px;
+  background: var(--guide-subtle);
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.guide-article :deep(pre code) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow-wrap: normal;
+}
+
+.guide-article :deep(figure) {
+  margin: 28px 0;
+}
+
+.guide-article :deep(figure > a) {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  text-align: center;
+  text-decoration: none;
+  cursor: zoom-in;
+}
+
+.guide-article :deep(figure img) {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border: 1px solid var(--guide-border);
+  border-radius: 8px;
+  background: #fff;
+  opacity: 1;
+  filter: none;
+  mix-blend-mode: normal;
+  image-rendering: auto;
+}
+
+.guide-article :deep(figcaption) {
+  margin-top: 10px;
+  color: var(--guide-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.guide-article :deep(.guide-table-wrap) {
+  max-width: 100%;
+  margin: 22px 0;
+  overflow-x: auto;
+  border: 1px solid var(--guide-border);
+  border-radius: 8px;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.guide-article :deep(.guide-table-wrap table) {
+  width: 100%;
+  min-width: 540px;
+  margin: 0;
+  border-collapse: collapse;
+  background: var(--guide-surface);
+  font-size: 14px;
+  line-height: 1.65;
+  text-align: left;
+}
+
+.guide-article :deep(.guide-table-wrap th),
+.guide-article :deep(.guide-table-wrap td) {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--guide-border);
+  vertical-align: top;
+}
+
+.guide-article :deep(.guide-table-wrap th) {
+  background: var(--guide-subtle);
+  color: var(--guide-heading);
+  font-weight: 600;
+}
+
+.guide-article :deep(.guide-table-wrap tr:last-child td) {
+  border-bottom: 0;
+}
+
+.guide-article :deep(.guide-methods),
+.guide-article :deep(.guide-faq) {
+  margin: 22px 0;
+  border-bottom: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-methods details),
+.guide-article :deep(.guide-faq details) {
+  border-top: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-methods summary),
+.guide-article :deep(.guide-faq summary) {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 13px 38px 13px 0;
+  color: var(--guide-heading);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.55;
+  cursor: pointer;
+  list-style: none;
+}
+
+.guide-article :deep(.guide-methods summary::-webkit-details-marker),
+.guide-article :deep(.guide-faq summary::-webkit-details-marker) {
+  display: none;
+}
+
+.guide-article :deep(.guide-methods summary::after),
+.guide-article :deep(.guide-faq summary::after) {
+  content: '';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--guide-muted);
+  border-bottom: 1.5px solid var(--guide-muted);
+  transform: translateY(-70%) rotate(45deg);
+}
+
+.guide-article :deep(.guide-methods details[open] summary::after),
+.guide-article :deep(.guide-faq details[open] summary::after) {
+  transform: translateY(-20%) rotate(225deg);
+}
+
+.guide-article :deep(.guide-methods summary:focus-visible),
+.guide-article :deep(.guide-faq summary:focus-visible) {
+  outline: 2px solid var(--guide-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.guide-article :deep(.guide-details-body) {
+  padding: 0 0 20px;
+  color: var(--guide-text);
+  font-size: 15px;
+}
+
+.guide-article :deep(.guide-details-body > :last-child) {
+  margin-bottom: 0;
+}
+
+.guide-article :deep(.guide-checklist) {
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-article :deep(.guide-checklist li) {
+  position: relative;
+  padding-left: 30px;
+}
+
+.guide-article :deep(.guide-checklist li::before) {
+  content: '';
+  position: absolute;
+  top: 0.55em;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--guide-border-strong);
+  border-radius: 3px;
+  background: var(--guide-surface);
+}
+
+.guide-article :deep(.guide-warranty) {
+  margin-top: 22px;
+  padding: 18px 20px;
+  border: 1px solid var(--guide-border);
+  border-radius: 8px;
+  background: var(--guide-subtle);
+  font-size: 14px;
+}
+
+.guide-article :deep(.guide-warranty > :last-child) {
+  margin-bottom: 0;
+}
+
+.guide-nav-list a:focus-visible,
+.guide-mobile-nav > summary:focus-visible,
+.guide-skip:focus-visible {
+  outline: 2px solid var(--guide-focus);
+  outline-offset: 3px;
+}
+
+@media (max-width: 900px) {
+  .guide-page {
+    max-width: 800px;
+  }
+
+  .guide-layout {
+    display: block;
+  }
+
+  .guide-sidebar {
+    display: none;
+  }
+
+  .guide-reading-column {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  .guide-mobile-nav {
+    display: block;
+    margin-bottom: 16px;
+    border: 1px solid var(--guide-border);
+    border-radius: 10px;
+    background: var(--guide-surface);
+  }
+
+  .guide-mobile-nav > summary {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 52px;
+    padding: 12px 42px 12px 16px;
+    color: var(--guide-heading);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .guide-mobile-nav > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .guide-mobile-nav > summary::after {
+    content: '';
+    position: absolute;
+    right: 18px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--guide-muted);
+    border-bottom: 1.5px solid var(--guide-muted);
+    transform: translateY(-70%) rotate(45deg);
+  }
+
+  .guide-mobile-nav[open] > summary {
+    border-bottom: 1px solid var(--guide-border);
+  }
+
+  .guide-mobile-nav[open] > summary::after {
+    transform: translateY(-20%) rotate(225deg);
+  }
+
+  .guide-mobile-nav-hint {
+    color: var(--guide-muted);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .guide-mobile-nav nav {
+    padding: 0 12px 12px;
+  }
+
+  .guide-mobile-nav .guide-nav-list {
+    border-top: 0;
+  }
+
+  .guide-mobile-nav .guide-nav-list a {
+    min-height: 48px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+}
+
+@media (max-width: 640px) {
+  .guide-page {
+    padding: 20px 16px 40px;
+  }
+
+  .guide-header {
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+  }
+
+  .guide-header h1 {
+    font-size: 25px;
+    line-height: 1.4;
+  }
+
+  .guide-intro {
+    font-size: 13px;
+  }
+
+  .guide-article {
+    padding: 24px 18px 28px;
+    border-radius: 10px;
+    font-size: 16px;
+    line-height: 1.8;
+  }
+
+  .guide-article :deep(.guide-overview) {
+    padding-bottom: 26px;
+  }
+
+  .guide-article :deep(.guide-overview > p) {
+    font-size: 15px;
+  }
+
+  .guide-article :deep(.guide-route) {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-article :deep(.guide-route li + li) {
+    border-top: 1px solid var(--guide-border);
+    border-left: 0;
+  }
+
+  .guide-article :deep(.guide-route a) {
+    min-height: 82px;
+    padding: 15px 16px;
+  }
+
+  .guide-article :deep(.guide-section) {
+    padding: 34px 0;
+    scroll-margin-top: 76px;
+  }
+
+  .guide-article :deep(.guide-section h2) {
+    align-items: flex-start;
+    gap: 9px;
+    margin-bottom: 20px;
+    font-size: 22px;
+  }
+
+  .guide-article :deep(.guide-section-number) {
+    padding-top: 4px;
+    font-size: 12px;
+  }
+
+  .guide-article :deep(h3) {
+    margin-top: 26px;
+    font-size: 18px;
+  }
+
+  .guide-article :deep(.guide-step) {
+    padding-left: 15px;
+  }
+
+  .guide-article :deep(.guide-preparation) {
+    display: block;
+  }
+
+  .guide-article :deep(.guide-preparation dt) {
+    padding: 12px 0 3px;
+    border-top: 1px solid var(--guide-border);
+  }
+
+  .guide-article :deep(.guide-preparation dd) {
+    padding: 0 0 13px;
+    border-top: 0;
+  }
+
+  .guide-article :deep(figure) {
+    margin: 24px 0;
+  }
+
+  .guide-article :deep(.guide-callout),
+  .guide-article :deep(.guide-warranty) {
+    padding: 15px 16px;
+  }
+
+  .guide-article :deep(.guide-methods summary),
+  .guide-article :deep(.guide-faq summary) {
+    min-height: 52px;
+    padding-right: 34px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-nav-list a {
+    transition: none;
+  }
 }
 </style>

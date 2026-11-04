@@ -10,10 +10,37 @@ async function copy(value: string) {
 }
 </script>
 <template>
-  <section class="card space-y-4 p-6">
-    <div class="flex flex-wrap items-center justify-between gap-3"><h2 class="text-lg font-bold">账号已交付</h2><div class="flex gap-2"><button class="btn btn-secondary btn-sm" :aria-pressed="shown" @click="shown = !shown">{{ shown ? '隐藏资料' : '显示资料' }}</button><button class="btn btn-primary btn-sm" @click="copy(content)">复制整份资料</button></div></div>
-    <p class="text-sm text-gray-500 dark:text-gray-400">请妥善保管账号资料，仅在可信设备上查看。</p>
-    <ul class="divide-y divide-gray-100 dark:divide-dark-700"><li v-for="(line, index) in lines" :key="index" class="flex items-start justify-between gap-3 py-3"><span class="min-w-0 whitespace-pre-wrap break-all font-mono text-sm">{{ shown ? line : `资料 ${index + 1} · ••••••••` }}</span><button class="btn btn-secondary btn-sm shrink-0" :aria-label="`复制第 ${index + 1} 项资料`" @click="copy(line)">复制</button></li></ul>
-    <p v-if="message" role="status" class="text-sm text-primary-700 dark:text-primary-300">{{ message }}</p>
+  <section class="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6" aria-labelledby="shop-delivery-title">
+    <div>
+      <h2 id="shop-delivery-title" class="text-lg font-semibold text-gray-900 dark:text-gray-100">账号已交付</h2>
+    </div>
+
+    <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+      <button type="button" class="inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-4 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900" :disabled="!content" :aria-expanded="shown" @click="shown = !shown">
+        {{ shown ? '隐藏交付内容' : '显示交付内容' }}
+      </button>
+      <button type="button" class="inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-4 text-sm font-medium text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800 dark:focus:ring-offset-gray-900" :disabled="!content" @click="copy(content)">复制完整原文</button>
+    </div>
+
+    <p v-if="!content" class="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200" role="alert">订单已标记交付，但未读取到交付内容，请联系站点客服核查。</p>
+
+    <template v-else-if="shown">
+      <pre class="mt-5 max-w-full whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-gray-50 p-4 font-mono text-sm leading-6 text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">{{ content }}</pre>
+      <div class="mt-5 border-t border-gray-200 pt-5 dark:border-gray-800">
+        <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">逐项复制</h3>
+        <ol class="mt-3 space-y-2">
+          <li v-for="(line, index) in lines" :key="index" class="flex flex-col gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between">
+            <span class="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-sm text-gray-700 dark:text-gray-300">{{ line }}</span>
+            <button type="button" class="inline-flex min-h-11 shrink-0 items-center justify-center rounded-md border border-gray-300 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800 dark:focus:ring-offset-gray-900" :aria-label="`复制第 ${index + 1} 行`" @click="copy(line)">复制第 {{ index + 1 }} 行</button>
+          </li>
+        </ol>
+      </div>
+    </template>
+
+    <div v-else-if="content" class="mt-5 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-950">
+      <p class="text-sm text-gray-600 dark:text-gray-400">账号信息已隐藏，点击上方按钮查看或复制。</p>
+    </div>
+
+    <p v-if="message" class="mt-4 text-sm text-gray-700 dark:text-gray-300" role="status" aria-live="polite">{{ message }}</p>
   </section>
 </template>
