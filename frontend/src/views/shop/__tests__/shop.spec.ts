@@ -11,9 +11,10 @@ import ShopProductView from '../ShopProductView.vue'
 import ShopGuideView from '../ShopGuideView.vue'
 import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import { isManualShopPaymentConfirmed } from '@/components/payment/manualShopPayment'
-const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
+const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), createOrder: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
+const checkoutAPI = vi.hoisted(() => ({ getCheckoutInfo: vi.fn() }))
 vi.mock('@/api/shop', () => ({ shopAPI: api }))
-vi.mock('@/api/payment', () => ({ paymentAPI: { getCheckoutInfo: () => Promise.resolve({ data: { methods: {} } }) } }))
+vi.mock('@/api/payment', () => ({ paymentAPI: checkoutAPI }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ contactInfo: '测试客服入口' }) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: '42' } }), useRouter: () => ({ push: vi.fn() }) }))
@@ -22,8 +23,56 @@ const product: ShopProduct = { id: 1, name: '测试商品', category: 'Gemini', 
 const order = (): ShopOrderDetail => ({ order_id: 42, out_trade_no: 'shop-test-42', product, user_id: 8, pay_amount: 12, currency: 'CNY', payment_status: 'PAID', fulfillment_status: 'WAITING_INPUT', revision: 3, input_revision: 0, input_account: '', created_at: '2026-11-04T12:00:00Z', status_note: '', email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: true, can_start: false, can_complete: false, can_reveal_input: false })
 const global = { stubs: { AppLayout: { template: '<main><slot /></main>' }, RouterLink: { template: '<a><slot /></a>' }, ShopOrderSummary: true, TotpStepUpDialog: true, BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' } } }
 enableAutoUnmount(afterEach)
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
 describe('manual shop surfaces', () => {
+  it('offers configured payment methods without an available field and submits the selected method', async () => {
+    const limit = { currency: 'CNY', fee_rate: 0, daily_limit: 0, single_min: 0.1, single_max: 0.1 }
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: limit, wxpay: limit } } })
+    api.product.mockResolvedValue({ data: { ...product, price: 0.1 } })
+    api.createOrder.mockResolvedValue({ data: { order_id: 42, amount: 0.1, pay_amount: 0.1, payment_type: 'wxpay', expires_at: '2099-01-01T00:00:00Z' } })
+    const wrapper = mount(ShopProductView, { global: { stubs: { ...global.stubs, PaymentStatusPanel: true } } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('暂无可用支付方式')
+    expect(wrapper.text()).toContain('支付宝')
+    expect(wrapper.text()).toContain('微信')
+    const wxpay = wrapper.findAll('input[type="radio"]').find(input => input.attributes('value') === 'wxpay')
+    expect(wxpay).toBeDefined()
+    await wxpay!.setValue(true)
+    const buy = wrapper.findAll('button').find(button => button.text() === '购买')!
+    expect(buy.attributes('disabled')).toBeUndefined()
+    await buy.trigger('click')
+    await flushPromises()
+    expect(api.createOrder).toHaveBeenCalledWith({ product_id: product.id, product_revision: product.revision, payment_type: 'wxpay' }, expect.any(String))
+    expect(wrapper.findComponent({ name: 'PaymentStatusPanel' }).exists()).toBe(true)
+  })
+  it('shows an order creation failure beside the purchase action', async () => {
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY' } } } })
+    api.product.mockResolvedValue({ data: product })
+    api.createOrder.mockRejectedValueOnce(new Error('synthetic provider outage'))
+    const wrapper = mount(ShopProductView, { global: { stubs: { ...global.stubs, PaymentStatusPanel: true } } })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '购买')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[role="alert"]')).toHaveLength(1)
+    expect(wrapper.get('aside [role="alert"]').text()).toContain('未能创建订单')
+    expect(wrapper.findAll('button').find(button => button.text() === '购买')!.attributes('disabled')).toBeUndefined()
+  })
+  it.each([
+    { methods: {}, label: 'unconfigured' },
+    { methods: { alipay: { available: false } }, label: 'explicitly disabled' },
+    { methods: { alipay: { single_min: 12.01 } }, label: 'below the method minimum' },
+    { methods: { alipay: { single_max: 11.99 } }, label: 'above the method maximum' },
+    { methods: { alipay: { currency: 'USD' } }, label: 'a non-CNY method' },
+    { methods: { stripe: { available: true } }, label: 'an unsupported method' },
+  ])('keeps checkout closed for $label methods', async ({ methods }) => {
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods } })
+    api.product.mockResolvedValue({ data: product })
+    const wrapper = mount(ShopProductView, { global: { stubs: { ...global.stubs, PaymentStatusPanel: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('暂无可用支付方式')
+    expect(wrapper.findAll('button').find(button => button.text() === '购买')!.attributes('disabled')).toBeDefined()
+    expect(api.createOrder).not.toHaveBeenCalled()
+  })
   it('shows an actionable empty catalog without inventing products or prices', async () => {
     api.products.mockResolvedValue({ data: [] })
     const wrapper = mount(ShopView, { global })

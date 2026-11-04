@@ -73,7 +73,8 @@ export interface MethodLimit {
   single_min: number
   single_max: number
   fee_rate: number
-  available: boolean
+  /** Optional in checkout-info: returned method keys are enabled unless explicitly false. */
+  available?: boolean
 }
 
 /** Response from /payment/limits API */
