@@ -433,6 +433,7 @@ import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
 import paymentIcon from '@/assets/icons/payment.svg'
 import { fulfillmentFact, paymentFact } from '@/components/payment/orderPresentation'
+import { isPaymentReturnReadyMessage } from './embeddedPaymentReturn'
 import {
   createAlipayDeepLinkLauncher,
   type AlipayDeepLinkLauncher,
@@ -584,6 +585,14 @@ function onIframeLoad() {
 function onIframeError() {
   iframeLoading.value = false
   frameLoadError.value = true
+}
+
+function onPaymentReturnMessage(event: MessageEvent<unknown>) {
+  if (!showCheckoutFrame.value || event.origin !== window.location.origin || !isPaymentReturnReadyMessage(event.data)) return
+  const frame = checkoutFrame.value
+  if (!frame || event.source !== frame.contentWindow) return
+  frame.style.visibility = 'hidden'
+  waitForAuthoritativeConfirmation()
 }
 
 const isMobileAlipayDeepLink = computed(() => (resumedMobileAlipayDeepLink.value ?? props.mobileAlipayDeepLink) === true && isAlipay.value && !!qrUrl.value)
@@ -1355,9 +1364,11 @@ watch([() => qrUrl.value, showQRCode, sessionVersion], () => { void renderQR() }
 onMounted(() => {
   mounted = true
   disposed = false
+  window.addEventListener('message', onPaymentReturnMessage)
   startSession()
 })
 onUnmounted(() => {
+  window.removeEventListener('message', onPaymentReturnMessage)
   disposed = true
   mounted = false
   cleanupSession()

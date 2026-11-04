@@ -286,6 +286,28 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.emitted('success')).toHaveLength(1)
   })
 
+  it('accepts only same-origin return hints from its own checkout frame without trusting a success flag', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: { orderId: 42, qrCode: '', checkoutFrameUrl: alipayCheckoutFrameUrl(), allowCheckoutFrame: true, expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay' },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+    const source = wrapper.get<HTMLIFrameElement>('[data-test="alipay-checkout-frame"]').element.contentWindow
+    const data = { type: 'sub2api:payment-return-ready', status: 'success', order_id: 999 }
+    window.dispatchEvent(new MessageEvent('message', { data, origin: 'https://other.example', source }))
+    window.dispatchEvent(new MessageEvent('message', { data, origin: window.location.origin, source: window }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    window.dispatchEvent(new MessageEvent('message', { data, origin: window.location.origin, source }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+    expect(pollOrderStatus).toHaveBeenLastCalledWith(42)
+    expect(wrapper.emitted('success')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('keeps the Alipay frame open while its cross-origin location is unreadable', async () => {
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const wrapper = mount(PaymentStatusPanel, {

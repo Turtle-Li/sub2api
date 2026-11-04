@@ -106,6 +106,47 @@ const recoverySnapshotFactory = (resumeToken: string) => ({
 })
 
 describe('PaymentResultView', () => {
+  it('renders only compact confirmation in a frame and delegates exact-order polling to its parent', async () => {
+    routeState.query = { order_id: '999', status: 'success' }
+    const frame = document.createElement('iframe')
+    document.body.appendChild(frame)
+    const parent = frame.contentWindow
+    if (!parent) throw new Error('A parent browsing context is required')
+    const postMessage = vi.spyOn(parent, 'postMessage')
+    const parentGetter = vi.spyOn(window, 'parent', 'get').mockReturnValue(parent)
+    try {
+      const wrapper = mount(PaymentResultView, { global: { stubs: { RouterLink: true } } })
+      await flushPromises()
+      expect(wrapper.get('[data-test="compact-payment-result"]').exists()).toBe(true)
+      expect(wrapper.findAll('a, button')).toHaveLength(0)
+      expect(wrapper.text()).not.toContain('payment.result.success')
+      expect(pollOrderStatus).not.toHaveBeenCalled()
+      expect(verifyOrderPublic).not.toHaveBeenCalled()
+      expect(postMessage).toHaveBeenCalledWith({ type: 'sub2api:payment-return-ready' }, window.location.origin)
+    } finally {
+      parentGetter.mockRestore()
+      postMessage.mockRestore()
+      frame.remove()
+    }
+  })
+  it('shows only verified payment status in the named payment popup', async () => {
+    routeState.query = { order_id: '42', status: 'success' }
+    pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-05T00:00:00Z' })
+    const previousName = window.name
+    window.name = 'paymentPopup'
+    vi.stubGlobal('opener', window)
+    try {
+      const wrapper = mount(PaymentResultView, { global: { stubs: { RouterLink: true } } })
+      await flushPromises()
+      expect(wrapper.get('[data-test="compact-payment-result"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('payment.result.success')
+      expect(wrapper.findAll('a, button')).toHaveLength(0)
+      expect(pollOrderStatus).toHaveBeenCalledWith(42)
+    } finally {
+      window.name = previousName
+      vi.unstubAllGlobals()
+    }
+  })
   beforeEach(() => {
     routeState.query = {}
     routerPush.mockReset()

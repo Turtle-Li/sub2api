@@ -1,6 +1,6 @@
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-gray-50 px-4 dark:bg-dark-900">
-    <div class="w-full max-w-md space-y-6">
+  <div class="flex min-h-screen items-center justify-center bg-gray-50 px-4 dark:bg-dark-900" :class="compactReturn ? 'py-5' : ''" :data-test="compactReturn ? 'compact-payment-result' : undefined">
+    <div class="w-full max-w-md" :class="compactReturn ? 'space-y-3' : 'space-y-6'" aria-live="polite">
       <!-- Loading -->
       <div v-if="loading" class="flex items-center justify-center py-20">
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
@@ -28,11 +28,12 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </div>
-          <h2 class="mt-4 text-2xl font-bold text-gray-900 dark:text-white">
+          <h2 class="mt-4 font-bold text-gray-900 dark:text-white" :class="compactReturn ? 'text-lg' : 'text-2xl'">
             {{ statusTitle }}
           </h2>
           <p v-if="statusHint" class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ statusHint }}</p>
         </div>
+        <template v-if="!compactReturn">
         <!-- Order Info -->
         <div v-if="order" class="rounded-xl bg-white p-5 shadow-sm dark:bg-dark-800">
           <div class="space-y-3 text-sm">
@@ -120,6 +121,7 @@
           <button v-if="canRefresh" class="btn btn-secondary flex-1" @click="refreshNow">{{ t('payment.qr.refreshStatus') }}</button>
           <button class="btn btn-primary flex-1" @click="router.push('/orders')">{{ t('payment.result.viewOrders') }}</button>
         </div>
+        </template>
       </template>
     </div>
   </div>
@@ -147,6 +149,7 @@ import type { OrderStatus, PaymentOrder } from '@/types/payment'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import { normalizePaymentMethodForDisplay, paymentMethodI18nKey } from './paymentUx'
 import { paymentFact, fulfillmentFact } from '@/components/payment/orderPresentation'
+import { PAYMENT_RETURN_READY_MESSAGE } from '@/components/payment/embeddedPaymentReturn'
 
 const i18n = useI18n()
 const { t } = i18n
@@ -154,6 +157,8 @@ const route = useRoute()
 const router = useRouter()
 const paymentStore = usePaymentStore()
 const authStore = useAuthStore()
+const embeddedReturn = typeof window !== 'undefined' && window.parent !== window
+const compactReturn = embeddedReturn || (typeof window !== 'undefined' && window.name === 'paymentPopup' && Boolean(window.opener))
 
 type ResolvedOrder = PaymentOrder | PublicOrderVerifyResult
 
@@ -655,6 +660,12 @@ async function initialize(): Promise<void> {
 }
 
 onMounted(() => {
+  if (embeddedReturn) {
+    knownContext.value = true
+    loading.value = false
+    window.parent.postMessage({ type: PAYMENT_RETURN_READY_MESSAGE }, window.location.origin)
+    return
+  }
   void initialize()
 })
 
