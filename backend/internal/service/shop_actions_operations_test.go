@@ -8,13 +8,40 @@ import (
 	"testing"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
+	"github.com/Wei-Shaw/sub2api/ent/shopnotification"
 	"github.com/Wei-Shaw/sub2api/ent/shoporderaction"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"github.com/stretchr/testify/require"
 )
+
+func TestShopAutomaticOrdersDoNotRequestManualDelivery(t *testing.T) {
+	ctx := context.Background()
+	s, pay, o, _ := newShopUnit(t, ShopAccountDelivery, true)
+	f := s.client.ShopFulfillment.Query().Where(shopfulfillment.OrderIDEQ(o.ID)).OnlyX(ctx)
+	f.ProductSnapshot["automatic_fulfillment"] = true
+	raw, err := json.Marshal(f.ProductSnapshot)
+	require.NoError(t, err)
+	_, err = s.client.ExecContext(ctx, "UPDATE shop_fulfillments SET product_snapshot=? WHERE id=?", string(raw), f.ID)
+	require.NoError(t, err)
+	page, err := pay.AdminOrderPresentations(ctx, []*dbent.PaymentOrder{o})
+	require.NoError(t, err)
+	require.False(t, page[o.ID].CanOpenShopFulfillment)
+}
+
+func TestShopAutomaticPaidNotificationUsesAutomaticDeliveryTitle(t *testing.T) {
+	ctx := context.Background()
+	s, o, _ := newDaypassUnit(t)
+	s.client.ShopNotification.Delete().Where(shopnotification.OrderIDNEQ(o.ID)).ExecX(ctx)
+	require.NoError(t, s.RecoverNotifications(ctx))
+	messages := s.feishu.(*shopTestFeishu).messages
+	require.Len(t, messages, 1)
+	require.Contains(t, messages[0], "商城订单已付款，自动交付中\n")
+	require.NotContains(t, messages[0], "成品号已付款，待交付")
+}
 
 func TestShopActionPausedConfigurationRetainsCleanupCapability(t *testing.T) {
 	i := shopaction.Integration{ID: "newapi-domestic", Version: 1, Adapter: shopaction.Native, Endpoint: "http://100.64.0.1:17867"}

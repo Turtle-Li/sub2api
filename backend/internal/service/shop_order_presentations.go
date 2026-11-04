@@ -35,7 +35,7 @@ func (s *PaymentService) AdminOrderPresentations(ctx context.Context, orders []*
 		return nil, fmt.Errorf("read admin shop fulfillment availability: %w", err)
 	}
 	for _, task := range tasks {
-		if _, err := shopSnapshot(task); err != nil {
+		if p, err := shopSnapshot(task); err != nil || shopAutomaticFulfillment(p) {
 			continue
 		}
 		item := page[task.OrderID]

@@ -148,6 +148,9 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		} else if p.FulfillmentMode == ShopAccountDelivery {
 			event = "成品号已付款，待交付"
 		}
+		if shopAutomaticFulfillment(p) {
+			event = "商城订单已付款，自动交付中"
+		}
 		if job.Event == "action_review" || p.Name == "商品配置待复核" {
 			event = "商城自动交付待复核"
 		}
