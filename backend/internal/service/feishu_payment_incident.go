@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/google/uuid"
 )
@@ -93,9 +94,10 @@ type FeishuPaymentRefundFenceState struct {
 }
 
 type FeishuPaymentOrderState struct {
-	Exists bool
-	Status string
-	PaidAt *time.Time
+	OrderType string
+	Exists    bool
+	Status    string
+	PaidAt    *time.Time
 }
 
 // FeishuPaymentIncidentStore is intentionally separate from business outbox
@@ -109,6 +111,7 @@ type FeishuPaymentIncidentStore interface {
 	Observe(ctx context.Context, kind FeishuPaymentIncidentKind, subjectOrderID int64, now time.Time) error
 	TouchOpen(ctx context.Context, incidentID string, now time.Time) error
 	ListOpenForRecheck(ctx context.Context, limit int) ([]FeishuPaymentIncident, error)
+	RetireManualShop(ctx context.Context, incidentID string, now time.Time) error
 	Resolve(ctx context.Context, incidentID string, now time.Time) error
 	ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]FeishuPaymentDelivery, error)
 	ClaimExact(ctx context.Context, deliveryID string, lease time.Duration) (*FeishuPaymentDelivery, error)
@@ -401,6 +404,9 @@ func (s *FeishuPaymentIncidentService) recheckOpen(ctx context.Context, incident
 		if err != nil {
 			return err
 		}
+		if state.OrderType == payment.OrderTypeManualShop {
+			return s.store.RetireManualShop(ctx, incident.ID, now)
+		}
 		if state.Exists && isFeishuKnownPaymentResolution(state.Status) {
 			return s.store.Resolve(ctx, incident.ID, now)
 		}
@@ -413,7 +419,7 @@ func (s *FeishuPaymentIncidentService) recheckOpen(ctx context.Context, incident
 }
 
 func isFeishuPaidIncomplete(state FeishuPaymentOrderState, now time.Time) bool {
-	if !state.Exists || state.PaidAt == nil || state.PaidAt.After(now.Add(-feishuPaymentIncidentPaidAge)) {
+	if state.OrderType == payment.OrderTypeManualShop || !state.Exists || state.PaidAt == nil || state.PaidAt.After(now.Add(-feishuPaymentIncidentPaidAge)) {
 		return false
 	}
 	switch state.Status {

@@ -157,6 +157,23 @@ func TestShopPaidManualQueueAndDuplicateCallback(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, OrderStatusPaid, current.Status)
 			require.Zero(t, current.Amount)
+			wantTitle := "成品号已付款，待交付"
+			if mode == ShopSessionTopup {
+				wantTitle = "代充订单已付款"
+			}
+			require.NoError(t, s.RecoverNotifications(ctx))
+			msg := s.feishu.(*shopTestFeishu).messages
+			require.Len(t, msg, 1)
+			require.Contains(t, msg[0], wantTitle+"\n")
+			if mode == ShopSessionTopup {
+				_, err := s.SubmitInput(ctx, o.ID, u.ID, d.Revision, shopValidSession())
+				require.NoError(t, err)
+				require.NoError(t, s.RecoverNotifications(ctx))
+				msg = s.feishu.(*shopTestFeishu).messages
+				require.Len(t, msg, 2)
+				require.Contains(t, msg[1], "代充资料已提交\n")
+				require.NotContains(t, msg[1], "synthetic-session-secret")
+			}
 		})
 	}
 }

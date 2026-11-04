@@ -138,9 +138,11 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		if s.feishu == nil {
 			return errors.New("shop feishu unavailable")
 		}
-		event := "商城订单已付款"
+		event := "代充订单已付款"
 		if job.Event == "input_received" {
-			event = "商城订单已提交资料"
+			event = "代充资料已提交"
+		} else if p.FulfillmentMode == ShopAccountDelivery {
+			event = "成品号已付款，待交付"
 		}
 		message := fmt.Sprintf("%s\n订单：%s\n商品：%s\n金额：CNY %.2f\n处理状态：%s\n后台：%s", event, o.OutTradeNo, p.Name, o.PayAmount, f.Status, s.frontendURL(ctx, fmt.Sprintf("/admin/shop/orders/%d", o.ID)))
 		return s.feishu.SendText(ctx, message)

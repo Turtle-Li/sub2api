@@ -127,6 +127,26 @@ func TestFeishuPaymentIncidentStorePostgresConcurrentOpenClaimRecoveryAndReopen(
 		WHERE incident_id = $1::uuid AND delivery_kind = 'REMINDER' AND status = 'PENDING'
 	`, incidentID)
 	require.NoError(t, err)
+	other := fixture.createPaidBalanceOrder(user, 9, service.OrderStatusPaid, now)
+	cleanupFeishuPaymentIncidentRows(t, other.ID)
+	require.NoError(t, store.Observe(ctx, service.FeishuPaymentIncidentPaidIncomplete, other.ID, now))
+	otherClaims, err := store.ClaimDue(ctx, 4, 30*time.Second)
+	require.NoError(t, err)
+	require.Len(t, otherClaims, 1)
+	require.Equal(t, other.ID, otherClaims[0].SubjectOrderID)
+	require.NoError(t, store.MarkDelivered(ctx, otherClaims[0].ID, otherClaims[0].ClaimToken))
+	for _, age := range []string{"19 minutes 59 seconds", "20 minutes"} {
+		_, err := integrationDB.ExecContext(ctx, `UPDATE feishu_payment_incident_deliveries
+			SET delivered_at = clock_timestamp() - $2::interval WHERE id=$1::uuid`, recovered[0].ID, age)
+		require.NoError(t, err)
+		if age == "19 minutes 59 seconds" {
+			for range 2 {
+				claims, err := store.ClaimDue(ctx, 1, 30*time.Second)
+				require.NoError(t, err)
+				require.Empty(t, claims)
+			}
+		}
+	}
 	claimedReminder, err := store.ClaimDue(ctx, 1, 30*time.Second)
 	require.NoError(t, err)
 	require.Len(t, claimedReminder, 1)
@@ -161,6 +181,48 @@ func TestFeishuPaymentIncidentStorePostgresConcurrentOpenClaimRecoveryAndReopen(
 	}
 	require.NoError(t, rows.Err())
 	require.Equal(t, []int{1, 2}, generations)
+}
+
+func TestFeishuPaymentIncidentStorePostgresManualShopHistory(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
+	user := fixture.createUser(0)
+	store := NewFeishuPaymentIncidentStore(integrationDB)
+	now := time.Now().UTC().Add(-2 * time.Hour)
+	for _, resolved := range []bool{false, true} {
+		order := fixture.createPaidBalanceOrder(user, 7, service.OrderStatusPaid, now)
+		cleanupFeishuPaymentIncidentRows(t, order.ID)
+		_, err := integrationDB.ExecContext(ctx, `UPDATE payment_orders SET order_type='manual_shop' WHERE id=$1`, order.ID)
+		require.NoError(t, err)
+		ids, err := store.ListPaidIncompleteCandidates(ctx, time.Now(), 100)
+		require.NoError(t, err)
+		require.NotContains(t, ids, order.ID)
+		state, err := store.LoadPaymentOrderState(ctx, order.ID)
+		require.NoError(t, err)
+		require.Equal(t, "manual_shop", state.OrderType)
+		require.NoError(t, store.Observe(ctx, service.FeishuPaymentIncidentPaidIncomplete, order.ID, now))
+		var id string
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT id::text FROM feishu_payment_incidents WHERE subject_order_id=$1`, order.ID).Scan(&id))
+		require.NoError(t, store.TouchOpen(ctx, id, now.Add(time.Hour)))
+		if resolved {
+			require.NoError(t, store.Resolve(ctx, id, time.Now()))
+		} else {
+			require.NoError(t, store.RetireManualShop(ctx, id, time.Now()))
+		}
+		require.NoError(t, store.Observe(ctx, service.FeishuPaymentIncidentRefundReview, order.ID, now))
+		claims, err := store.ClaimDue(ctx, 4, 30*time.Second)
+		require.NoError(t, err)
+		require.Len(t, claims, 1)
+		require.Equal(t, service.FeishuPaymentIncidentRefundReview, claims[0].IncidentKind)
+		require.NoError(t, store.MarkDelivered(ctx, claims[0].ID, claims[0].ClaimToken))
+		var count int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT count(*) FROM feishu_payment_incident_deliveries WHERE incident_id=$1 AND status='SUPPRESSED'`, id).Scan(&count))
+		if resolved {
+			require.Equal(t, 3, count)
+		} else {
+			require.Equal(t, 2, count)
+		}
+	}
 }
 
 func TestFeishuPaymentIncidentStorePostgresExpiredLeaseFencesSendAndTransitions(t *testing.T) {

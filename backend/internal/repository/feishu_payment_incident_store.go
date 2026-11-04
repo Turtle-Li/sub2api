@@ -72,6 +72,7 @@ func (s *feishuPaymentIncidentStore) ListPaidIncompleteCandidates(ctx context.Co
 			ON incident.incident_key = ('paid-incomplete:' || payment_order.id::text)
 			AND incident.status = 'OPEN'
 		WHERE payment_order.paid_at IS NOT NULL
+			AND payment_order.order_type <> 'manual_shop'
 			AND payment_order.paid_at <= $1
 			AND payment_order.status IN ('PAID', 'FAILED', 'RECHARGING')
 		ORDER BY COALESCE(incident.last_observed_at, payment_order.paid_at), payment_order.id
@@ -144,19 +145,19 @@ func (s *feishuPaymentIncidentStore) LoadPaymentOrderState(ctx context.Context, 
 		return service.FeishuPaymentOrderState{}, err
 	}
 	var (
-		status string
-		paidAt sql.NullTime
+		status, orderType string
+		paidAt            sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status, paid_at FROM payment_orders WHERE id = $1
-	`, orderID).Scan(&status, &paidAt)
+		SELECT status, order_type, paid_at FROM payment_orders WHERE id = $1
+	`, orderID).Scan(&status, &orderType, &paidAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return service.FeishuPaymentOrderState{}, nil
 	}
 	if err != nil {
 		return service.FeishuPaymentOrderState{}, err
 	}
-	state := service.FeishuPaymentOrderState{Exists: true, Status: status}
+	state := service.FeishuPaymentOrderState{Exists: true, Status: status, OrderType: orderType}
 	if paidAt.Valid {
 		value := paidAt.Time.UTC()
 		state.PaidAt = &value
@@ -292,6 +293,28 @@ func (s *feishuPaymentIncidentStore) ListOpenForRecheck(ctx context.Context, lim
 	return result, rows.Err()
 }
 
+// Historical manual shop incidents never represented an automatic fulfillment failure.
+func (s *feishuPaymentIncidentStore) RetireManualShop(ctx context.Context, incidentID string, now time.Time) error {
+	if err := s.available(1); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE feishu_payment_incidents AS incident
+		SET status = 'RESOLVED', resolved_at = $2, updated_at = $2, last_checked_at = $2
+		WHERE incident.id = $1::uuid AND incident.status = 'OPEN' AND `+manualShopIncident, incidentID, now)
+	return err
+}
+
+// Compare against successful deliveries, since queue or retry delays can move a send far past enqueue time.
+const feishuDeliverySpacing = `NOT EXISTS (
+	SELECT 1 FROM feishu_payment_incident_deliveries prior
+	WHERE prior.incident_id = delivery.incident_id AND prior.status = 'DELIVERED'
+		AND prior.delivered_at > clock_timestamp() - INTERVAL '20 minutes'
+)`
+const manualShopIncident = `(incident.incident_type = 'PAID_INCOMPLETE' AND EXISTS (
+	SELECT 1 FROM payment_orders AS o WHERE o.id = incident.subject_order_id AND o.order_type = 'manual_shop'
+))`
+
 func (s *feishuPaymentIncidentStore) Resolve(ctx context.Context, incidentID string, now time.Time) error {
 	if err := s.available(1); err != nil {
 		return err
@@ -348,7 +371,7 @@ func (s *feishuPaymentIncidentStore) ClaimDue(ctx context.Context, limit int, le
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := suppressObsoleteFeishuPaymentReminders(ctx, tx); err != nil {
+	if err := suppressObsoleteFeishuPaymentDeliveries(ctx, tx); err != nil {
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `
@@ -365,6 +388,8 @@ func (s *feishuPaymentIncidentStore) ClaimDue(ctx context.Context, limit int, le
 				(delivery.status = 'PENDING' AND delivery.not_before <= authoritative_clock.now)
 				OR (delivery.status = 'CLAIMED' AND delivery.lease_expires_at <= authoritative_clock.now)
 			)
+			AND NOT `+manualShopIncident+`
+			AND `+feishuDeliverySpacing+`
 			AND NOT (delivery.delivery_kind = 'REMINDER' AND incident.status <> 'OPEN')
 			AND NOT EXISTS (
 				SELECT 1 FROM feishu_payment_incident_deliveries AS previous
@@ -430,6 +455,8 @@ func (s *feishuPaymentIncidentStore) ClaimExact(ctx context.Context, deliveryID 
 		FROM feishu_payment_incident_deliveries AS delivery
 		JOIN feishu_payment_incidents AS incident ON incident.id = delivery.incident_id
 		WHERE delivery.id = $1::uuid
+			AND NOT `+manualShopIncident+`
+			AND `+feishuDeliverySpacing+`
 			AND NOT (delivery.delivery_kind = 'REMINDER' AND incident.status <> 'OPEN')
 			AND NOT EXISTS (
 				SELECT 1 FROM feishu_payment_incident_deliveries AS previous
@@ -475,6 +502,8 @@ func (s *feishuPaymentIncidentStore) CanSend(ctx context.Context, deliveryID, cl
 		WHERE delivery.id = $1::uuid AND delivery.claim_token = $2::uuid
 			AND delivery.status = 'CLAIMED' AND incident.id = delivery.incident_id
 			AND delivery.lease_expires_at > authoritative_clock.now
+			AND NOT `+manualShopIncident+`
+			AND `+feishuDeliverySpacing+`
 			AND (delivery.delivery_kind <> 'REMINDER' OR incident.status = 'OPEN')
 		RETURNING delivery.id::text
 	`, deliveryID, claimToken).Scan(&id)
@@ -763,14 +792,14 @@ func insertFeishuPaymentDelivery(ctx context.Context, tx *sql.Tx, incidentID str
 	return err
 }
 
-func suppressObsoleteFeishuPaymentReminders(ctx context.Context, tx *sql.Tx) error {
+func suppressObsoleteFeishuPaymentDeliveries(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 		UPDATE feishu_payment_incident_deliveries AS delivery
 		SET status = 'SUPPRESSED', claim_token = NULL, claimed_at = NULL,
-			lease_expires_at = NULL, last_error_code = 'obsolete_reminder', updated_at = clock_timestamp()
+			lease_expires_at = NULL, last_error_code = CASE WHEN `+manualShopIncident+` THEN 'manual_shop' ELSE 'obsolete_reminder' END, updated_at = clock_timestamp()
 		FROM feishu_payment_incidents AS incident
-		WHERE delivery.incident_id = incident.id AND delivery.delivery_kind = 'REMINDER'
-			AND delivery.status IN ('PENDING', 'CLAIMED') AND incident.status <> 'OPEN'
+		WHERE delivery.incident_id = incident.id AND delivery.status IN ('PENDING', 'CLAIMED')
+			AND ((delivery.delivery_kind = 'REMINDER' AND incident.status <> 'OPEN') OR `+manualShopIncident+`)
 	`)
 	return err
 }
