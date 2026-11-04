@@ -440,7 +440,7 @@ import {
   type AlipayDeepLinkState,
 } from './alipayDeepLink'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   orderId: number
   amount?: number
   payAmount?: number
@@ -464,7 +464,7 @@ const props = defineProps<{
   initialCancellationPending?: boolean
   /** Resume was refused while the provider payment state is still uncertain. */
   initialConfirmationPending?: boolean
-}>()
+}>(), { allowTopLevelRedirect: true })
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
 

@@ -120,7 +120,7 @@ describe('PaymentStatusPanel', () => {
     vi.useRealTimers()
   })
 
-  it.each([true, false])('uses a same-window fallback only with recoverable context (allowed: %s)', async allowed => {
+  it.each([undefined, true, false])('uses a same-window fallback only with recoverable context (allowed: %s)', async allowed => {
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const payUrl = 'https://pay.totools.cn/checkout/42'
     resumeOrder.mockResolvedValue({ data: { ...orderFactory('PENDING'), order_id: 42, pay_url: payUrl } })
@@ -130,7 +130,7 @@ describe('PaymentStatusPanel', () => {
     Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, assign } })
     try {
       const wrapper = mount(PaymentStatusPanel, {
-        props: { orderId: 42, qrCode: '', payUrl, expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', allowTopLevelRedirect: allowed },
+        props: { orderId: 42, qrCode: '', payUrl, expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', ...(allowed === undefined ? {} : { allowTopLevelRedirect: allowed }) },
         global: { stubs: { Icon: true } },
       })
       await flushPromises()
@@ -139,7 +139,7 @@ describe('PaymentStatusPanel', () => {
       await button?.trigger('click')
       await flushPromises()
       expect(resumeOrder).toHaveBeenCalledWith(42)
-      if (allowed) expect(assign).toHaveBeenCalledWith(payUrl)
+      if (allowed !== false) expect(assign).toHaveBeenCalledWith(payUrl)
       else {
         expect(assign).not.toHaveBeenCalled()
         expect(showError).toHaveBeenCalledWith('payment.qr.popupBlocked')
