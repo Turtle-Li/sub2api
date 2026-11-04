@@ -123,13 +123,11 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
                   <input v-model="method" type="radio" name="payment-method" value="alipay" class="h-5 w-5 shrink-0 accent-primary-700 focus:ring-primary-500" :disabled="busy || !methods.includes('alipay')" />
                   <img :src="alipayIcon" alt="" class="h-5 w-5 shrink-0" />
                   <span class="font-medium text-gray-800 dark:text-gray-200">支付宝</span>
-                  <span v-if="!methods.includes('alipay')" class="ml-auto text-xs text-gray-500 dark:text-gray-400">暂不可用</span>
                 </label>
                 <label v-if="methods.includes('wxpay')" class="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors" :class="method === 'wxpay' ? 'border-primary-500 bg-primary-50 dark:bg-primary-950' : 'border-gray-200 dark:border-gray-700'">
                   <input v-model="method" type="radio" name="payment-method" value="wxpay" class="h-5 w-5 shrink-0 accent-primary-700 focus:ring-primary-500" :disabled="busy || !methods.includes('wxpay')" />
                   <img :src="wxpayIcon" alt="" class="h-5 w-5 shrink-0" />
                   <span class="font-medium text-gray-800 dark:text-gray-200">微信支付</span>
-                  <span v-if="!methods.includes('wxpay')" class="ml-auto text-xs text-gray-500 dark:text-gray-400">暂不可用</span>
                 </label>
               </div>
             </fieldset>

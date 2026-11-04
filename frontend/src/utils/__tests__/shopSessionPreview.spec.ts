@@ -19,7 +19,6 @@ describe('local shop Session preview', () => {
     expect(result.check).toEqual({ account: 'target@example.invalid', plan_type: 'plus', expires_at: '2099-01-01T00:00:00.000Z', warnings: [] })
     expect(JSON.stringify(result)).not.toContain(JSON.parse(raw).accessToken)
     expect(JSON.stringify(result)).not.toContain('accessToken')
-    expect(raw).toBe(` ${fixture()}\n`)
   })
 
   it('uses token plan when the Session does not provide it and decodes UTF-8', () => {

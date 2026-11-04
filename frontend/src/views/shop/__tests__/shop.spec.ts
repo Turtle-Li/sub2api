@@ -196,10 +196,13 @@ describe('manual shop surfaces', () => {
     expect(plain.text()).not.toContain('不是完整的 JSON')
   })
   it.each([true, false])('keeps queued input updates behind the server permission: %s', async canSubmit => {
-    api.order.mockResolvedValue({ data: { ...order(), fulfillment_status: 'QUEUED', can_submit: canSubmit } })
+    api.order.mockResolvedValue({ data: { ...order(), fulfillment_status: 'QUEUED', can_submit: canSubmit, input_account: 'submitted@example.invalid', input_submitted_at: '2026-11-05T12:00:00Z' } })
     const wrapper = mount(ShopOrderView, { global })
     await flushPromises()
     expect(wrapper.text()).toContain('等待人工处理')
+    expect(wrapper.get('dl').text()).toContain('submitted@example.invalid')
+    expect(wrapper.get('dl').text()).toContain('2026-11-05T12:00:00Z')
+    expect(wrapper.get('dl').element.closest('details')).toBeNull()
     expect(wrapper.find('textarea').exists()).toBe(canSubmit)
     if (canSubmit) {
       expect(wrapper.get('details summary').text()).toBe('更新充值资料')

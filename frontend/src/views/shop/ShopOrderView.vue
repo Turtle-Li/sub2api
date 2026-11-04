@@ -93,6 +93,16 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
         <section v-else-if="order.product.fulfillment_mode === 'session_topup' && (order.fulfillment_status === 'WAITING_INPUT' || order.fulfillment_status === 'NEEDS_INPUT' || (order.fulfillment_status === 'QUEUED' && order.can_submit))" class="mt-4 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ order.fulfillment_status === 'QUEUED' ? '资料已提交，等待人工处理' : order.fulfillment_status === 'NEEDS_INPUT' ? '请补充资料' : '提交充值资料' }}</h2>
           <p v-if="order.fulfillment_status === 'QUEUED'" class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">客服开始处理前，你仍可以更新资料。</p>
+          <dl v-if="order.fulfillment_status === 'QUEUED' && (order.input_account || order.input_submitted_at)" class="mt-5 grid gap-3 border-t border-gray-200 pt-5 text-sm dark:border-gray-800 sm:grid-cols-2">
+            <div v-if="order.input_account">
+              <dt class="text-gray-500 dark:text-gray-400">目标账号</dt>
+              <dd class="mt-1 break-all text-gray-800 dark:text-gray-200">{{ order.input_account }}</dd>
+            </div>
+            <div v-if="order.input_submitted_at">
+              <dt class="text-gray-500 dark:text-gray-400">提交时间</dt>
+              <dd class="mt-1 text-gray-800 dark:text-gray-200">{{ order.input_submitted_at }}</dd>
+            </div>
+          </dl>
 
           <component :is="order.fulfillment_status === 'QUEUED' ? 'details' : 'div'">
           <summary v-if="order.fulfillment_status === 'QUEUED'" class="mt-3 flex min-h-11 cursor-pointer items-center text-sm font-medium text-primary-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300">更新充值资料</summary>
