@@ -143,6 +143,19 @@ describe('manual shop surfaces', () => {
     expect(wrapper.text()).not.toContain('local@example.invalid')
     expect(wrapper.text()).not.toContain('本地测试用户')
   })
+  it('refreshes the buyer order to show manual fulfillment progress without a page reload', async () => {
+    api.order.mockResolvedValueOnce({ data: { ...order(), fulfillment_status: 'PROCESSING', can_submit: false } })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    expect(wrapper.text()).toContain('订单正在人工处理')
+    api.order.mockResolvedValueOnce({ data: { ...order(), fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', can_submit: false } })
+    await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')
+    await flushPromises()
+    expect(api.order).toHaveBeenLastCalledWith(42)
+    expect(wrapper.text()).toContain('订单已完成')
+    expect(wrapper.text()).not.toContain('订单正在人工处理')
+    expect(api.submitInput).not.toHaveBeenCalled()
+  })
   it('submits exact session bytes with the current revision then clears the editor', async () => {
     const content = ' {"accessToken":"fictional-session-canary"}\n'
     api.submitInput.mockResolvedValue({ data: { ...order(), fulfillment_status: 'QUEUED', revision: 4 } })

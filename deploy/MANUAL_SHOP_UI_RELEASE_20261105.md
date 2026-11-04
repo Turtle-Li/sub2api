@@ -28,11 +28,14 @@ read-only production configuration check.
 
 ## Verification and stop/rollback boundaries
 
-Developer evidence: seven affected frontend test files, 140 passing tests;
+Developer evidence before release freeze: seven affected frontend test files,
+140 passing tests plus one added buyer-refresh regression;
 build i18n checks 3/3, Vue type/build and scoped ESLint passed. Actual browser
 inspection covered buyer states, admin queue/processing/delivery/notifications,
 guide, product editor and offline Session preview with synthetic data. Repeat
 applicable independent QA/Review on the frozen candidate before pushing it.
+The final candidate also restores the pre-existing buyer status-refresh control
+through its unchanged order-load function; it introduces no polling or write.
 
 Require a healthy active source, accepting traffic and active background owner
 before dispatch. GitHub verifies compressed archive digest, loaded platform and

@@ -55,7 +55,10 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
 <template>
   <AppLayout>
     <div class="mx-auto w-full max-w-4xl py-2 sm:px-4 sm:py-4">
-      <RouterLink to="/orders" class="mb-5 inline-flex min-h-11 items-center rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-gray-400 dark:hover:text-gray-100 dark:focus:ring-offset-gray-950">返回我的订单</RouterLink>
+      <header class="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <RouterLink to="/orders" class="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-gray-400 dark:hover:text-gray-100 dark:focus:ring-offset-gray-950">返回我的订单</RouterLink>
+        <button type="button" class="btn btn-secondary min-h-11" :disabled="busy" @click="load">刷新状态</button>
+      </header>
 
       <div v-if="!order && busy" class="space-y-5" aria-busy="true" aria-label="正在加载订单">
         <div class="h-56 animate-pulse rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"></div>
