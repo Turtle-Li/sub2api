@@ -1539,7 +1539,7 @@ describe('PaymentView existing pending order dialog', () => {
       },
     })
     isMobileDevice.mockReturnValue(false)
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const popup = { closed: false, close: vi.fn(), location: { href: '' }, sessionStorage: { setItem: vi.fn() } }
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
 
     const wrapper = await mountExistingOrderFlow()
@@ -1548,7 +1548,7 @@ describe('PaymentView existing pending order dialog', () => {
     await flushPromises()
 
     expect(resumeOrder).toHaveBeenCalledWith(77)
-    expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(open).toHaveBeenCalledWith('', expect.stringMatching(/^paymentPopup-/), expect.any(String))
     expect(popup.location.href).toBe('https://pay.totools.cn/checkout/fresh-77')
     expect(wrapper.get('[data-test="payment-status-panel"]').attributes('data-order-id')).toBe('77')
     expect(wrapper.find('[data-test="existing-order-details"]').exists()).toBe(false)

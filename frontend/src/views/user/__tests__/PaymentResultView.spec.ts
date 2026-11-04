@@ -57,6 +57,7 @@ import {
   RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
 } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
+import { PAYMENT_POPUP_CONTEXT_KEY } from '@/components/payment/embeddedPaymentReturn'
 
 enableAutoUnmount(afterEach)
 
@@ -132,6 +133,7 @@ describe('PaymentResultView', () => {
   it('shows only verified payment status in the named payment popup', async () => {
     routeState.query = { order_id: '42', status: 'success' }
     pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-05T00:00:00Z' })
+    sessionStorage.setItem(PAYMENT_POPUP_CONTEXT_KEY, JSON.stringify({ orderId: 42, resumeToken: '' }))
     const previousName = window.name
     window.name = 'paymentPopup'
     vi.stubGlobal('opener', window)
@@ -147,6 +149,38 @@ describe('PaymentResultView', () => {
       vi.unstubAllGlobals()
     }
   })
+  it('binds a fixed provider popup return to its opener order while another checkout is active', async () => {
+    routeState.query = { method: 'alipay.trade.page.pay.return', out_trade_no: 'provider-A', status: 'success', resume_token: 'untrusted-token-B' }
+    const other = { ...recoverySnapshotFactory('other-B'), orderId: 77 }
+    localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify(other))
+    sessionStorage.setItem(PAYMENT_POPUP_CONTEXT_KEY, JSON.stringify({ orderId: 42, resumeToken: '' }))
+    pollOrderStatus.mockImplementation(async (id: number) => ({ ...orderFactory(id === 77 ? 'COMPLETED' : 'PENDING'), id }))
+    vi.stubGlobal('opener', window)
+    try {
+      const wrapper = mount(PaymentResultView, { global: { stubs: { RouterLink: true } } })
+      await flushPromises()
+      expect(pollOrderStatus).toHaveBeenCalledWith(42)
+      expect(pollOrderStatus).not.toHaveBeenCalledWith(77)
+      expect(resolveOrderPublicByResumeToken).not.toHaveBeenCalled()
+      expect(wrapper.text()).not.toContain('payment.result.success')
+      expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBe(JSON.stringify(other))
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('leaves other recovery untouched when a popup has no opener binding', async () => {
+    routeState.query = { method: 'alipay.trade.page.pay.return', out_trade_no: 'provider-A', status: 'success' }
+    const other = JSON.stringify({ ...recoverySnapshotFactory('other-B'), orderId: 77 })
+    localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, other)
+    const previousName = window.name
+    window.name = 'paymentPopup-unbound'
+    vi.stubGlobal('opener', window)
+    try {
+      const wrapper = mount(PaymentResultView, { global: { stubs: { RouterLink: true } } })
+      await flushPromises()
+      expect(pollOrderStatus).not.toHaveBeenCalled()
+      expect(wrapper.text()).not.toContain('payment.result.success')
+      expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBe(other)
+    } finally { window.name = previousName; vi.unstubAllGlobals() }
+  })
   beforeEach(() => {
     routeState.query = {}
     routerPush.mockReset()
@@ -157,6 +191,7 @@ describe('PaymentResultView', () => {
     refreshUser.mockReset()
     refreshUser.mockResolvedValue({})
     window.localStorage.clear()
+    window.sessionStorage.clear()
   })
 
   afterEach(() => {

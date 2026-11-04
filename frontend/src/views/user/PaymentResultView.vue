@@ -149,7 +149,7 @@ import type { OrderStatus, PaymentOrder } from '@/types/payment'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import { normalizePaymentMethodForDisplay, paymentMethodI18nKey } from './paymentUx'
 import { paymentFact, fulfillmentFact } from '@/components/payment/orderPresentation'
-import { PAYMENT_RETURN_READY_MESSAGE } from '@/components/payment/embeddedPaymentReturn'
+import { PAYMENT_RETURN_READY_MESSAGE, isPaymentPopup, readPaymentPopupContext } from '@/components/payment/embeddedPaymentReturn'
 
 const i18n = useI18n()
 const { t } = i18n
@@ -158,7 +158,8 @@ const router = useRouter()
 const paymentStore = usePaymentStore()
 const authStore = useAuthStore()
 const embeddedReturn = typeof window !== 'undefined' && window.parent !== window
-const compactReturn = embeddedReturn || (typeof window !== 'undefined' && window.name === 'paymentPopup' && Boolean(window.opener))
+const popupReturn = typeof window !== 'undefined' && isPaymentPopup()
+const compactReturn = embeddedReturn || popupReturn
 
 type ResolvedOrder = PaymentOrder | PublicOrderVerifyResult
 
@@ -559,9 +560,15 @@ async function refreshNow(): Promise<void> {
 async function initialize(): Promise<void> {
   disposed = false
   const generation = ++lifecycleGeneration
-  const resumeToken = readRouteQueryString('resume_token')
-  const routeOrderId = readRouteOrderId()
-  const routeOutTradeNo = readRouteQueryString('out_trade_no')
+  const popupContext = popupReturn ? readPaymentPopupContext() : null
+  if (!isCurrentLifecycle(generation)) return
+  if (popupReturn && !popupContext) {
+    loading.value = false
+    return
+  }
+  const resumeToken = popupReturn ? popupContext?.resumeToken || '' : readRouteQueryString('resume_token')
+  const routeOrderId = popupContext?.orderId || readRouteOrderId()
+  const routeOutTradeNo = popupReturn ? '' : readRouteQueryString('out_trade_no')
   let orderId = routeOrderId
   let resumeLookupFailed = false
   const recoveryStoragePresent = typeof window !== 'undefined'

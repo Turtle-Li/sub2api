@@ -433,7 +433,7 @@ import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
 import paymentIcon from '@/assets/icons/payment.svg'
 import { fulfillmentFact, paymentFact } from '@/components/payment/orderPresentation'
-import { isPaymentReturnReadyMessage } from './embeddedPaymentReturn'
+import { bindPaymentPopupContext, isPaymentReturnReadyMessage, paymentPopupName } from './embeddedPaymentReturn'
 import {
   createAlipayDeepLinkLauncher,
   type AlipayDeepLinkLauncher,
@@ -862,19 +862,23 @@ async function reopenPopup() {
   if (cancellationRetryNeeded.value || cancellationPending.value || confirmationPending.value) return
   // Reserve a browsing context synchronously from the click. It is closed if
   // the authenticated resume call says this order is no longer payable.
-  const popup = window.open('', 'paymentPopup', getPaymentPopupFeatures())
+  const popupName = paymentPopupName()
+  const popup = window.open('', popupName, getPaymentPopupFeatures())
   let navigated = false
   try {
     const launch = await resumePaymentLaunch()
     const launchUrl = launch?.payUrl || launch?.checkoutFrameUrl
     if (!launchUrl) return
     if (popup && !popup.closed) {
+      bindPaymentPopupContext(popup, { orderId: props.orderId })
       popup.location.href = launchUrl
       navigated = true
       return
     }
-    const opened = window.open(launchUrl, 'paymentPopup', getPaymentPopupFeatures())
-    if (!opened || opened.closed) window.location.assign(launchUrl)
+    const opened = window.open('', popupName, getPaymentPopupFeatures())
+    bindPaymentPopupContext(opened, { orderId: props.orderId })
+    if (opened && !opened.closed) opened.location.href = launchUrl
+    else window.location.assign(launchUrl)
   } finally {
     if (popup && !popup.closed && !navigated && typeof popup.close === 'function') popup.close()
   }

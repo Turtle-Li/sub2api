@@ -925,7 +925,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(resumeOrder).toHaveBeenCalledWith(42)
-    expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(open).toHaveBeenCalledWith('', expect.stringMatching(/^paymentPopup-/), expect.any(String))
     expect(open).not.toHaveBeenCalledWith('https://pay.totools.cn/checkout/stale-42', expect.anything(), expect.anything())
     expect(wrapper.get(pendingSelector).exists()).toBe(true)
     expect(close).toHaveBeenCalledTimes(1)
@@ -947,7 +947,7 @@ describe('PaymentStatusPanel', () => {
         pay_url: 'https://pay.totools.cn/checkout/fresh-42',
       },
     })
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const popup = { closed: false, close: vi.fn(), location: { href: '' }, sessionStorage: { setItem: vi.fn() } }
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
 
     const wrapper = mount(PaymentStatusPanel, {
@@ -969,6 +969,7 @@ describe('PaymentStatusPanel', () => {
 
     expect(resumeOrder).toHaveBeenCalledWith(42)
     expect(popup.location.href).toBe('https://pay.totools.cn/checkout/fresh-42')
+    expect(popup.sessionStorage.setItem).toHaveBeenCalledWith('payment.popup.context.v1', JSON.stringify({ orderId: 42, resumeToken: '' }))
     expect(popup.close).not.toHaveBeenCalled()
     expect(open).not.toHaveBeenCalledWith('https://pay.totools.cn/checkout/stale-42', expect.anything(), expect.anything())
     open.mockRestore()
