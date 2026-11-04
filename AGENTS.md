@@ -120,16 +120,22 @@
 ## Order operations and invoices
 
 - For configurable payment actions and HTTP fulfillment hooks, read
-  `docs/SHOP_PAYMENT_ACTIONS.md` first. The local implementation uses immutable
+  `docs/SHOP_PAYMENT_ACTIONS.md` first. The implementation uses immutable
   snapshots, a transactional one-task outbox, idempotent adapters, persisted
   compensation and encrypted buyer delivery. Detailed local Claude review/QA:
-  `docs/operations/SHOP_PAYMENT_HOOKS_IMPLEMENTATION_20261105.md`. It is unreleased;
-  production HTTP agent/mount approval and receiver acceptance remain prerequisites.
+  `docs/operations/SHOP_PAYMENT_HOOKS_IMPLEMENTATION_20261105.md`. Production
+  native-adapter release: `deploy/SHOP_PAYMENT_ACTIONS_RELEASE_20261105.md`.
+  Generic HTTP activation still requires its separate approved agent/mount and
+  receiver acceptance; the payment/Feishu agents must not hold its credentials.
 - For DeepSeek24-hour API-key shop delivery, read
-  `docs/operations/DEEPSEEK_DAYPASS_20261105.md`. It is an unreleased candidate:
+  `deploy/SHOP_PAYMENT_ACTIONS_RELEASE_20261105.md` and local detail
+  `docs/operations/DEEPSEEK_DAYPASS_20261105.md`. Product3 is live at6yuan/24h:
   one paid order/key, original paid_at expiry, exact SKU, existing money/review
   fences, encrypted buyer-only delivery and separate memory-only machine agent.
-  Preserve manual completed-order refunds and the documented production boundary.
+  Preserve original paid_at+86400, native receipts/tombstones and the documented
+  production boundary. Do not restore an older DB or promote an unaware binary
+  after automatic delivery has been enabled. Pause new work while retaining
+  exact revocation and manual approved refunds for aftersales.
 
 - For the configurable shop and manual top-up/account delivery, read
   `docs/SHOP_MANUAL_FULFILLMENT.md`. Use its dedicated `manual_shop` flow and
