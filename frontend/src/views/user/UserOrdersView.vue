@@ -294,6 +294,7 @@
         :wechat-jsapi="resumedWechatJsapi"
         @done="closeResumedPayment"
         @settled="onResumedPaymentSettled"
+        @success="onResumedPaymentSuccess"
       />
     </BaseDialog>
 
@@ -703,6 +704,12 @@ function onResumedPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
     return
   }
   void fetchOrders()
+}
+
+function onResumedPaymentSuccess(paid?: Pick<PaymentOrder, 'id' | 'order_type'>) {
+  if (paid?.order_type !== 'manual_shop' || paid.id !== resumedPayment.value?.orderId) return
+  closeResumedPayment()
+  void router.push(`/shop/orders/${paid.id}`)
 }
 
 const ORDER_STATUS_POLL_INTERVAL_MS = 3000

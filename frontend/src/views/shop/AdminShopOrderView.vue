@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -10,11 +10,13 @@ import ShopAutomationPanel from '@/components/shop/ShopAutomationPanel.vue'
 import { useStepUp, isStepUpCancelled } from '@/composables/useStepUp'
 import { shopAPI } from '@/api/shop'
 import { shopDeliveryLabel, shopNotificationLabels, type ShopAction, type ShopOrderDetail } from '@/types/shop'
+import { parseShopAccountDelivery } from '@/utils/shopAccountDelivery'
 const route = useRoute()
 const stepUp = useStepUp()
 const order = ref<ShopOrderDetail | null>(null)
 const note = ref('')
 const delivery = ref('')
+const deliveryCredentials = computed(() => parseShopAccountDelivery(delivery.value))
 const preview = ref(false)
 const revokePreview = ref(false)
 const busy = ref(false)
@@ -139,9 +141,13 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
 
             <section v-if="order.product.fulfillment_mode === 'account_delivery' && order.can_complete" aria-labelledby="delivery-title" class="rounded-xl border border-gray-200 bg-white p-4 md:p-5 dark:border-gray-800 dark:bg-gray-900">
               <h2 id="delivery-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">账号交付内容</h2>
-              <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">填写需要完整交付给买家的原文。发送前必须预览并再次确认。</p>
+              <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">支持粘贴“账号----密码”，也可填写其他交付内容。发送前请预览确认。</p>
               <label for="delivery-content" class="mt-4 block text-sm font-medium text-gray-700 dark:text-gray-200">交付原文</label>
-              <textarea id="delivery-content" v-model="delivery" rows="8" required autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="65536" :disabled="busy" class="mt-2 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-3 font-mono text-sm leading-6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" placeholder="输入账号、密码及其他必要交付信息"></textarea>
+              <textarea id="delivery-content" v-model="delivery" rows="5" required autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="65536" :disabled="busy" class="mt-2 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-3 font-mono text-sm leading-6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" placeholder="账号----密码"></textarea>
+              <dl v-if="deliveryCredentials" aria-label="账号密码预览" class="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-lg bg-gray-50 p-4 text-sm dark:bg-gray-950">
+                <dt class="text-gray-500 dark:text-gray-400">账号</dt><dd class="whitespace-pre-wrap break-all font-mono text-gray-900 dark:text-gray-100">{{ deliveryCredentials.account }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">密码</dt><dd class="whitespace-pre-wrap break-all font-mono text-gray-900 dark:text-gray-100">{{ deliveryCredentials.password }}</dd>
+              </dl>
             </section>
           </div>
 
@@ -195,8 +201,12 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
       <BaseDialog :show="preview" :title="order?.product.fulfillment_mode === 'account_delivery' ? '预览交付并确认' : '确认代充完成'" width="wide" :close-on-click-outside="!busy" :close-on-escape="!busy" :show-close-button="!busy" @close="preview = false">
         <div v-if="order">
           <template v-if="order.product.fulfillment_mode === 'account_delivery'">
-            <p class="text-sm leading-6 text-gray-600 dark:text-gray-300">请核对下方完整交付原文。最终确认后订单将完成并进入邮件通知队列。</p>
-            <pre class="mt-4 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-gray-50 p-4 font-mono text-sm leading-6 text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">{{ delivery }}</pre>
+            <p class="text-sm leading-6 text-gray-600 dark:text-gray-300">请核对下方交付内容。确认后将完成订单，并发送邮件通知买家。</p>
+            <dl v-if="deliveryCredentials" class="mt-4 grid grid-cols-[3rem_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-lg bg-gray-50 p-4 text-sm dark:bg-gray-950" aria-label="确认账号密码">
+              <dt class="text-gray-500 dark:text-gray-400">账号</dt><dd class="whitespace-pre-wrap break-all font-mono text-gray-900 dark:text-gray-100">{{ deliveryCredentials.account }}</dd>
+              <dt class="text-gray-500 dark:text-gray-400">密码</dt><dd class="whitespace-pre-wrap break-all font-mono text-gray-900 dark:text-gray-100">{{ deliveryCredentials.password }}</dd>
+            </dl>
+            <pre v-else class="mt-4 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-gray-50 p-4 font-mono text-sm leading-6 text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">{{ delivery }}</pre>
           </template>
           <template v-else>
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100">

@@ -16,7 +16,7 @@
         </div>
       </dl>
     </section>
-    <!-- ═══ Terminal States: show result, user clicks to return ═══ -->
+    <!-- Terminal states; shop checkouts continue to the paid order automatically. -->
 
     <!-- Success -->
     <template v-if="outcome === 'success'">
@@ -25,8 +25,8 @@
           <div class="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
             <Icon name="check" size="lg" class="text-green-500" />
           </div>
-          <p class="text-lg font-bold text-gray-900 dark:text-white">{{ props.orderType === 'subscription' ? t('payment.result.subscriptionSuccess') : t('payment.result.success') }}</p>
-          <RouterLink v-if="paidOrder?.order_type === 'manual_shop'" :to="`/shop/orders/${paidOrder.id}`" class="btn btn-primary">付款已确认，查看人工交付订单</RouterLink>
+          <p class="text-lg font-bold text-gray-900 dark:text-white">{{ paidOrder?.order_type === 'subscription' ? t('payment.result.subscriptionSuccess') : t('payment.result.success') }}</p>
+          <p v-if="paidOrder?.order_type === 'manual_shop'" role="status" class="text-sm text-gray-500 dark:text-gray-400">正在进入订单…</p>
           <div v-if="paidOrder" class="w-full rounded-xl bg-gray-50 p-4 dark:bg-dark-800">
             <div class="space-y-2 text-sm">
               <div class="flex items-start justify-between gap-3">
@@ -59,7 +59,7 @@
               </div>
             </div>
           </div>
-          <button class="btn btn-primary" @click="handleDone">{{ t('common.confirm') }}</button>
+          <button v-if="paidOrder?.order_type !== 'manual_shop'" class="btn btn-primary" @click="handleDone">{{ t('common.confirm') }}</button>
         </div>
       </div>
     </template>
@@ -468,7 +468,7 @@ const props = withDefaults(defineProps<{
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
 
-const emit = defineEmits<{ done: []; success: []; settled: [outcome: PaymentOutcome] }>()
+const emit = defineEmits<{ done: []; success: [order: Pick<PaymentOrder, 'id' | 'order_type'>]; settled: [outcome: PaymentOutcome] }>()
 
 const i18n = useI18n()
 const { t } = i18n
@@ -1134,7 +1134,7 @@ async function pollStatus(
       if (terminalOutcome === 'success') {
         paidOrder.value = order
         setOutcome('success')
-        emit('success')
+        emit('success', { id: order.id, order_type: order.order_type })
       } else {
         setOutcome(terminalOutcome)
       }

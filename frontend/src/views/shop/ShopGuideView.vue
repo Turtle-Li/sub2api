@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import DOMPurify from 'dompurify'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import content from '@/content/shop/chatgpt-plus-account.html?raw'
 import daypassContent from '@/content/shop/deepseek-daypass.html?raw'
@@ -9,6 +9,25 @@ import daypassContent from '@/content/shop/deepseek-daypass.html?raw'
 const route = useRoute()
 const daypass = computed(() => route.path === '/shop/help/deepseek-daypass')
 const html = computed(() => DOMPurify.sanitize(daypass.value ? daypassContent : content))
+const mobileNav = ref<HTMLDetailsElement | null>(null)
+const returnLink = computed(() => {
+  for (const [key, path, label] of [['order', 'orders', '返回订单'], ['product', 'products', '返回商品']] as const) {
+    const value = route.query?.[key]
+    if (typeof value === 'string' && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) {
+      return { to: `/shop/${path}/${Number(value)}`, label }
+    }
+  }
+  return { to: '/shop', label: '返回商城' }
+})
+async function goToSection(id: string) {
+  const mobileWasOpen = mobileNav.value?.open
+  if (mobileNav.value) mobileNav.value.open = false
+  await nextTick()
+  const target = document.getElementById(id)
+  target?.scrollIntoView({ block: 'start', behavior: 'instant' })
+  if (mobileWasOpen) mobileNav.value?.querySelector('summary')?.focus({ preventScroll: true })
+  if (id === 'guide-content') target?.focus({ preventScroll: true })
+}
 const sections = computed(() => daypass.value ? [
   { id: 'receive', title: '领取 API Key' },
   { id: 'configure', title: '配置客户端' },
@@ -27,12 +46,14 @@ const sections = computed(() => daypass.value ? [
 <template>
   <AppLayout>
     <div class='guide-page'>
-      <a class='guide-skip' href='#guide-content'>跳到指南正文</a>
+      <a class='guide-skip' href='#guide-content' @click.prevent='goToSection("guide-content")'>跳到指南正文</a>
 
       <header class='guide-header'>
-        <p class='guide-eyebrow'>使用指南</p>
+        <RouterLink :to='returnLink.to' class='guide-back'>
+          <svg aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.75'><path d='m14 6-6 6 6 6' /></svg>
+          {{ returnLink.label }}
+        </RouterLink>
         <h1>{{ daypass ? 'DeepSeek API 日卡使用指南' : 'ChatGPT Plus 成品号使用指南' }}</h1>
-        <p class='guide-intro'>{{ daypass ? '领取 Key，配置客户端，了解调用限制与有效期。' : '从准备、登录到安全设置，按章节查阅完整步骤。' }}</p>
       </header>
 
       <div class='guide-layout'>
@@ -41,7 +62,7 @@ const sections = computed(() => daypass.value ? [
             <p class='guide-nav-title'>章节目录</p>
             <ol class='guide-nav-list'>
               <li v-for='(section, index) in sections' :key='section.id'>
-                <a :href='`#${section.id}`'>
+                <a :href='`#${section.id}`' @click.prevent='goToSection(section.id)'>
                   <span class='guide-nav-number' aria-hidden='true'>{{ index + 1 }}</span>
                   <span>{{ section.title }}</span>
                 </a>
@@ -51,7 +72,7 @@ const sections = computed(() => daypass.value ? [
         </aside>
 
         <div class='guide-reading-column'>
-          <details class='guide-mobile-nav'>
+          <details ref='mobileNav' class='guide-mobile-nav'>
             <summary>
               <span>本章导航</span>
               <span class='guide-mobile-nav-hint'>选择章节</span>
@@ -59,7 +80,7 @@ const sections = computed(() => daypass.value ? [
             <nav aria-label='手机指南章节'>
               <ol class='guide-nav-list'>
                 <li v-for='(section, index) in sections' :key='section.id'>
-                  <a :href='`#${section.id}`'>
+                  <a :href='`#${section.id}`' @click.prevent='goToSection(section.id)'>
                     <span class='guide-nav-number' aria-hidden='true'>{{ index + 1 }}</span>
                     <span>{{ section.title }}</span>
                   </a>
@@ -88,9 +109,9 @@ const sections = computed(() => daypass.value ? [
   --guide-primary-soft: theme('colors.primary.50');
   --guide-focus: theme('colors.primary.500');
   width: 100%;
-  max-width: 1120px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 28px 24px 64px;
+  padding: 0 0 48px;
   color: var(--guide-text);
 }
 
@@ -131,41 +152,47 @@ const sections = computed(() => daypass.value ? [
 }
 
 .guide-header {
-  max-width: 1024px;
-  margin: 0 auto 30px;
-  padding: 0 0 26px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  margin: 0 0 20px;
+  padding: 0 0 16px;
   border-bottom: 1px solid var(--guide-border);
 }
 
-.guide-eyebrow {
-  margin: 0 0 8px;
-  color: var(--guide-primary);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+.guide-back {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  color: var(--guide-muted);
+  font-size: 14px;
+}
+
+.guide-back:hover {
+  color: var(--guide-primary-strong);
+}
+
+.guide-back svg {
+  width: 18px;
+  height: 18px;
 }
 
 .guide-header h1 {
   margin: 0;
   color: var(--guide-heading);
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 650;
   line-height: 1.35;
   letter-spacing: -0.02em;
 }
 
-.guide-intro {
-  margin: 10px 0 0;
-  color: var(--guide-muted);
-  font-size: 14px;
-  line-height: 1.7;
-}
-
 .guide-layout {
   display: grid;
-  grid-template-columns: 216px minmax(0, 760px);
-  gap: 44px;
-  justify-content: center;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
 }
 
@@ -174,9 +201,11 @@ const sections = computed(() => daypass.value ? [
   min-width: 0;
 }
 
-.guide-desktop-nav {
+.guide-sidebar {
   position: sticky;
-  top: 24px;
+  top: 80px;
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
 }
 
 .guide-nav-title {
@@ -236,8 +265,7 @@ const sections = computed(() => daypass.value ? [
 
 .guide-article {
   min-width: 0;
-  max-width: 760px;
-  padding: 36px 40px 40px;
+  padding: 24px 28px 32px;
   border: 1px solid var(--guide-border);
   border-radius: 12px;
   background: var(--guide-surface);
@@ -380,6 +408,10 @@ const sections = computed(() => daypass.value ? [
   border-bottom: 0;
 }
 
+.guide-article :deep(.guide-section:first-child) {
+  padding-top: 0;
+}
+
 .guide-article :deep(.guide-section h2) {
   display: flex;
   align-items: baseline;
@@ -432,10 +464,14 @@ const sections = computed(() => daypass.value ? [
 }
 
 .guide-article :deep(.guide-preparation) {
-  display: grid;
-  grid-template-columns: minmax(116px, 0.34fr) minmax(0, 1fr);
   margin: 22px 0;
   border-bottom: 1px solid var(--guide-border);
+}
+
+.guide-article :deep(.guide-preparation > div) {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 16px;
 }
 
 .guide-article :deep(.guide-preparation dt),
@@ -704,6 +740,7 @@ const sections = computed(() => daypass.value ? [
 }
 
 .guide-nav-list a:focus-visible,
+.guide-back:focus-visible,
 .guide-mobile-nav > summary:focus-visible,
 .guide-skip:focus-visible {
   outline: 2px solid var(--guide-focus);
@@ -712,7 +749,7 @@ const sections = computed(() => daypass.value ? [
 
 @media (max-width: 900px) {
   .guide-page {
-    max-width: 800px;
+    max-width: none;
   }
 
   .guide-layout {
@@ -724,11 +761,17 @@ const sections = computed(() => daypass.value ? [
   }
 
   .guide-reading-column {
-    max-width: 760px;
-    margin: 0 auto;
+    width: 100%;
+  }
+
+  .guide-article :deep(.guide-section) {
+    scroll-margin-top: 148px;
   }
 
   .guide-mobile-nav {
+    position: sticky;
+    top: 72px;
+    z-index: 20;
     display: block;
     margin-bottom: 16px;
     border: 1px solid var(--guide-border);
@@ -782,6 +825,8 @@ const sections = computed(() => daypass.value ? [
   }
 
   .guide-mobile-nav nav {
+    max-height: min(60dvh, 400px);
+    overflow-y: auto;
     padding: 0 12px 12px;
   }
 
@@ -798,25 +843,22 @@ const sections = computed(() => daypass.value ? [
 
 @media (max-width: 640px) {
   .guide-page {
-    padding: 20px 16px 40px;
+    padding-bottom: 32px;
   }
 
   .guide-header {
-    margin-bottom: 20px;
-    padding-bottom: 20px;
+    gap: 4px 16px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
   }
 
   .guide-header h1 {
-    font-size: 25px;
+    font-size: 20px;
     line-height: 1.4;
   }
 
-  .guide-intro {
-    font-size: 13px;
-  }
-
   .guide-article {
-    padding: 24px 18px 28px;
+    padding: 20px 16px 24px;
     border-radius: 10px;
     font-size: 16px;
     line-height: 1.8;
@@ -846,7 +888,7 @@ const sections = computed(() => daypass.value ? [
 
   .guide-article :deep(.guide-section) {
     padding: 34px 0;
-    scroll-margin-top: 76px;
+    scroll-margin-top: 148px;
   }
 
   .guide-article :deep(.guide-section h2) {
@@ -870,7 +912,7 @@ const sections = computed(() => daypass.value ? [
     padding-left: 15px;
   }
 
-  .guide-article :deep(.guide-preparation) {
+  .guide-article :deep(.guide-preparation > div) {
     display: block;
   }
 

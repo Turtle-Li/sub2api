@@ -112,8 +112,8 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
           <summary v-if="order.fulfillment_status === 'QUEUED'" class="mt-3 flex min-h-11 cursor-pointer items-center text-sm font-medium text-primary-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300">更新充值资料</summary>
           <template v-if="order.can_submit">
             <div class="mt-3 rounded-lg bg-gray-50 p-4 text-sm leading-6 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-              <p v-if="!order.product.input_instructions">登录要充值的 ChatGPT 账号，打开会话页面，复制页面的全部内容。</p>
-              <p v-if="order.product.input_instructions" class="whitespace-pre-wrap break-words">{{ order.product.input_instructions }}</p>
+              <p v-if="order.product.input_format === 'session_json'">先登录要充值的 ChatGPT 账号，再在同一浏览器打开 Session 页面，复制页面全部内容，粘贴到下方并提交。</p>
+              <p v-else-if="order.product.input_instructions" class="whitespace-pre-wrap break-words">{{ order.product.input_instructions }}</p>
               <a v-if="inputURL" :href="inputURL" target="_blank" rel="noopener noreferrer" class="btn btn-secondary mt-3 min-h-11">打开 Session 页面 ↗</a>
             </div>
 
@@ -154,7 +154,7 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
           <div v-if="order.product.guide_key" class="rounded-xl border border-primary-200 bg-primary-50 p-5 dark:border-primary-800 dark:bg-primary-950 sm:p-6">
             <h2 class="text-lg font-semibold text-primary-900 dark:text-primary-100">{{ isShopDaypass(order.product) ? 'API Key 使用指南' : '必看：成品号使用指南' }}</h2>
             <p class="mt-2 text-sm leading-6 text-primary-800 dark:text-primary-200">{{ isShopDaypass(order.product) ? '查看客户端配置、模型名称、并发与 IP 限制。' : '查看交付内容前，请先了解登录、账号安全和验证设置步骤。' }}</p>
-            <RouterLink :to="`/shop/help/${order.product.guide_key}`" :aria-label="isShopDaypass(order.product) ? 'API Key 使用指南' : '必看：成品号使用指南'" class="mt-4 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900">阅读使用指南</RouterLink>
+            <RouterLink :to="`/shop/help/${order.product.guide_key}?order=${order.order_id}`" :aria-label="isShopDaypass(order.product) ? 'API Key 使用指南' : '必看：成品号使用指南'" class="mt-4 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-semibold text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900">阅读使用指南</RouterLink>
           </div>
           <ShopDelivery :content="order.delivery_content || ''" :api-key="isShopDaypass(order.product)" />
         </section>

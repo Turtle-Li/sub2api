@@ -144,6 +144,7 @@ describe('PaymentResultView', () => {
       expect(wrapper.text()).toContain('payment.result.success')
       expect(wrapper.findAll('a, button')).toHaveLength(0)
       expect(pollOrderStatus).toHaveBeenCalledWith(42)
+      expect(routerPush).not.toHaveBeenCalled()
     } finally {
       window.name = previousName
       vi.unstubAllGlobals()
@@ -204,9 +205,58 @@ describe('PaymentResultView', () => {
     const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true, RouterLink: { template: '<a><slot /></a>' } } } })
     await flushPromises()
     expect(wrapper.text()).toContain('payment.result.success')
-    expect(wrapper.text()).toContain('查看商城订单')
+    expect(wrapper.text()).toContain('正在进入订单…')
     expect(wrapper.text()).not.toContain('payment.result.processing')
+    expect(routerPush).toHaveBeenCalledWith('/shop/orders/42')
     expect(refreshUser).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('does not auto-open another tab\'s global checkout when paid after polling=%s', async (afterPolling) => {
+    vi.useFakeTimers()
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      ...recoverySnapshotFactory('resume-other-tab'), orderId: 77, orderType: 'manual_shop',
+    }))
+    const paidOtherOrder = { ...orderFactory('PAID'), id: 77, order_type: 'manual_shop', paid_at: '2026-11-05T00:00:00Z' }
+    if (afterPolling) pollOrderStatus.mockResolvedValueOnce({ ...paidOtherOrder, status: 'PENDING', paid_at: null })
+    pollOrderStatus.mockResolvedValue(paidOtherOrder)
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+    if (afterPolling) {
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+    }
+    expect(pollOrderStatus).toHaveBeenCalledWith(77)
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('正在进入订单…')
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.result.viewOrders')).toBe(true)
+  })
+
+  it('auto-opens the shop order verified by this return token despite another tab\'s checkout', async () => {
+    vi.useFakeTimers()
+    routeState.query = { resume_token: 'resume-this-return' }
+    const other = JSON.stringify({ ...recoverySnapshotFactory('resume-other-tab'), orderId: 77 })
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, other)
+    const paid = { ...orderFactory('PAID'), order_type: 'manual_shop', paid_at: '2026-11-05T00:00:00Z' }
+    resolveOrderPublicByResumeToken.mockResolvedValueOnce({ data: { ...paid, status: 'PENDING', paid_at: null } })
+      .mockResolvedValue({ data: paid })
+    mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+    expect(routerPush).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(routerPush).toHaveBeenCalledTimes(1)
+    expect(routerPush).toHaveBeenCalledWith('/shop/orders/42')
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBe(other)
+    expect(pollOrderStatus).not.toHaveBeenCalled()
+  })
+
+  it('does not auto-open a paid result with an id that differs from this return order', async () => {
+    routeState.query = { order_id: '42' }
+    pollOrderStatus.mockResolvedValue({ ...orderFactory('PAID'), id: 77, order_type: 'manual_shop', paid_at: '2026-11-05T00:00:00Z' })
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('正在进入订单…')
   })
 
   it('restores the current local order after the unified payment fixed return URL', async () => {

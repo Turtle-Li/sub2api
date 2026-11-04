@@ -19,6 +19,25 @@ import PaymentQRCodeView from '../PaymentQRCodeView.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 
 describe('PaymentQRCodeView', () => {
+  it.each([
+    [undefined, 'manual_shop', true],
+    ['manual_shop', 'manual_shop', true],
+    ['manual_shop', 'balance', false],
+    [undefined, 'balance', false],
+  ])('uses verified type %s / %s for automatic shop navigation', async (launchType, verifiedType, navigates) => {
+    routerPush.mockClear()
+    routeState.query = { order_id: '42', order_type: launchType }
+    const wrapper = shallowMount(PaymentQRCodeView, { global: { stubs: { AppLayout: { template: '<main><slot /></main>' } } } })
+    const panel = wrapper.getComponent(PaymentStatusPanel)
+    panel.vm.$emit('settled', 'cancelled')
+    expect(routerPush).not.toHaveBeenCalled()
+    panel.vm.$emit('settled', 'success')
+    expect(routerPush).not.toHaveBeenCalled()
+    panel.vm.$emit('success', { id: 42, order_type: verifiedType })
+    if (navigates) expect(routerPush).toHaveBeenCalledWith('/shop/orders/42')
+    else expect(routerPush).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
   it('uses the shared status shell and never substitutes a hosted URL as QR data', () => {
     routeState.query = {
       order_id: '42',

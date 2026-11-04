@@ -934,11 +934,14 @@ function hidePaymentModal() {
   paymentModalVisible.value = false
 }
 
-async function onPaymentSuccess() {
+async function onPaymentSuccess(paid?: Pick<PaymentOrder, 'id' | 'order_type'>) {
+  if (paid && paid.id !== paymentState.value.orderId) return
   removeCoupon()
-  // The panel emits this only for a server-recorded COMPLETED order. Keep the
-  // terminal panel mounted until the user dismisses it; a browser callback is
-  // never treated as an entitlement result.
+  if (paid?.order_type === 'manual_shop') {
+    void router.push(`/shop/orders/${paid.id}`)
+    return
+  }
+  // Ordinary payments retain their existing confirmation and refresh behavior.
   authStore.refreshUser().catch(() => {})
   if (paymentState.value.orderType === 'subscription' || paymentState.value.orderType === 'reset_card') {
     subscriptionStore.fetchActiveSubscriptions(true).catch(() => {})

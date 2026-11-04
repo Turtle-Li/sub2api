@@ -13,7 +13,7 @@ vi.mock('@/api/shop', () => ({ shopAPI: {
   product: async () => ({ data: { id: 1, revision: 1, name: '测试代充', price: 0.1, enabled: true, fulfillment_mode: 'session_topup', duration_value: 1, duration_unit: 'month' } }),
   createOrder,
 } }))
-const PaymentPanel = defineComponent({ name: 'PaymentStatusPanel', props: ['allowTopLevelRedirect'], emits: ['done', 'settled'], template: '<div data-test="checkout" />' })
+const PaymentPanel = defineComponent({ name: 'PaymentStatusPanel', props: ['allowTopLevelRedirect'], emits: ['done', 'settled', 'success'], template: '<div data-test="checkout" />' })
 const options = { global: { stubs: {
   AppLayout: { template: '<main><slot /></main>' },
   RouterLink: { template: '<a><slot /></a>' },
@@ -82,17 +82,26 @@ describe('shop checkout feedback', () => {
     await openCheckout(wrapper)
     expect(createOrder.mock.calls[1]?.[1]).toBe(firstKey)
   })
-  it('keeps the payment success reminder visible until the buyer continues to the order', async () => {
+  it('automatically opens the paid order without a second confirmation', async () => {
     const wrapper = mount(ShopProductView, options)
     await openCheckout(wrapper)
     wrapper.getComponent(PaymentPanel).vm.$emit('settled', 'success')
-    await flushPromises()
     expect(push).not.toHaveBeenCalled()
-    expect(wrapper.findComponent(PaymentPanel).exists()).toBe(true)
-    wrapper.getComponent(PaymentPanel).vm.$emit('done')
+    wrapper.getComponent(PaymentPanel).vm.$emit('success', { id: 42, order_type: 'manual_shop' })
     await flushPromises()
     expect(push).toHaveBeenCalledTimes(1)
     expect(push).toHaveBeenCalledWith('/shop/orders/42')
+  })
+  it('does not navigate for missing or mismatched verified order identity', async () => {
+    const wrapper = mount(ShopProductView, options)
+    await openCheckout(wrapper)
+    const panel = wrapper.getComponent(PaymentPanel)
+    panel.vm.$emit('success')
+    panel.vm.$emit('success', { id: 99, order_type: 'manual_shop' })
+    panel.vm.$emit('success', { id: 42, order_type: 'balance' })
+    await flushPromises()
+    expect(push).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(PaymentPanel).exists()).toBe(true)
   })
   it('binds provider-return recovery to the shop checkout before displaying payment', async () => {
     const wrapper = mount(ShopProductView, options)

@@ -29,7 +29,7 @@ withDefaults(defineProps<{ order: ShopOrderDetail; showGuide?: boolean; showNoti
         <div v-if="showNotification && order.fulfillment_status !== 'COMPLETED'"><dt class="text-gray-500 dark:text-gray-400">邮件通知</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ shopNotificationLabels[order.email_status] }}</dd></div>
       </dl>
     </details>
-    <RouterLink v-if="showGuide && order.product.guide_key" :to="`/shop/help/${order.product.guide_key}`" class="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-primary-700 underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300">查看使用指南</RouterLink>
+    <RouterLink v-if="showGuide && order.product.guide_key" :to="`/shop/help/${order.product.guide_key}?order=${order.order_id}`" class="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-primary-700 underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300">查看使用指南</RouterLink>
   </section>
 </template>
 <style scoped>

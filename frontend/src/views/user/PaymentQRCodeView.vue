@@ -14,6 +14,7 @@
         :currency="currency"
         :out-trade-no="outTradeNo"
         :mobile-alipay-deep-link="mobileAlipayDeepLink"
+        @success="onPaymentSuccess"
         @done="router.push('/purchase')"
       />
     </div>
@@ -22,11 +23,17 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
+import type { PaymentOrder } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
+
+function onPaymentSuccess(paid?: Pick<PaymentOrder, 'id' | 'order_type'>) {
+  if (paid?.order_type !== 'manual_shop' || paid.id !== orderId) return
+  void router.push(`/shop/orders/${paid.id}`)
+}
 
 function queryString(key: string): string {
   const value = route.query[key]

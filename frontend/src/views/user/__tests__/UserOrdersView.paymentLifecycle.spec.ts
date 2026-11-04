@@ -9,6 +9,7 @@ const {
   getOrder,
   getRefundEligibleProviders,
   resumeOrder,
+  routerPush,
   showError,
   showInfo,
   showSuccess,
@@ -19,6 +20,7 @@ const {
   getOrder: vi.fn(),
   getRefundEligibleProviders: vi.fn(),
   resumeOrder: vi.fn(),
+  routerPush: vi.fn(),
   showError: vi.fn(),
   showInfo: vi.fn(),
   showSuccess: vi.fn(),
@@ -47,7 +49,7 @@ vi.mock('@/stores', () => ({
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ cachedPublicSettings: { payment_enabled: true, payment_entry_enabled: true } }),
 }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
 vi.mock('vue-i18n', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-i18n')>()),
   useI18n: () => ({ t: (key: string) => key }),
@@ -128,6 +130,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
     getOrder.mockReset().mockImplementation((orderId: number) => Promise.resolve({ data: rows.find(row => row.id === orderId) }))
     getRefundEligibleProviders.mockReset().mockResolvedValue({ data: { provider_instance_ids: [] } })
     resumeOrder.mockReset()
+    routerPush.mockReset()
     verifyOrder.mockReset()
     showError.mockReset()
     showInfo.mockReset()
@@ -160,6 +163,24 @@ describe('UserOrdersView pending payment lifecycle', () => {
     expect(wrapper.get('[data-test="order-expiry-checking-51"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(showSuccess).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each(['manual_shop', 'balance'])('opens the verified shop order independently of cached %s type', async launchType => {
+    const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString(), { order_type: launchType })
+    rows = [order]
+    resumeOrder.mockResolvedValue({ data: { order_id: 51, amount: 0.1, pay_amount: 0.1, currency: 'CNY', payment_type: 'alipay', qr_code: 'https://qr.alipay.com/original-51', status: 'PENDING', expires_at: order.expires_at } })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-test="continue-payment-51"]').trigger('click')
+    await flushPromises()
+    wrapper.getComponent({ name: 'PaymentStatusPanel' }).vm.$emit('settled', 'success')
+    expect(routerPush).not.toHaveBeenCalled()
+    wrapper.getComponent({ name: 'PaymentStatusPanel' }).vm.$emit('success', { id: 51, order_type: 'manual_shop' })
+    await flushPromises()
+    expect(routerPush).toHaveBeenCalledTimes(1)
+    expect(routerPush).toHaveBeenCalledWith('/shop/orders/51')
+    expect(wrapper.find('[data-test="resume-panel"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -114,9 +114,9 @@
             </div>
           </div>
         </div>
-        <RouterLink v-if="order?.order_type === 'manual_shop' && order.id" :to="`/shop/orders/${order.id}`" class="btn btn-primary mt-4 w-full">查看商城订单</RouterLink>
+        <p v-if="isBoundShopSuccess" role="status" class="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">正在进入订单…</p>
         <!-- Actions -->
-        <div class="flex gap-3">
+        <div v-if="!isBoundShopSuccess" class="flex gap-3">
           <button class="btn btn-secondary flex-1" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
           <button v-if="canRefresh" class="btn btn-secondary flex-1" @click="refreshNow">{{ t('payment.qr.refreshStatus') }}</button>
           <button class="btn btn-primary flex-1" @click="router.push('/orders')">{{ t('payment.result.viewOrders') }}</button>
@@ -165,6 +165,11 @@ type ResolvedOrder = PaymentOrder | PublicOrderVerifyResult
 
 const order = ref<ResolvedOrder | null>(null)
 const recovery = ref<PaymentRecoverySnapshot | null>(null)
+const shopReturnOrderId = ref(0)
+const isBoundShopSuccess = computed(() => !compactReturn
+  && hasOrderId(order.value)
+  && order.value.id === shopReturnOrderId.value
+  && isManualShopPaymentConfirmed(order.value))
 const loading = ref(true)
 const knownContext = ref(false)
 const retryExhausted = ref(false)
@@ -298,6 +303,7 @@ async function copyOrderNumber(value: string): Promise<void> {
   }
 }
 
+let shopRedirectStarted = false
 function setResolvedOrder(nextOrder: ResolvedOrder | null): void {
   if (!nextOrder) return
   order.value = nextOrder
@@ -307,6 +313,10 @@ function setResolvedOrder(nextOrder: ResolvedOrder | null): void {
     currency.value = normalizePaymentCurrency(nextOrder.currency)
   }
   refreshUserBalanceForSuccessfulOrder(nextOrder)
+  if (!shopRedirectStarted && isBoundShopSuccess.value && hasOrderId(nextOrder)) {
+    shopRedirectStarted = true
+    void router.push(`/shop/orders/${nextOrder.id}`)
+  }
 }
 
 function refreshUserBalanceForSuccessfulOrder(nextOrder: ResolvedOrder): void {
@@ -568,6 +578,9 @@ async function initialize(): Promise<void> {
   }
   const resumeToken = popupReturn ? popupContext?.resumeToken || '' : readRouteQueryString('resume_token')
   const routeOrderId = popupContext?.orderId || readRouteOrderId()
+  // The shared recovery snapshot may belong to another tab. It remains usable
+  // for legacy status recovery, but cannot identify this return for navigation.
+  shopReturnOrderId.value = routeOrderId
   const routeOutTradeNo = popupReturn ? '' : readRouteQueryString('out_trade_no')
   let orderId = routeOrderId
   let resumeLookupFailed = false
@@ -598,6 +611,7 @@ async function initialize(): Promise<void> {
     const resolvedOrder = await resolveOrderFromResumeToken(resumeToken)
     if (!isCurrentLifecycle(generation)) return
     if (resolvedOrder) {
+      if (hasOrderId(resolvedOrder)) shopReturnOrderId.value = resolvedOrder.id
       setResolvedOrder(resolvedOrder)
       if (!orderId && hasOrderId(resolvedOrder)) {
         orderId = resolvedOrder.id
@@ -620,6 +634,7 @@ async function initialize(): Promise<void> {
     if (resumeToken) {
       const resolvedOrder = await resolveOrderFromResumeToken(resumeToken)
       if (resolvedOrder) {
+        if (isCurrentLifecycle(generation) && hasOrderId(resolvedOrder)) shopReturnOrderId.value = resolvedOrder.id
         return resolvedOrder
       }
     }
@@ -627,7 +642,9 @@ async function initialize(): Promise<void> {
       return pollOrderById(orderId)
     }
     if (shouldUsePublicOutTradeNo) {
-      return resolveOrderFromOutTradeNo(routeOutTradeNo)
+      const resolvedOrder = await resolveOrderFromOutTradeNo(routeOutTradeNo)
+      if (isCurrentLifecycle(generation) && hasOrderId(resolvedOrder)) shopReturnOrderId.value = resolvedOrder.id
+      return resolvedOrder
     }
     return null
   }
@@ -641,6 +658,7 @@ async function initialize(): Promise<void> {
   if (!order.value && shouldUsePublicOutTradeNo && (resumeLookupFailed || !resumeToken)) {
     const resolvedOrder = await resolveOrderFromOutTradeNo(routeOutTradeNo)
     if (!isCurrentLifecycle(generation)) return
+    if (hasOrderId(resolvedOrder)) shopReturnOrderId.value = resolvedOrder.id
     setResolvedOrder(resolvedOrder)
   }
 

@@ -2,6 +2,12 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <script id="embedded-payment-return" nonce="__CSP_NONCE_VALUE__">
+      if (window.parent !== window && /^\/payment\/result\/?$/.test(window.location.pathname)) {
+        document.documentElement.hidden = true;
+        window.parent.postMessage({ type: 'sub2api:payment-return-ready' }, window.location.origin);
+      }
+    </script>
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sub2API - AI API Gateway</title>

@@ -13,7 +13,7 @@ import { shopAPI } from '@/api/shop'
 import { paymentAPI } from '@/api/payment'
 import { clearPaymentRecoverySnapshot, getVisibleMethods, writePaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 import { shopDuration, shopDeliveryLabel, isShopDaypass, type ShopProduct } from '@/types/shop'
-import type { CreateOrderResult } from '@/types/payment'
+import type { CreateOrderResult, PaymentOrder } from '@/types/payment'
 import { createIdempotencyKey } from '@/utils/idempotency'
 const route = useRoute()
 const router = useRouter()
@@ -21,7 +21,6 @@ const product = ref<ShopProduct | null>(null)
 const hasDeliveryTime = computed(() => /5\s*分钟\s*[-–—~～至]\s*2\s*小时/.test(`${product.value?.summary || ''}\n${product.value?.description || ''}`))
 const checkout = ref<CreateOrderResult | null>(null)
 const recoveryAvailable = ref(false)
-const checkoutOutcome = ref<'success' | 'cancelled' | 'expired' | null>(null)
 const methods = ref<('alipay' | 'wxpay')[]>([])
 const method = ref<'alipay' | 'wxpay'>('alipay')
 const busy = ref(false)
@@ -70,13 +69,11 @@ async function buy() {
       // would need the optional browser recovery cache on the return trip.
       recoveryAvailable.value = false
     }
-    checkoutOutcome.value = null
     checkout.value = result
   } catch { error.value = '未能创建订单，请重试。若订单已创建，可到“我的订单”继续付款。' }
   finally { busy.value = false }
 }
 function onPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
-  checkoutOutcome.value = outcome
   if (outcome === 'cancelled' || outcome === 'expired') {
     attemptKey = ''
     attemptMethod = ''
@@ -87,10 +84,12 @@ function onPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
   }
 }
 function closeCheckout() {
-  const paidOrderId = checkoutOutcome.value === 'success' ? checkout.value?.order_id : undefined
   checkout.value = null
-  checkoutOutcome.value = null
-  if (paidOrderId) void router.push(`/shop/orders/${paidOrderId}`)
+}
+function onPaymentSuccess(paid?: Pick<PaymentOrder, 'id' | 'order_type'>) {
+  if (paid?.order_type !== 'manual_shop' || paid.id !== checkout.value?.order_id) return
+  closeCheckout()
+  void router.push(`/shop/orders/${paid.id}`)
 }
 watch(() => route.params.id, () => { product.value = null; checkout.value = null; attemptKey = ''; void load() }, { immediate: true })
 </script>
@@ -135,7 +134,7 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
           </article>
 
           <aside class="min-w-0 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 lg:sticky lg:top-6" aria-label="购买商品">
-            <RouterLink v-if="product.guide_key" :to="`/shop/help/${product.guide_key}`" class="mb-5 flex min-h-11 items-center justify-between gap-3 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-sm font-medium text-primary-800 hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:border-primary-800 dark:bg-primary-950 dark:text-primary-200 dark:focus:ring-offset-gray-900">
+            <RouterLink v-if="product.guide_key" :to="`/shop/help/${product.guide_key}?product=${product.id}`" class="mb-5 flex min-h-11 items-center justify-between gap-3 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-sm font-medium text-primary-800 hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:border-primary-800 dark:bg-primary-950 dark:text-primary-200 dark:focus:ring-offset-gray-900">
               <span>购买前请阅读使用指南</span>
               <Icon name="arrowRight" class="h-4 w-4 shrink-0" />
             </RouterLink>
@@ -199,6 +198,7 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
         :out-trade-no="checkout.out_trade_no"
         @done="closeCheckout"
         @settled="onPaymentSettled"
+        @success="onPaymentSuccess"
       />
       </div>
     </BaseDialog>
