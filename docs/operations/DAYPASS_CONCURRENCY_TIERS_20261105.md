@@ -174,3 +174,25 @@ Advisory Level1 QA_PASS; native project report
 `ops/unlimited-key-live-smoke.py`, privacy-safe log SHA256
 `c35c8ac92f1d3044d2971806d042453056c7847bcba1846814cd5a72782b42a1`.
 Expiry/15-minute network-release waits retain their separately recorded scope.
+
+## Native delivery URL and Harness client follow-up
+
+On2026-11-05 the native quick-issuance UI still derived localhost from the
+unconfigured ServerAddress default. Machine-only native option update set
+ServerAddress=https://ds.turtleligpt.com; hot public status,persisted option,
+manual QA token29 generation200/exact revoke/reveal410,and refreshed real
+Chrome masked-delivery panel confirmed the corrected DS/v1 base. No Sub2
+code,application image,container,customer key or financial fact changed.
+The shop adapter already delivered that correct public address.
+
+Harness third-party Anthropic Messages needs the origin without /v1; its
+effective POST is /v1/messages. Third-party OpenAI Chat keeps the /v1 base.
+This differs from the built-in DeepSeek adapter's normalization,as confirmed
+in official Harness revisionb830ec950faba0a46dda564be3e2d854afed94f1.
+Native-only QA token30/receipt9301793893193 passed Messages200 with both
+x-api-key and Bearer at deepseek-v4.1-flash,wrong doubled path404,and exact
+revoke/replay410. Later customer token28 recorded six real Messages successes;
+an earlier403 cause remains unconfirmed without its response body. IP and
+concurrency policy remain unchanged. Detailed evidence and client-source paths:
+native project docs/client-configuration-20261105.md and
+docs/bugs/deployment/BUG-20261105-daypass-localhost-delivery.md.
