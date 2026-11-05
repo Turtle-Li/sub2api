@@ -124,13 +124,14 @@ func (c *shopDaypassClient) Ready(ctx context.Context) error {
 	var result struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Instance  string `json:"instance"`
-			ProductID int64  `json:"product_id"`
-			Status    string `json:"status"`
+			Concurrencies []int  `json:"concurrencies"`
+			Instance      string `json:"instance"`
+			ProductID     int64  `json:"product_id"`
+			Status        string `json:"status"`
 		} `json:"data"`
 	}
 	if err != nil || len(raw) > 4096 || json.Unmarshal(raw, &result) != nil || res.StatusCode != http.StatusOK || !result.Success ||
-		result.Data.Instance != shopDaypassInstance || result.Data.ProductID != c.productID || result.Data.Status != "ready" {
+		result.Data.Instance != shopDaypassInstance || result.Data.ProductID != c.productID || result.Data.Status != "ready" || len(result.Data.Concurrencies) != 2 || result.Data.Concurrencies[0] != 2 || result.Data.Concurrencies[1] != 3 {
 		return errShopDaypassUnavailable
 	}
 	return nil

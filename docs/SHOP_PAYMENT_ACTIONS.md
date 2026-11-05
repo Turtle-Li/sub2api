@@ -52,7 +52,12 @@ shop_daypass:
 
 `id@version` 固定 adapter、目的端、Ready 地址与凭据别名。修改这些字段需发新版本，
 保留旧版本供旧订单恢复；enabled 可切换。不要删除仍有未撤销订单的原生版本。
-日卡处理器要求6元人民币、1天，默认2并发；GuideKey 只控制教程。
+日卡目录保留6元人民币、1天、默认2并发。购买可选择2并发/6元或3并发/8元，
+最高3；价格表由服务端固定，买家不能传价格或任意动作参数。所选价格和
+default_concurrency 写入付款与交付快照；旧订单继续使用原快照。GuideKey 只控制教程。
+部署配置 shop_daypass.max_concurrency 为2时只停止创建新的3并发订单，已创建订单
+仍可恢复付款、自动交付和撤销。分阶段发布与回滚下限见
+`operations/DAYPASS_CONCURRENCY_TIERS_20261105.md`。
 
 商品绑定示例（后台使用）：
 

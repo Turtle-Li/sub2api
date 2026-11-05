@@ -21,7 +21,16 @@ const product = ref<ShopProduct | null>(null)
 const hasDeliveryTime = computed(() => /5\s*分钟\s*[-–—~～至]\s*2\s*小时/.test(`${product.value?.summary || ''}\n${product.value?.description || ''}`))
 const checkout = ref<CreateOrderResult | null>(null)
 const recoveryAvailable = ref(false)
-const methods = ref<('alipay' | 'wxpay')[]>([])
+const concurrency = ref(2)
+const options = computed(() => product.value?.concurrency_options ?? [])
+const selectedPrice = computed(() => options.value.find(option => option.concurrency === concurrency.value)?.price ?? product.value?.price ?? 0)
+const methodLimits = ref<ReturnType<typeof getVisibleMethods>>({})
+const methods = computed(() => (['alipay', 'wxpay'] as const).filter(key => {
+  const limit = methodLimits.value[key]
+  return limit && limit.available !== false && (!limit.currency || limit.currency === 'CNY')
+    && (!(limit.single_min > 0) || selectedPrice.value >= limit.single_min)
+    && (!(limit.single_max > 0) || selectedPrice.value <= limit.single_max)
+}))
 const method = ref<'alipay' | 'wxpay'>('alipay')
 const busy = ref(false)
 const loading = ref(true)
@@ -34,14 +43,8 @@ async function load() {
   try {
     const [item, config] = await Promise.all([shopAPI.product(Number(route.params.id)), paymentAPI.getCheckoutInfo()])
     product.value = item.data
-    const visible = getVisibleMethods(config.data.methods)
-    methods.value = (['alipay', 'wxpay'] as const).filter(key => {
-      const limit = visible[key]
-      return limit && limit.available !== false
-        && (!limit.currency || limit.currency === 'CNY')
-        && (!(limit.single_min > 0) || item.data.price >= limit.single_min)
-        && (!(limit.single_max > 0) || item.data.price <= limit.single_max)
-    })
+    concurrency.value = item.data.concurrency ?? 2
+    methodLimits.value = getVisibleMethods(config.data.methods)
     method.value = methods.value[0] ?? 'alipay'
   } catch { error.value = '商品加载失败，请刷新重试。' }
   finally { loading.value = false }
@@ -51,8 +54,9 @@ async function buy() {
   busy.value = true
   error.value = ''
   try {
-    if (!attemptKey || attemptMethod !== method.value) { attemptKey = createIdempotencyKey('shop-order'); attemptMethod = method.value }
-    const result = (await shopAPI.createOrder({ product_id: product.value.id, product_revision: product.value.revision, payment_type: method.value }, attemptKey)).data
+    const selection = `${method.value}/${options.value.length ? concurrency.value : 0}`
+    if (!attemptKey || attemptMethod !== selection) { attemptKey = createIdempotencyKey('shop-order'); attemptMethod = selection }
+    const result = (await shopAPI.createOrder({ product_id: product.value.id, product_revision: product.value.revision, payment_type: method.value, ...(options.value.length ? { concurrency: concurrency.value } : {}) }, attemptKey)).data
     try {
       writePaymentRecoverySnapshot(window.localStorage, {
         orderId: result.order_id, amount: result.amount, payAmount: result.pay_amount,
@@ -92,6 +96,7 @@ function onPaymentSuccess(paid?: Pick<PaymentOrder, 'id' | 'order_type'>) {
   void router.push(`/shop/orders/${paid.id}`)
 }
 watch(() => route.params.id, () => { product.value = null; checkout.value = null; attemptKey = ''; void load() }, { immediate: true })
+watch(methods, available => { if (!available.includes(method.value)) method.value = available[0] ?? 'alipay' })
 </script>
 <template>
   <AppLayout>
@@ -142,7 +147,7 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
             <dl class="flex items-end justify-between gap-4 border-b border-gray-200 pb-5 dark:border-gray-800">
               <div>
                 <dt class="text-xs text-gray-500 dark:text-gray-400">价格</dt>
-                <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">¥{{ product.price.toFixed(2) }}</dd>
+                <dd aria-live="polite" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">¥{{ selectedPrice.toFixed(2) }}</dd>
               </div>
               <div class="text-right">
                 <dt class="text-xs text-gray-500 dark:text-gray-400">时长</dt>
@@ -150,7 +155,18 @@ watch(() => route.params.id, () => { product.value = null; checkout.value = null
               </div>
             </dl>
 
-            <ShopNotice :show-delivery-time="!hasDeliveryTime" :automatic="product.automatic_fulfillment" :daypass="isShopDaypass(product)" />
+            <fieldset v-if="options.length" class="my-5" :disabled="busy || !!checkout">
+              <legend class="text-sm font-medium text-gray-900 dark:text-gray-100">并发数量</legend>
+              <div class="mt-3 grid grid-cols-2 gap-2">
+                <label v-for="option in options" :key="option.concurrency" class="flex min-h-16 cursor-pointer items-center gap-3 rounded-lg border px-3 py-3 text-sm" :class="concurrency === option.concurrency ? 'border-primary-500 bg-primary-50 dark:bg-primary-950' : 'border-gray-200 dark:border-gray-700'">
+                  <input v-model="concurrency" type="radio" name="concurrency" :value="option.concurrency" class="h-5 w-5 shrink-0 accent-primary-700 focus:ring-primary-500" />
+                  <span class="text-gray-800 dark:text-gray-200"><strong class="block font-medium">{{ option.concurrency }} 并发</strong><span class="mt-1 block text-xs">¥{{ option.price.toFixed(2) }} / 天</span></span>
+                </label>
+              </div>
+              <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">同一 Key 可同时进行的请求数，最高 3 并发。</p>
+            </fieldset>
+
+            <ShopNotice :show-delivery-time="!hasDeliveryTime" :automatic="product.automatic_fulfillment" :daypass="isShopDaypass(product)" :concurrency="options.length ? concurrency : undefined" />
 
             <fieldset class="mt-5" :disabled="busy">
               <legend class="text-sm font-medium text-gray-900 dark:text-gray-100">支付方式</legend>

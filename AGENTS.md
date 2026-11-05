@@ -134,6 +134,10 @@
   Generic HTTP activation still requires its separate approved agent/mount and
   receiver acceptance; the payment/Feishu agents must not hold its credentials.
 - For DeepSeek24-hour API-key shop delivery, read
+  `docs/operations/DAYPASS_CONCURRENCY_TIERS_20261105.md` for the two approved
+  shop tiers (default2/CNY6, max3/CNY8), immutable purchased params and ordered
+  activation. From the first tier3 checkout, all running/rollback app images
+  must understand both tiers; the receiver floor is guard.5.1. Then read
   `deploy/SHOP_PAYMENT_ACTIONS_RELEASE_20261105.md` and local detail
   `docs/operations/DEEPSEEK_DAYPASS_20261105.md`. Product3 is live at6yuan/24h:
   one paid order/key, original paid_at expiry, exact SKU, existing money/review

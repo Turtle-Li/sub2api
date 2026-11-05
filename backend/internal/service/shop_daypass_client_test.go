@@ -33,7 +33,7 @@ func TestShopDaypassClientRejectsUnboundRepliesAndRedirects(t *testing.T) {
 					if scenario == "wrong-ready-sku" {
 						productID = 9
 					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"instance": shopDaypassInstance, "product_id": productID, "status": "ready"}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"instance": shopDaypassInstance, "product_id": productID, "status": "ready", "concurrencies": []int{2, 3}}})
 					return
 				}
 				var got shopDaypassBinding

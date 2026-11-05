@@ -9,7 +9,7 @@ withDefaults(defineProps<{ order: ShopOrderDetail; showGuide?: boolean; showNoti
       <div class="min-w-0">
         <p class="text-xs text-gray-500 dark:text-gray-400">订单 #{{ order.order_id }}</p>
         <h1 id="shop-order-summary-title" class="mt-1 break-words text-xl font-semibold leading-tight text-gray-900 dark:text-gray-100">{{ order.product.name }}</h1>
-        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ shopDuration(order.product) }}<span class="mx-2" aria-hidden="true">·</span><strong class="font-semibold tabular-nums text-gray-900 dark:text-gray-100">¥{{ order.pay_amount.toFixed(2) }}</strong></p>
+        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ shopDuration(order.product) }}<template v-if="order.product.concurrency"><span class="mx-2" aria-hidden="true">·</span>{{ order.product.concurrency }} 并发</template><span class="mx-2" aria-hidden="true">·</span><strong class="font-semibold tabular-nums text-gray-900 dark:text-gray-100">¥{{ order.pay_amount.toFixed(2) }}</strong></p>
       </div>
       <div class="flex flex-wrap items-center gap-2 sm:justify-end">
         <OrderStatusBadge :status="order.payment_status" />

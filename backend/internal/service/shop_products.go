@@ -66,7 +66,7 @@ func (s *ShopService) Products(ctx context.Context, admin bool) ([]ShopProduct, 
 	for _, p := range rows {
 		dto := shopProductDTO(p)
 		if !admin {
-			dto = publicShopProduct(dto)
+			dto = s.publicCatalogProduct(dto)
 		}
 		out = append(out, dto)
 	}
@@ -87,7 +87,7 @@ func (s *ShopService) Product(ctx context.Context, id int64, admin bool) (*ShopP
 	}
 	dto := shopProductDTO(p)
 	if !admin {
-		dto = publicShopProduct(dto)
+		dto = s.publicCatalogProduct(dto)
 	}
 	return &dto, nil
 }
@@ -145,5 +145,6 @@ func shopSnapshot(f *dbent.ShopFulfillment) (ShopProduct, error) {
 	if p.ID != f.ProductID || p.Currency != "CNY" || (p.FulfillmentMode != ShopSessionTopup && p.FulfillmentMode != ShopAccountDelivery) {
 		return p, infraerrors.Conflict("SHOP_SNAPSHOT_INVALID", "订单商品快照异常，请联系客服")
 	}
+	p.Concurrency = shopProductConcurrency(p)
 	return p, nil
 }
