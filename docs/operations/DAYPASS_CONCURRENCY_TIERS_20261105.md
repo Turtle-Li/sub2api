@@ -152,3 +152,25 @@ reviewed configuration helper and the canonical release process to load that
 sales switch. Keep existing orders, payment/action snapshots and receiver
 receipts; never restore an earlier database or an unaware binary. Receiver
 recovery remains pinned to guard.5.1 as documented above.
+
+## Owner-requested fresh unlimited-key live test
+
+On2026-11-05T14:47:34Z, a fresh native-only synthetic receipt9201793890054
+issued token27/internal user20/subscription19 with3 concurrent and15minutes
+remaining validity. No Sub2 order, payment callback or PAID fact was created.
+Four overlapping public HTTPS calls gave three complete200 SSE responses and
+one429/`account_concurrency_exceeded`. Another public network returned
+403/`account_ip_in_use` both while a stream was active and after completion.
+Original-network continued calls succeeded: ten generations in52.24seconds,
+565 prompt/1970 completion tokens,2535 recorded quota units. Wallet remained0,
+key unlimited flag remained true, and native plan/subscription totals remained0
+(native unlimited mode), subscription-only/no overflow. Used amount rose0→2535.
+Thus usage is recorded without a finite key/subscription total cap.
+
+Exact cleanup disabled token27, cancelled subscription19 and retained the
+revoked receipt; replay410. No application/configuration change or deployment.
+Advisory Level1 QA_PASS; native project report
+`docs/live-unlimited-key-acceptance-20261105.md`, harness
+`ops/unlimited-key-live-smoke.py`, privacy-safe log SHA256
+`c35c8ac92f1d3044d2971806d042453056c7847bcba1846814cd5a72782b42a1`.
+Expiry/15-minute network-release waits retain their separately recorded scope.
