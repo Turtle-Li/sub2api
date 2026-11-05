@@ -159,3 +159,37 @@ exclusion and coexistence with long-context and cost details; user-page
 composition and public aggregate regressions are also checked.
 Independent QA owns real rendered desktop/mobile and light/dark inspection.
 Local checks do not represent a production rollout or paid-model speed test.
+
+## Production release — 2026-11-05 UTC
+
+Released source `23a5324891fa97676f1b4abede876e7f086c8128`, version 0.2.21,
+through the existing explicit AWS production workflow. All six jobs in
+[CI 42071869502](https://github.com/Turtle-Li/sub2api/actions/runs/42071869502)
+passed on that exact source. The first macOS job never obtained a runner;
+the retry actually executed the deployment checks and passed. No test was waived.
+[Production run 42076120996](https://github.com/Turtle-Li/sub2api/actions/runs/42076120996)
+completed successfully at 2026-11-05T17:45:42Z.
+
+The verified linux/amd64 archive is 94,180,373 bytes with SHA256
+`6f76761e16284b64d580966a1d4f9ff9dcf20b092ff82b1ab6428854f21c8f22`.
+The receiver validated that digest and the revision/source/version labels before
+the canonical blue-green switch. Production blue is healthy, accepting traffic
+and the sole active background owner. Authenticated Models and Responses probes
+returned 200; public API health and the preserved WWW routes passed. The old
+green generation completed its canonical drain; no manual stop was used.
+
+The owner enabled the declaration only on the verified CPR account through the
+normal administrator form. Reloading and reopening that form confirmed the saved
+switch. The owner's test group has Force Fast enabled and Free Fast disabled.
+New production requests show requested `priority`, observed `default`, billed
+`priority`, with reason `codex_oauth_relay_default_echo` in the structured audit.
+The existing admin request table showed 20 Fast indicators in the cost cells and
+zero in model cells. The original cost-details popover also showed **Fast** and
+the configured 0.01x customer multiplier. This validates request/accounting and
+presentation behavior, without claiming a measured provider speed increase.
+
+Operational rollback remains an explicit false on that account declaration.
+Any application-image rollback must additionally satisfy the canonical receiver
+and the current daypass compatibility floor documented in
+`../../deploy/SHOP_PAYMENT_ACTIONS_RELEASE_20261105.md`; do not restore an older
+database or bypass release guards.
