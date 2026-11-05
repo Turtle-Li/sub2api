@@ -34,7 +34,7 @@ async function copy(key: string, value: string) {
       <button type="button" class="btn btn-primary min-h-11" :disabled="!content" :aria-expanded="shown" @click="shown = !shown">
         {{ shown ? '隐藏交付内容' : '显示交付内容' }}
       </button>
-      <button type="button" class="btn btn-secondary min-h-11" :disabled="!content" @click="copy('raw', content)">
+      <button v-if="!credentials" type="button" class="btn btn-secondary min-h-11" :disabled="!content" @click="copy('raw', content)">
         {{ copied === 'raw' ? '已复制' : '复制完整原文' }}
       </button>
     </div>
