@@ -192,7 +192,18 @@ in official Harness revisionb830ec950faba0a46dda564be3e2d854afed94f1.
 Native-only QA token30/receipt9301793893193 passed Messages200 with both
 x-api-key and Bearer at deepseek-v4.1-flash,wrong doubled path404,and exact
 revoke/replay410. Later customer token28 recorded six real Messages successes;
-an earlier403 cause remains unconfirmed without its response body. IP and
+the owner confirmed a wrongly entered model ID and normal replies after its
+correction. The earlier403 body was not captured. IP and
 concurrency policy remain unchanged. Detailed evidence and client-source paths:
 native project docs/client-configuration-20261105.md and
 docs/bugs/deployment/BUG-20261105-daypass-localhost-delivery.md.
+
+Final closeout check: the production Caddy target remains healthy green at
+revision2248dd7f89c87ddc33e2b98dbc07c8e8a2b5cc71,zero restarts; the successful
+build/release is GitHub Actions42023347430. Native guard.5.1 remains the same
+79b7f759 image,running with zero restarts. Authenticated private Ready again
+returned200 with exact tiers[2,3]; public /api/status200 reports the correct
+origin and public automation Ready404 carries the isolated boundary header.
+The owner confirmed successful recipient replies and authorized final
+submission/publication. This configuration-only follow-up is already effective;
+no new application artifact or lifecycle operation was needed.
