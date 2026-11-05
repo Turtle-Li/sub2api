@@ -188,7 +188,7 @@ func TestFeishuPaymentIncidentStorePostgresManualShopHistory(t *testing.T) {
 	fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
 	user := fixture.createUser(0)
 	store := NewFeishuPaymentIncidentStore(integrationDB)
-	now := time.Now().UTC().Add(-2 * time.Hour)
+	now := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	for _, resolved := range []bool{false, true} {
 		order := fixture.createPaidBalanceOrder(user, 7, service.OrderStatusPaid, now)
 		cleanupFeishuPaymentIncidentRows(t, order.ID)
