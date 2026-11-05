@@ -108,3 +108,47 @@ uid/gid1000, mode0600 and all unrelated YAML bytes/semantics.
   Real overlapping SSE statuses2→[200,200,429],3→[200,200,200,429];
   second network403 for each. Exact revoke and subsequent issue410 passed.
   Both keys revoked, tombstones retained, zero Sub2 financial rows written.
+
+## Production activation and checkout acceptance
+
+Both phases completed on the sole production owner, SSH alias
+`sub2api-aws-candidate`, under `/opt/sub2api` and the canonical maintenance lock.
+GitHub Actions [42023347430](https://github.com/Turtle-Li/sub2api/actions/runs/42023347430)
+succeeded for main `2248dd7f89c87ddc33e2b98dbc07c8e8a2b5cc71`.
+Both phases reused that exact image; there was no server source build.
+
+- Image `sub2api:auto-20261105-040956-2248dd7f`, Docker ID
+  `sha256:c0c2243bcf17c31c48ed582873f07db6d3a01e0c25e20dbe91a26ab99e74dc10`.
+  CI archive94140187bytes, SHA256
+  `1772b572307fa7408a431fb8d1788ab8a84349b4c6b06dc1c8f5a53985694c0e`.
+- Phase one retained max2; config backup
+  `/opt/sub2api/staging/daypass-limit-20261105T115825Z`, release record
+  `/var/log/sub2api-release/gha-20261105-040956-2248dd7f-1982537/`.
+  The old unaware color exited after its natural drain before activation3.
+- Phase two set max3 after checking every running application revision.
+  Config backup `/opt/sub2api/staging/daypass-limit-20261105T121434Z`;
+  canonical release `daypass-tiers-enable-20261105T121523Z` succeeded.
+  Final Caddy selection is `sub2api-green:8080`, healthy, revision2248dd7f,
+  zero restarts; blue exited. Public API health returned200.
+  Config remains uid/gid1000:1000, mode0600, max_concurrency3.
+- Reviewed config helper `/opt/sub2api/staging/shop-daypass-concurrency-limit.py`
+  SHA256 `d4d8a18a1c3a0dc262e7687485cc84aab824eca02b40d1df9e9b4050a65b3a0c`;
+  wrapper `.sh` SHA256
+  `c7fe2f9a9d973bce055fe17eb394fb2bad581e772b18ede750b3208c6bd7e225`.
+
+Real browser acceptance at `https://www.turtleligpt.com/shop/products/3`:
+default2 displays CNY6; selecting3 displays CNY8 and the matching usage notice.
+Checkout69 displayed CNY8 and its order detail persisted
+`1 day / 3 concurrent / CNY8`. The test order was cancelled and remains unpaid;
+no payment callback or PAID state was fabricated. Desktop and390x844 mobile
+checks passed, with no horizontal overflow. Viewport override was reset and
+the deliverable purchase page was restored to default2. Local evidence set
+`daypass-concurrency-20261105` contains desktop/mobile captures; the cropped
+`desktop-purchase.jpg` excludes private account information.
+
+The first3-concurrency checkout now exists, so2248dd7f or later compatible
+code is the Sub2 recovery floor even if new sales are reduced to max2. Use the
+reviewed configuration helper and the canonical release process to load that
+sales switch. Keep existing orders, payment/action snapshots and receiver
+receipts; never restore an earlier database or an unaware binary. Receiver
+recovery remains pinned to guard.5.1 as documented above.
