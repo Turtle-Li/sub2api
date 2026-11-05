@@ -63,7 +63,7 @@ func (s *ShopService) repairShopActionOutbox(ctx context.Context) error {
 			if e != nil {
 				return e
 			}
-			defer tx.Rollback()
+			defer func() { _ = tx.Rollback() }()
 			o, e := lockUnifiedRefundOrder(ctx, tx.Client(), row.OrderID)
 			if e != nil {
 				return e
@@ -125,7 +125,7 @@ func (s *ShopService) claimShopAction(ctx context.Context, orderID int64, now ti
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	client := tx.Client()
 	o, err := lockUnifiedRefundOrder(ctx, client, orderID)
 	if err != nil {

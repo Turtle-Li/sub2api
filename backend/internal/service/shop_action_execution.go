@@ -96,7 +96,7 @@ func (s *ShopService) failShopAction(ctx context.Context, c *shopOrderActionClai
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	client := tx.Client()
 	if _, err = lockUnifiedRefundOrder(ctx, client, c.row.OrderID); err != nil {
 		return err

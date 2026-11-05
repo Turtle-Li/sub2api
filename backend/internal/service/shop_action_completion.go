@@ -27,7 +27,7 @@ func (s *ShopService) completeShopAction(ctx context.Context, c *shopOrderAction
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	client := tx.Client()
 	o, err := lockUnifiedRefundOrder(ctx, client, c.row.OrderID)
 	if err != nil {
@@ -91,7 +91,7 @@ func (s *ShopService) finishShopRevocation(ctx context.Context, c *shopOrderActi
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	client := tx.Client()
 	if _, err = lockUnifiedRefundOrder(ctx, client, c.row.OrderID); err != nil {
 		return err

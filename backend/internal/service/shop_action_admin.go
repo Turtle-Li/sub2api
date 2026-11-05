@@ -77,7 +77,7 @@ func (s *ShopService) ManageAutomation(ctx context.Context, orderID, adminID int
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	client := tx.Client()
 	o, err := lockUnifiedRefundOrder(ctx, client, orderID)
 	if err != nil {

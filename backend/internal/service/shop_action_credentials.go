@@ -28,7 +28,7 @@ func loadShopActionSigningSecret(ctx context.Context, alias string) ([]byte, err
 	if err != nil {
 		return nil, unavailable
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != 200 {
 		return nil, unavailable
 	}
