@@ -272,6 +272,7 @@ type SystemSettings struct {
 	// Payment configuration
 	PaymentEnabled                   bool                     `json:"payment_enabled"`
 	PaymentEntryEnabled              bool                     `json:"payment_entry_enabled"`
+	ShopEntryEnabled                 bool                     `json:"shop_entry_enabled"`
 	PaymentMinAmount                 float64                  `json:"payment_min_amount"`
 	PaymentMaxAmount                 float64                  `json:"payment_max_amount"`
 	PaymentDailyLimit                float64                  `json:"payment_daily_limit"`
@@ -431,6 +432,7 @@ type PublicSettings struct {
 	BackendModeEnabled                  bool                            `json:"backend_mode_enabled"`
 	PaymentEnabled                      bool                            `json:"payment_enabled"`
 	PaymentEntryEnabled                 bool                            `json:"payment_entry_enabled"`
+	ShopEntryEnabled                    bool                            `json:"shop_entry_enabled"`
 	PricingCurrency                     service.PricingCurrencySettings `json:"pricing_currency"`
 	// PaymentBalanceDisabled lets the user shell derive recharge-only and subscription-only site modes.
 	PaymentBalanceDisabled bool   `json:"payment_balance_disabled"`

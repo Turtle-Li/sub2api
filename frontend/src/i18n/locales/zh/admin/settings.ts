@@ -70,6 +70,12 @@ export default {
         statusEnabled: '已配置 / 已启用',
       },
       features: {
+        purchaseEntries: {
+          title: '购买入口',
+          description: '控制用户端入口显示，不影响历史订单和已有权益。',
+          shop: '显示商城入口',
+          recharge: '显示充值/订阅入口',
+        },
         channelMonitor: {
           title: '渠道监控',
           description: '启用后在 V1 主动探测与 V2 被动用量监控中二选一。关闭后两种模式的后台任务均停止，用户端入口隐藏。',

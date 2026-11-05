@@ -377,6 +377,7 @@ type PublicSettings struct {
 	BackendModeEnabled       bool
 	PaymentEnabled           bool
 	PaymentEntryEnabled      bool
+	ShopEntryEnabled         bool
 	PricingCurrency          PricingCurrencySettings
 	PaymentBalanceDisabled   bool
 	OIDCOAuthEnabled         bool

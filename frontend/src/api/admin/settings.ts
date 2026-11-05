@@ -684,6 +684,7 @@ export interface SystemSettings {
    * Optional — older backends omit it; treat missing as enabled (true).
    */
   payment_entry_enabled?: boolean;
+  shop_entry_enabled?: boolean;
   risk_control_enabled: boolean;
 
   // Cyber session block
@@ -1014,6 +1015,7 @@ export interface UpdateSettingsRequest {
   payment_enabled?: boolean;
   /** Presentation-only purchase-entry switch; see SystemSettings. */
   payment_entry_enabled?: boolean;
+  shop_entry_enabled?: boolean;
   risk_control_enabled?: boolean;
 
   // Cyber session block

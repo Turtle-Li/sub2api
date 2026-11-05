@@ -579,6 +579,11 @@ async function openPaymentTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openFeaturesTab(wrapper: ReturnType<typeof mountView>) {
+  await wrapper.get('#settings-tab-features').trigger('click');
+  await flushPromises();
+}
+
 async function openSecurityTab(wrapper: ReturnType<typeof mountView>) {
   const securityTabButton = wrapper
     .findAll("button")
@@ -895,7 +900,7 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     const wrapper = mountView();
     await flushPromises();
-    await openPaymentTab(wrapper);
+    await openFeaturesTab(wrapper);
 
     const toggle = wrapper.get('[data-testid="payment-entry-toggle"]');
     expect((toggle.element as HTMLInputElement).checked).toBe(false);
@@ -911,7 +916,7 @@ describe("admin SettingsView payment visible method controls", () => {
   it("defaults the purchase-entry switch on when the backend omits it", async () => {
     const wrapper = mountView();
     await flushPromises();
-    await openPaymentTab(wrapper);
+    await openFeaturesTab(wrapper);
 
     const toggle = wrapper.get('[data-testid="payment-entry-toggle"]');
     expect((toggle.element as HTMLInputElement).checked).toBe(true);
@@ -923,6 +928,25 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({ payment_entry_enabled: false }),
     );
+  });
+
+  it("loads and saves the two independent visibility switches in features", async () => {
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, shop_entry_enabled: false, payment_entry_enabled: true });
+    const wrapper = mountView();
+    await flushPromises();
+    await openFeaturesTab(wrapper);
+    const card = wrapper.get('[data-testid="purchase-entry-settings"]');
+    expect(card.isVisible()).toBe(true);
+    const shopToggle = card.get<HTMLInputElement>('[data-testid="shop-entry-toggle"]');
+    const rechargeToggle = card.get<HTMLInputElement>('[data-testid="payment-entry-toggle"]');
+    expect(shopToggle.element.checked).toBe(false);
+    expect(rechargeToggle.element.checked).toBe(true);
+    await shopToggle.setValue(true);
+    await rechargeToggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ shop_entry_enabled: true, payment_entry_enabled: false, payment_enabled: true }));
+    wrapper.unmount();
   });
 
   it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {

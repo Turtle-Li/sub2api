@@ -97,6 +97,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
 		PaymentEntryEnabled:                 settings.PaymentEntryEnabled,
+		ShopEntryEnabled:                    settings.ShopEntryEnabled,
 		PricingCurrency:                     settings.PricingCurrency,
 		PaymentBalanceDisabled:              settings.PaymentBalanceDisabled,
 		Version:                             h.version,

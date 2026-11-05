@@ -216,6 +216,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyBackendModeEnabled,
 		SettingPaymentEnabled,
 		SettingPaymentEntryEnabled,
+		SettingShopEntryEnabled,
 		SettingBalancePayDisabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
@@ -359,6 +360,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		BackendModeEnabled:                  settings[SettingKeyBackendModeEnabled] == "true",
 		PaymentEnabled:                      settings[SettingPaymentEnabled] == "true",
 		PaymentEntryEnabled:                 paymentEntryEnabledFromValue(settings[SettingPaymentEntryEnabled]),
+		ShopEntryEnabled:                    paymentEntryEnabledFromValue(settings[SettingShopEntryEnabled]),
 		PricingCurrency:                     pricingCurrency,
 		PaymentBalanceDisabled:              settings[SettingBalancePayDisabled] == "true",
 		OIDCOAuthEnabled:                    oidcEnabled,
@@ -624,6 +626,7 @@ type PublicSettingsInjectionPayload struct {
 	BackendModeEnabled                  bool                     `json:"backend_mode_enabled"`
 	PaymentEnabled                      bool                     `json:"payment_enabled"`
 	PaymentEntryEnabled                 bool                     `json:"payment_entry_enabled"`
+	ShopEntryEnabled                    bool                     `json:"shop_entry_enabled"`
 	PricingCurrency                     PricingCurrencySettings  `json:"pricing_currency"`
 	PaymentBalanceDisabled              bool                     `json:"payment_balance_disabled"`
 	Version                             string                   `json:"version"`
@@ -720,6 +723,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
 		PaymentEntryEnabled:                 settings.PaymentEntryEnabled,
+		ShopEntryEnabled:                    settings.ShopEntryEnabled,
 		PricingCurrency:                     settings.PricingCurrency,
 		PaymentBalanceDisabled:              settings.PaymentBalanceDisabled,
 		Version:                             s.version,

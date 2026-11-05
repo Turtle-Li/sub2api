@@ -70,6 +70,12 @@ export default {
         statusEnabled: 'Configured / enabled',
       },
       features: {
+        purchaseEntries: {
+          title: 'Purchase Entries',
+          description: 'Control entry visibility without affecting past orders or existing benefits.',
+          shop: 'Show Shop Entry',
+          recharge: 'Show Recharge / Subscription Entry',
+        },
         channelMonitor: {
           title: 'Channel Monitor',
           description: 'Choose either V1 active probes or V2 passive usage monitoring. When disabled, both background jobs stop and the user entry is hidden.',

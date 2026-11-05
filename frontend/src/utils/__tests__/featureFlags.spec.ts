@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
-import { FeatureFlags, isFeatureFlagEnabled, makeSidebarFlag, resolveFeatureFlag } from '@/utils/featureFlags'
+import { FeatureFlags, isFeatureFlagEnabled, isPaymentEntryVisible, makeSidebarFlag, resolveFeatureFlag } from '@/utils/featureFlags'
 import type { PublicSettings } from '@/types'
 
 vi.mock('@/api/admin/system', () => ({
@@ -61,5 +61,21 @@ describe('resolveFeatureFlag', () => {
   it('backs isFeatureFlagEnabled with the same resolution', () => {
     useAppStore().cachedPublicSettings = { subscription_enabled: false } as PublicSettings
     expect(isFeatureFlagEnabled(FeatureFlags.subscription)).toBe(false)
+  })
+})
+
+describe('purchase entry visibility', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('keeps shop and recharge entries independent', () => {
+    const store = useAppStore()
+    const shopVisible = makeSidebarFlag(FeatureFlags.shopEntry)
+    expect(shopVisible()).toBe(true)
+    store.cachedPublicSettings = { shop_entry_enabled: false, payment_entry_enabled: true, payment_enabled: true } as PublicSettings
+    expect(shopVisible()).toBe(false)
+    expect(isPaymentEntryVisible()).toBe(true)
+    store.cachedPublicSettings = { shop_entry_enabled: true, payment_entry_enabled: false, payment_enabled: true } as PublicSettings
+    expect(shopVisible()).toBe(true)
+    expect(isPaymentEntryVisible()).toBe(false)
   })
 })

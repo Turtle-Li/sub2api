@@ -7200,6 +7200,23 @@
 	        <!-- Tab: Features (功能开关) -->
         <div v-show="activeTab === 'features'" class="space-y-6">
 
+        <div class="card" data-testid="purchase-entry-settings">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.settings.features.purchaseEntries.title') }}</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.features.purchaseEntries.description') }}</p>
+          </div>
+          <div class="divide-y divide-gray-100 px-6 dark:divide-dark-700">
+            <div class="flex items-center justify-between gap-4 py-5">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.features.purchaseEntries.shop') }}</span>
+              <Toggle v-model="form.shop_entry_enabled" :aria-label="t('admin.settings.features.purchaseEntries.shop')" data-testid="shop-entry-toggle" />
+            </div>
+            <div class="flex items-center justify-between gap-4 py-5">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.features.purchaseEntries.recharge') }}</span>
+              <Toggle v-model="form.payment_entry_enabled" :aria-label="t('admin.settings.features.purchaseEntries.recharge')" data-testid="payment-entry-toggle" />
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -8002,21 +8019,6 @@
                   </p>
                 </div>
                 <Toggle v-model="form.payment_enabled" />
-              </div>
-              <!-- Show purchase entry toggle -->
-              <div class="mt-4 flex items-center justify-between">
-                <div>
-                  <label class="font-medium text-gray-900 dark:text-white">{{
-                    t("admin.settings.payment.entryEnabled")
-                  }}</label>
-                  <p class="text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.payment.entryEnabledHint") }}
-                  </p>
-                </div>
-                <Toggle
-                  v-model="form.payment_entry_enabled"
-                  data-testid="payment-entry-toggle"
-                />
               </div>
               <template v-if="form.payment_enabled">
                 <div class="rounded-lg border border-primary-200 bg-primary-50 p-4 dark:border-primary-900/60 dark:bg-primary-950/20">
@@ -9852,6 +9854,7 @@ type SettingsForm = Omit<
   channel_monitor_hide_user_ranking: boolean;
   /** Form always binds a concrete boolean (SystemSettings marks this optional; missing means shown). */
   payment_entry_enabled: boolean;
+  shop_entry_enabled: boolean;
   smtp_password: string;
   turnstile_secret_key: string;
   tencent_captcha_app_secret_key: string;
@@ -9952,6 +9955,7 @@ const form = reactive<SettingsForm>({
   hide_ccs_import_button: false,
   payment_enabled: false,
   payment_entry_enabled: true,
+  shop_entry_enabled: true,
   risk_control_enabled: false,
   cyber_policy_user_allowlist: "",
   cyber_session_block_enabled: false,
@@ -11891,6 +11895,7 @@ async function saveSettings() {
       // Payment configuration
       payment_enabled: form.payment_enabled,
       payment_entry_enabled: form.payment_entry_enabled,
+      shop_entry_enabled: form.shop_entry_enabled,
       risk_control_enabled: form.risk_control_enabled,
       cyber_policy_user_allowlist: form.cyber_policy_user_allowlist,
       cyber_session_block_enabled: form.cyber_session_block_enabled,

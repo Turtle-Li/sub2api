@@ -4,7 +4,7 @@
       <header class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-gray-500 dark:text-gray-400">共 <span class="font-medium tabular-nums text-gray-900 dark:text-white">{{ pagination.total }}</span> 笔订单</p>
         <div class="flex flex-wrap gap-2">
-          <RouterLink to="/shop" class="btn btn-secondary min-h-[44px]">前往商城</RouterLink>
+          <RouterLink v-if="canShowShopEntry" to="/shop" class="btn btn-secondary min-h-[44px]">前往商城</RouterLink>
           <button v-if="canShowPaymentEntry" class="btn btn-secondary min-h-[44px]" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
         </div>
       </header>
@@ -368,7 +368,7 @@ import {
   readQueuedPaymentCancellationIds,
   type PaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
-import { isPaymentEntryVisible } from '@/utils/featureFlags'
+import { FeatureFlags, isPaymentEntryVisible, resolveFeatureFlag } from '@/utils/featureFlags'
 import { isMobileDevice } from '@/utils/device'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import { currencySymbol, formatPaymentAmount } from '@/components/payment/currency'
@@ -376,6 +376,7 @@ import { currencySymbol, formatPaymentAmount } from '@/components/payment/curren
 const { t } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
+const canShowShopEntry = computed(() => resolveFeatureFlag(appStore.cachedPublicSettings, FeatureFlags.shopEntry))
 
 // Recharge CTA stays gated on the loaded payment switch; the presentation-only
 // entry switch additionally hides it while keeping this history page reachable.

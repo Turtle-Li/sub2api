@@ -362,6 +362,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AccountQuotaNotifyEmails:                               dto.NotifyEmailEntriesFromService(settings.AccountQuotaNotifyEmails),
 		PaymentEnabled:                                         paymentCfg.Enabled,
 		PaymentEntryEnabled:                                    paymentCfg.EntryEnabled,
+		ShopEntryEnabled:                                       paymentCfg.ShopEntryEnabled,
 		PaymentMinAmount:                                       paymentCfg.MinAmount,
 		PaymentMaxAmount:                                       paymentCfg.MaxAmount,
 		PaymentDailyLimit:                                      paymentCfg.DailyLimit,

@@ -135,6 +135,11 @@ export const FeatureFlags = {
     mode: 'opt-out',
     label: 'Payment Entry',
   }),
+  shopEntry: defineFlag({
+    key: 'shop_entry_enabled',
+    mode: 'opt-out',
+    label: 'Shop Entry',
+  }),
   riskControl: defineFlag({
     key: 'risk_control_enabled',
     mode: 'opt-in',

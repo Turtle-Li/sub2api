@@ -23,6 +23,7 @@ import (
 const (
 	SettingPaymentEnabled      = "payment_enabled"
 	SettingPaymentEntryEnabled = "payment_entry_enabled"
+	SettingShopEntryEnabled    = "shop_entry_enabled"
 	// SettingPaymentReviewedRefundsEnabled is an operator-controlled rollout
 	// gate. It stays private and defaults to disabled so reviewed entitlement
 	// refunds cannot start until every request-serving generation understands
@@ -88,7 +89,8 @@ const (
 type PaymentConfig struct {
 	Enabled bool `json:"enabled"`
 	// EntryEnabled controls discovery links only; it is not order authorization.
-	EntryEnabled bool `json:"entry_enabled"`
+	EntryEnabled     bool `json:"entry_enabled"`
+	ShopEntryEnabled bool `json:"shop_entry_enabled"`
 	// SubscriptionEnabled is the server-side order authorization projection of
 	// the site billing mode. It is intentionally omitted from the payment config
 	// response because public settings already expose the presentation flag.
@@ -151,6 +153,7 @@ type UnifiedPaymentCapability interface {
 type UpdatePaymentConfigRequest struct {
 	Enabled                   *bool    `json:"enabled"`
 	EntryEnabled              *bool    `json:"entry_enabled"`
+	ShopEntryEnabled          *bool    `json:"shop_entry_enabled"`
 	MinAmount                 *float64 `json:"min_amount"`
 	MaxAmount                 *float64 `json:"max_amount"`
 	DailyLimit                *float64 `json:"daily_limit"`
@@ -312,7 +315,7 @@ func (s *PaymentConfigService) IsReviewedRefundsEnabled(ctx context.Context) boo
 // GetPaymentConfig returns the full payment configuration.
 func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentConfig, error) {
 	keys := []string{
-		SettingPaymentEnabled, SettingPaymentEntryEnabled, SettingKeySubscriptionEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
+		SettingPaymentEnabled, SettingPaymentEntryEnabled, SettingShopEntryEnabled, SettingKeySubscriptionEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
 		SettingRechargeBonusTiers, SettingRechargeBonusMode, SettingRechargeBonusNotice,
@@ -344,6 +347,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 	cfg := &PaymentConfig{
 		Enabled:                   vals[SettingPaymentEnabled] == "true",
 		EntryEnabled:              paymentEntryEnabledFromValue(vals[SettingPaymentEntryEnabled]),
+		ShopEntryEnabled:          paymentEntryEnabledFromValue(vals[SettingShopEntryEnabled]),
 		SubscriptionEnabled:       !isFalseSettingValue(vals[SettingKeySubscriptionEnabled]),
 		MinAmount:                 pcParseFloat(vals[SettingMinRechargeAmount], 1),
 		MaxAmount:                 pcParseFloat(vals[SettingMaxRechargeAmount], 0),
@@ -645,6 +649,9 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.EntryEnabled != nil {
 		m[SettingPaymentEntryEnabled] = formatBoolOrEmpty(req.EntryEnabled)
+	}
+	if req.ShopEntryEnabled != nil {
+		m[SettingShopEntryEnabled] = formatBoolOrEmpty(req.ShopEntryEnabled)
 	}
 	if req.MinAmount != nil {
 		m[SettingMinRechargeAmount] = formatPositiveFloat(req.MinAmount)

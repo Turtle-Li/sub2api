@@ -29,6 +29,16 @@ function setup(rows = [order]) {
 }
 
 describe('UserOrdersView detail request ownership', () => {
+  it('hides shop discovery while retaining order history', async () => {
+    appStoreState.cachedPublicSettings = { shop_entry_enabled: false }
+    const wrapper = setup()
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('前往商城')
+    expect(wrapper.get('[data-test="orders"] button').exists()).toBe(true)
+    wrapper.unmount()
+    appStoreState.cachedPublicSettings = null
+  })
+
   it.each([false, true])('ignores a stale same-order response after close/reopen (error=%s)', async (rejectOld) => {
     getOrder.mockReset(); showError.mockReset()
     let finishOld!: (value: unknown) => void

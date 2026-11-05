@@ -248,6 +248,7 @@ export interface PublicSettings {
    * `payment_enabled` remains the real payment/route switch.
    */
   payment_entry_enabled?: boolean
+  shop_entry_enabled?: boolean
   risk_control_enabled: boolean
   table_default_page_size: number
   table_page_size_options: number[]
