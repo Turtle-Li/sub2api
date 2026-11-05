@@ -1350,6 +1350,9 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		if err := revalidateShopProductTx(ctx, tx.Client(), req.shopProduct); err != nil {
 			return nil, false, err
 		}
+		if req.shopProduct.Price != payAmount {
+			return nil, false, shopConflict()
+		}
 	}
 	if opts != nil && opts.resetCardIdempotent {
 		if opts.fixedOutTradeNo == "" {
@@ -1573,7 +1576,12 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		if req.shopProduct == nil {
 			return nil, false, infraerrors.BadRequest("SHOP_PRODUCT_INVALID", "missing shop product")
 		}
-		b.SetProductSnapshot(map[string]any{"schema_version": 1, "kind": payment.OrderTypeManualShop, "name": req.shopProduct.Name, "description": req.shopProduct.Summary, "product_id": req.shopProduct.ID, "price": req.shopProduct.Price, "pay_amount": payAmount, "currency": "CNY", "credited_amount": 0, "duration_value": req.shopProduct.DurationValue, "duration_unit": req.shopProduct.DurationUnit, "fulfillment_mode": req.shopProduct.FulfillmentMode})
+		snapshot := map[string]any{"schema_version": 1, "kind": payment.OrderTypeManualShop, "name": req.shopProduct.Name, "description": req.shopProduct.Summary, "product_id": req.shopProduct.ID, "price": req.shopProduct.Price, "pay_amount": payAmount, "currency": "CNY", "credited_amount": 0, "duration_value": req.shopProduct.DurationValue, "duration_unit": req.shopProduct.DurationUnit, "fulfillment_mode": req.shopProduct.FulfillmentMode}
+		if concurrency := shopProductConcurrency(*req.shopProduct); concurrency != 0 {
+			snapshot["concurrency"] = concurrency
+			snapshot["base_price"] = 6
+		}
+		b.SetProductSnapshot(snapshot)
 	}
 	if req.CouponCode != "" {
 		if req.couponQuote == nil {

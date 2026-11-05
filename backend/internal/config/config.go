@@ -155,8 +155,9 @@ type FeishuPaymentAlertsConfig struct {
 // Only non-secret activation and the exact merchant SKU are configurable.
 // The dedicated machine credential is read from its own memory-agent socket.
 type ShopDaypassConfig struct {
-	Enabled   bool  `mapstructure:"enabled"`
-	ProductID int64 `mapstructure:"product_id"`
+	MaxConcurrency int   `mapstructure:"max_concurrency"`
+	Enabled        bool  `mapstructure:"enabled"`
+	ProductID      int64 `mapstructure:"product_id"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2992,6 +2993,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("feishu_payment_alerts.enabled", false)
 	viper.SetDefault("shop_daypass.enabled", false)
 	viper.SetDefault("shop_daypass.product_id", int64(0))
+	viper.SetDefault("shop_daypass.max_concurrency", 3)
 	viper.SetDefault("shop_actions.enabled", false)
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its
@@ -3053,6 +3055,9 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.ShopDaypass.MaxConcurrency != 0 && c.ShopDaypass.MaxConcurrency != 2 && c.ShopDaypass.MaxConcurrency != 3 {
+		return fmt.Errorf("shop_daypass.max_concurrency must be 2 or 3")
+	}
 	if err := c.validateShopActions(); err != nil {
 		return err
 	}

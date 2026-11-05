@@ -127,18 +127,24 @@ func (h *ShopHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 	var in struct {
-		ProductID       int64  `json:"product_id"`
-		ProductRevision int    `json:"product_revision"`
-		PaymentType     string `json:"payment_type"`
+		ProductID       int64           `json:"product_id"`
+		ProductRevision int             `json:"product_revision"`
+		PaymentType     string          `json:"payment_type"`
+		Concurrency     json.RawMessage `json:"concurrency"`
 	}
 	if !decodeShopRequest(c, &in, 4096) {
+		return
+	}
+	concurrency := 0
+	if len(in.Concurrency) != 0 && (json.Unmarshal(in.Concurrency, &concurrency) != nil || concurrency != 2 && concurrency != 3) {
+		response.BadRequest(c, "并发必须是整数2或3")
 		return
 	}
 	if len(c.Request.Header.Values("Idempotency-Key")) != 1 {
 		response.BadRequest(c, "请提供唯一 Idempotency-Key")
 		return
 	}
-	out, err := h.payment.CreateShopOrder(c.Request.Context(), in.ProductID, in.ProductRevision, service.CreateOrderRequest{UserID: subject.UserID, PaymentType: in.PaymentType, ClientIP: c.ClientIP(), SrcHost: c.Request.Host, SrcURL: c.Request.Referer(), IdempotencyKey: c.GetHeader("Idempotency-Key"), Locale: c.GetHeader("Accept-Language")})
+	out, err := h.payment.CreateShopOrder(c.Request.Context(), in.ProductID, in.ProductRevision, service.CreateOrderRequest{UserID: subject.UserID, ShopConcurrency: concurrency, PaymentType: in.PaymentType, ClientIP: c.ClientIP(), SrcHost: c.Request.Host, SrcURL: c.Request.Referer(), IdempotencyKey: c.GetHeader("Idempotency-Key"), Locale: c.GetHeader("Accept-Language")})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

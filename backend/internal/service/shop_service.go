@@ -23,27 +23,29 @@ const (
 )
 
 type ShopProduct struct {
-	ID                   int64                `json:"id"`
-	Name                 string               `json:"name"`
-	Category             string               `json:"category"`
-	Summary              string               `json:"summary"`
-	Description          string               `json:"description"`
-	Price                float64              `json:"price"`
-	Currency             string               `json:"currency"`
-	DurationValue        int                  `json:"duration_value"`
-	DurationUnit         string               `json:"duration_unit"`
-	FulfillmentMode      string               `json:"fulfillment_mode"`
-	InputFormat          string               `json:"input_format"`
-	InputURL             string               `json:"input_url"`
-	InputInstructions    string               `json:"input_instructions"`
-	GuideKey             string               `json:"guide_key"`
-	Enabled              bool                 `json:"enabled"`
-	SortOrder            int                  `json:"sort_order"`
-	Revision             int                  `json:"revision"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
-	PaymentActions       []shopaction.Binding `json:"payment_actions,omitempty"`
-	AutomaticFulfillment bool                 `json:"automatic_fulfillment"`
+	Concurrency          int                     `json:"concurrency,omitempty"`
+	ConcurrencyOptions   []ShopConcurrencyOption `json:"concurrency_options,omitempty"`
+	ID                   int64                   `json:"id"`
+	Name                 string                  `json:"name"`
+	Category             string                  `json:"category"`
+	Summary              string                  `json:"summary"`
+	Description          string                  `json:"description"`
+	Price                float64                 `json:"price"`
+	Currency             string                  `json:"currency"`
+	DurationValue        int                     `json:"duration_value"`
+	DurationUnit         string                  `json:"duration_unit"`
+	FulfillmentMode      string                  `json:"fulfillment_mode"`
+	InputFormat          string                  `json:"input_format"`
+	InputURL             string                  `json:"input_url"`
+	InputInstructions    string                  `json:"input_instructions"`
+	GuideKey             string                  `json:"guide_key"`
+	Enabled              bool                    `json:"enabled"`
+	SortOrder            int                     `json:"sort_order"`
+	Revision             int                     `json:"revision"`
+	CreatedAt            time.Time               `json:"created_at"`
+	UpdatedAt            time.Time               `json:"updated_at"`
+	PaymentActions       []shopaction.Binding    `json:"payment_actions,omitempty"`
+	AutomaticFulfillment bool                    `json:"automatic_fulfillment"`
 }
 
 type ShopOrderDetail struct {

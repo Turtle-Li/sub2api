@@ -15,6 +15,11 @@ func shopAutomaticFulfillment(p ShopProduct) bool {
 
 func publicShopProduct(p ShopProduct) ShopProduct {
 	p.AutomaticFulfillment = shopAutomaticFulfillment(p)
+	p.Concurrency = shopProductConcurrency(p)
+	p.ConcurrencyOptions = nil
+	if validShopDaypassProduct(p) {
+		p.ConcurrencyOptions = []ShopConcurrencyOption{{Concurrency: 2, Price: 6}, {Concurrency: 3, Price: 8}}
+	}
 	p.PaymentActions = nil
 	return p
 }
@@ -50,7 +55,7 @@ func (s *ShopService) normalizePaymentActions(p *ShopProduct) error {
 		return infraerrors.BadRequest("SHOP_ACTION_PARAMS_INVALID", "动作参数必须是4KB以内的JSON对象")
 	}
 	if b.Adapter == shopaction.Native {
-		if !validShopDaypassProduct(*p) {
+		if p.Price != 6 || !validShopDaypassCatalog(*p) {
 			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "日卡处理器要求6元、24小时的交付商品")
 		}
 		var native struct {
@@ -147,7 +152,7 @@ func validateActionSnapshot(b shopaction.Binding) bool {
 			Duration    int `json:"duration_seconds"`
 			Concurrency int `json:"default_concurrency"`
 		}
-		if json.Unmarshal(b.Params, &native) != nil || native.Duration != 86400 || native.Concurrency != 2 {
+		if json.Unmarshal(b.Params, &native) != nil || native.Duration != 86400 || shopConcurrencyFen(native.Concurrency) == 0 {
 			return false
 		}
 	}

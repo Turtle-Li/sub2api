@@ -28,6 +28,42 @@ const global = { stubs: { AppLayout: { template: '<main><slot /></main>' }, Rout
 enableAutoUnmount(afterEach)
 beforeEach(() => { route.params.id = '42'; vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
 describe('automatic day-pass surfaces', () => {
+  it('rechecks payment method limits when the selected tier changes', async () => {
+    api.product.mockResolvedValue({ data: { ...product, concurrency_options: [{ concurrency: 2, price: 6 }, { concurrency: 3, price: 8 }] } })
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', single_max: 6 }, wxpay: { currency: 'CNY', single_max: 10 } } } })
+    const wrapper = mount(ShopProductView, { global })
+    await flushPromises()
+    expect(wrapper.find('input[name="payment-method"][value="alipay"]').exists()).toBe(true)
+    await wrapper.get('input[name="concurrency"][value="3"]').setValue()
+    expect(wrapper.find('input[name="payment-method"][value="alipay"]').exists()).toBe(false)
+    expect((wrapper.get('input[name="payment-method"][value="wxpay"]').element as HTMLInputElement).checked).toBe(true)
+  })
+  it('selects the server priced tier and keeps changed attempts separate', async () => {
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', available: true } } } })
+    api.product.mockResolvedValue({ data: { ...product, guide_key: 'deepseek-daypass', automatic_fulfillment: true, concurrency: 2, concurrency_options: [{ concurrency: 2, price: 6 }, { concurrency: 3, price: 8 }] } })
+    api.createOrder.mockRejectedValue(new Error('lost response'))
+    const wrapper = mount(ShopProductView, { global })
+    await flushPromises()
+    const price = () => wrapper.get('[aria-live="polite"]').text()
+    expect(price()).toBe('¥6.00')
+    expect(wrapper.findAll('input[name="concurrency"]')).toHaveLength(2)
+    const buy = () => wrapper.findAll('button').find(button => button.text().includes('购买'))!
+    await buy().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[0][0]).toMatchObject({ concurrency: 2 })
+    const firstKey = api.createOrder.mock.calls[0][1]
+    await buy().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[1][1]).toBe(firstKey)
+    await wrapper.get('input[name="concurrency"][value="3"]').setValue()
+    expect(price()).toBe('¥8.00')
+    expect(wrapper.text()).toContain('所选 3 并发')
+    await buy().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[2][0]).toMatchObject({ concurrency: 3 })
+    expect(api.createOrder.mock.calls[2][0]).not.toHaveProperty('price')
+    expect(api.createOrder.mock.calls[2][1]).not.toBe(firstKey)
+  })
   const daypass = { ...product, name: 'DeepSeek 24 小时日卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
   it('shows the paid clock and key restrictions without the manual delivery estimate', async () => {
     api.product.mockResolvedValue({ data: daypass })

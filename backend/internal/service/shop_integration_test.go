@@ -156,54 +156,62 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 		require.Empty(t, f.DeliveryCiphertext)
 		require.Zero(t, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
 	})
-	t.Run("daypass PostgreSQL claims fence competing workers and lost replies", func(t *testing.T) {
-		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG DeepSeek", Price: 6, DurationValue: 1, DurationUnit: "day", FulfillmentMode: ShopAccountDelivery, GuideKey: ShopDaypassGuide, PaymentActions: daypassTestActions(s)})
-		require.NoError(t, err)
-		s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID}
-		gateway := &daypassTestGateway{lost: true}
-		s.daypass = gateway
-		o := createPaymentInvoicePostgresOrder(t, ctx, client, u, "daypass")
-		o = client.PaymentOrder.UpdateOne(o).SetOrderType(payment.OrderTypeManualShop).SetStatus(OrderStatusPaid).SetAmount(0).SetPayAmount(6).ClearCompletedAt().SaveX(ctx)
-		require.NoError(t, createShopFulfillmentTx(ctx, client, o, *p))
-		require.NoError(t, markShopPaidTx(ctx, client, o))
-		claims := make(chan *shopDaypassClaim, 8)
-		failures := make(chan error, 8)
-		var wg sync.WaitGroup
-		for range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				claim, e := s.claimDaypass(ctx, o.ID, time.Now())
-				claims <- claim
-				failures <- e
-			}()
-		}
-		wg.Wait()
-		close(claims)
-		close(failures)
-		for e := range failures {
-			require.NoError(t, e)
-		}
-		var first *shopDaypassClaim
-		for claim := range claims {
-			if claim != nil {
-				require.Nil(t, first)
-				first = claim
+	for _, concurrency := range []int{2, 3} {
+		t.Run(fmt.Sprintf("daypass PostgreSQL claims fence competing workers and lost replies/%d", concurrency), func(t *testing.T) {
+			p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG DeepSeek", Price: 6, DurationValue: 1, DurationUnit: "day", FulfillmentMode: ShopAccountDelivery, GuideKey: ShopDaypassGuide, PaymentActions: daypassTestActions(s)})
+			require.NoError(t, err)
+			s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID}
+			selected, err := s.resolveShopConcurrency(*p, concurrency)
+			require.NoError(t, err)
+			p = &selected
+			gateway := &daypassTestGateway{lost: true}
+			s.daypass = gateway
+			o := createPaymentInvoicePostgresOrder(t, ctx, client, u, fmt.Sprintf("daypass%d", concurrency))
+			o = client.PaymentOrder.UpdateOne(o).SetOrderType(payment.OrderTypeManualShop).SetStatus(OrderStatusPaid).SetAmount(0).SetPayAmount(p.Price).ClearCompletedAt().SaveX(ctx)
+			require.NoError(t, createShopFulfillmentTx(ctx, client, o, *p))
+			require.NoError(t, markShopPaidTx(ctx, client, o))
+			claims := make(chan *shopDaypassClaim, 8)
+			failures := make(chan error, 8)
+			var wg sync.WaitGroup
+			for range 8 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					claim, e := s.claimDaypass(ctx, o.ID, time.Now())
+					claims <- claim
+					failures <- e
+				}()
 			}
-		}
-		require.NotNil(t, first)
-		require.ErrorIs(t, s.deliverDaypass(ctx, first), errShopDaypassUnavailable)
-		client.ShopOrderAction.Update().Where(shoporderaction.OrderIDEQ(o.ID)).SetLeaseUntil(time.Now().Add(-time.Second)).SetNextAttemptAt(time.Now().Add(-time.Second)).ExecX(ctx)
-		second, err := s.claimDaypass(ctx, o.ID, time.Now())
-		require.NoError(t, err)
-		require.NotNil(t, second)
-		require.ErrorIs(t, s.deliverDaypass(ctx, first), errShopDaypassLeaseLost)
-		require.Zero(t, gateway.revocations)
-		require.NoError(t, s.deliverDaypass(ctx, second))
-		require.Equal(t, OrderStatusCompleted, client.PaymentOrder.GetX(ctx, o.ID).Status)
-		require.Equal(t, 1, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
-		require.Equal(t, o.PaidAt.Unix()+86400, gateway.grant.ExpiresAt)
-	})
+			wg.Wait()
+			close(claims)
+			close(failures)
+			for e := range failures {
+				require.NoError(t, e)
+			}
+			var first *shopDaypassClaim
+			for claim := range claims {
+				if claim != nil {
+					require.Nil(t, first)
+					first = claim
+				}
+			}
+			require.NotNil(t, first)
+			require.ErrorIs(t, s.deliverDaypass(ctx, first), errShopDaypassUnavailable)
+			client.ShopOrderAction.Update().Where(shoporderaction.OrderIDEQ(o.ID)).SetLeaseUntil(time.Now().Add(-time.Second)).SetNextAttemptAt(time.Now().Add(-time.Second)).ExecX(ctx)
+			second, err := s.claimDaypass(ctx, o.ID, time.Now())
+			require.NoError(t, err)
+			require.NotNil(t, second)
+			require.ErrorIs(t, s.deliverDaypass(ctx, first), errShopDaypassLeaseLost)
+			require.Zero(t, gateway.revocations)
+			require.NoError(t, s.deliverDaypass(ctx, second))
+			require.Equal(t, OrderStatusCompleted, client.PaymentOrder.GetX(ctx, o.ID).Status)
+			require.Equal(t, 1, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
+			require.Equal(t, o.PaidAt.Unix()+86400, gateway.grant.ExpiresAt)
+			detail, err := s.Order(ctx, o.ID, u.ID, false)
+			require.NoError(t, err)
+			require.Equal(t, concurrency, detail.Product.Concurrency)
+		})
+	}
 
 	t.Run("concurrent customer submissions preserve one complete version", func(t *testing.T) {
 		o, d := makeOrder(ShopSessionTopup)

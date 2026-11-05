@@ -73,6 +73,7 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
+	ShopConcurrency int `json:"-"`
 	shopProduct     *ShopProduct
 	CouponCode      string
 	CouponRevision  string

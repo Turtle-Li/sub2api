@@ -5,7 +5,7 @@ import type { ShopAction, ShopInputCheck, ShopIntegrationOption, ShopOrderDetail
 export const shopAPI = {
   products: () => apiClient.get<ShopProduct[]>('/shop/products'),
   product: (id: number) => apiClient.get<ShopProduct>(`/shop/products/${id}`),
-  createOrder: (input: { product_id: number; product_revision: number; payment_type: 'alipay' | 'wxpay' }, key: string) =>
+  createOrder: (input: { product_id: number; product_revision: number; payment_type: 'alipay' | 'wxpay'; concurrency?: number }, key: string) =>
     apiClient.post<CreateOrderResult>('/shop/orders', input, { headers: { 'Idempotency-Key': key } }),
   order: (id: number) => apiClient.get<ShopOrderDetail>(`/shop/orders/${id}`),
   checkInput: (id: number, input: { content: string; revision: number }) => apiClient.post<ShopInputCheck>(`/shop/orders/${id}/input/check`, input),

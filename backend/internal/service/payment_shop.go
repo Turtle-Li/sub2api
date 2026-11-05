@@ -61,6 +61,11 @@ func (s *PaymentService) CreateShopOrder(ctx context.Context, productID int64, p
 	if p.Revision != productRevision {
 		return nil, shopConflict()
 	}
+	selected, err := s.shopService.resolveShopConcurrency(*p, req.ShopConcurrency)
+	if err != nil {
+		return nil, err
+	}
+	p = &selected
 	if err := s.shopService.requireActionsCheckout(ctx, *p); err != nil {
 		return nil, err
 	}
@@ -91,10 +96,14 @@ func revalidateShopProductTx(ctx context.Context, client *dbent.Client, p *ShopP
 	if err != nil {
 		return fmt.Errorf("lock shop product: %w", err)
 	}
-	if !row.Enabled || row.Revision != p.Revision || float64(row.PriceFen)/100 != p.Price {
+	if !row.Enabled || row.Revision != p.Revision {
 		return shopConflict()
 	}
-	*p = shopProductDTO(row)
+	resolved, err := selectShopConcurrency(shopProductDTO(row), shopProductConcurrency(*p))
+	if err != nil || resolved.Price != p.Price {
+		return shopConflict()
+	}
+	*p = resolved
 	return nil
 }
 
@@ -119,6 +128,13 @@ func (s *PaymentService) replayShopOrderRecord(ctx context.Context, o *dbent.Pay
 		return nil, err
 	}
 	if p.ID != req.shopProduct.ID || p.Revision != req.shopProduct.Revision {
+		return nil, ErrIdempotencyKeyConflict
+	}
+	selected := req.ShopConcurrency
+	if shopProductConcurrency(p) != 0 && selected == 0 {
+		selected = 2
+	}
+	if selected != shopProductConcurrency(p) {
 		return nil, ErrIdempotencyKeyConflict
 	}
 	if o.Status != OrderStatusPending || o.PaidAt != nil || !o.ExpiresAt.After(time.Now()) || psStringValue(o.PayURL) != "" || psStringValue(o.QrCode) != "" {

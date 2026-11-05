@@ -23,6 +23,8 @@ export type ShopMode = 'session_topup' | 'account_delivery'
 export type ShopStatus = 'WAITING_PAYMENT' | 'WAITING_INPUT' | 'QUEUED' | 'PROCESSING' | 'NEEDS_INPUT' | 'COMPLETED' | 'CLOSED'
 export type ShopNotificationStatus = 'NOT_SENT' | 'PENDING' | 'SENDING' | 'SENT' | 'FAILED'
 export interface ShopProduct {
+  concurrency?: number
+  concurrency_options?: { concurrency: number; price: number }[]
   id: number
   name: string
   category: string
