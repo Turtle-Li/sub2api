@@ -26,12 +26,12 @@ func TestPublicDialPinsValidatedAddressesAndRejectsMixedDNS(t *testing.T) {
 	}, dial: func(_ context.Context, _ string, destination string) (net.Conn, error) {
 		require.Equal(t, "1.1.1.1:443", destination)
 		a, b := net.Pipe()
-		b.Close()
+		require.NoError(t, b.Close())
 		return a, nil
 	}}
 	conn, err := d.DialContext(context.Background(), "tcp", "hooks.example.com:443")
 	require.NoError(t, err)
-	conn.Close()
+	require.NoError(t, conn.Close())
 }
 
 func TestIntegrationDestinationAndCredentialBoundaries(t *testing.T) {

@@ -37,7 +37,7 @@ func signature(secret []byte, id string, timestamp int64, body []byte) (string, 
 	defer clear(key)
 	mac := hmac.New(sha256.New, key)
 	fmt.Fprintf(mac, "%s.%d.", id, timestamp)
-	mac.Write(body)
+	_, _ = mac.Write(body)
 	return "v1," + base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
@@ -86,7 +86,7 @@ func (w *Webhook) Ready(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
 		return &Failure{Kind: "READINESS_FAILED", Retryable: true}
 	}
@@ -108,7 +108,7 @@ func (w *Webhook) Execute(ctx context.Context, input Request) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
 		failure := &Failure{Kind: "HTTP_REJECTED", Retryable: res.StatusCode == 429 || res.StatusCode >= 500}
 		if res.StatusCode == 202 {
@@ -137,7 +137,7 @@ func ValidResult(input Request, result Result) bool {
 		return false
 	}
 	for _, r := range result.ReceiptID {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._:-", r)) {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("._:-", r) {
 			return false
 		}
 	}
