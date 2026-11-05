@@ -71,7 +71,9 @@
                 <span class="mr-0.5">↳</span>{{ row.upstream_model }}
               </div>
             </div>
-            <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.model }}</span>
+            <div v-else class="break-all font-medium text-gray-900 dark:text-white">
+              {{ row.model }}
+            </div>
             <div
               v-if="row.upstream_model_mismatch === true && row.upstream_response_model"
               class="break-all pl-3 text-[11px]"
@@ -221,6 +223,7 @@
           <div class="text-sm">
             <div class="flex items-center gap-1.5">
               <span class="font-medium text-green-600 dark:text-green-400">{{ usageCurrencySymbol(row) }}{{ row.actual_cost?.toFixed(6) || '0.000000' }}</span>
+              <UsageServiceTierBadge :service-tier="row.service_tier" />
               <span
                 v-if="row.long_context_billing_applied"
                 data-testid="long-context-billing-marker"
@@ -554,6 +557,7 @@ import { formatDateTime, formatReasoningEffort, reasoningEffortValuesEqual } fro
 import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion, usageCurrencySymbol } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
+import UsageServiceTierBadge from './UsageServiceTierBadge.vue'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
 import {
   LATENCY_BAR_CLASSES,

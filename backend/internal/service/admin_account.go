@@ -435,6 +435,13 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := ValidateOpenAICodexOAuthRelayExtra(input.Platform, input.Type, accountExtra); err != nil {
+		return nil, err
+	}
+	if input.Platform != PlatformOpenAI || input.Type != AccountTypeAPIKey {
+		accountExtra = maps.Clone(accountExtra)
+		delete(accountExtra, OpenAICodexOAuthRelayExtraKey)
+	}
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
@@ -507,6 +514,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if err := ValidateOpenAICodexOAuthRelayExtra(input.Platform, input.Type, input.Extra); err != nil {
+		return nil, err
+	}
 	if err := validatePaidFallbackExtra(input.Platform, input.Extra, nil); err != nil {
 		return nil, err
 	}
@@ -649,6 +659,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	effectiveType := account.Type
+	if input.Type != "" {
+		effectiveType = input.Type
+	}
+	if err := ValidateOpenAICodexOAuthRelayExtra(account.Platform, effectiveType, input.Extra); err != nil {
+		return nil, err
+	}
+	relayEligible := account.Platform == PlatformOpenAI && effectiveType == AccountTypeAPIKey
 	if err := validatePaidFallbackExtra(account.Platform, input.Extra, account.Extra); err != nil {
 		return nil, err
 	}
@@ -676,16 +694,21 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err != nil {
 			return nil, err
 		}
-		effectiveType := account.Type
-		if input.Type != "" {
-			effectiveType = input.Type
-		}
 		normalizedExtra, err = normalizeOpenAIAutoResetCreditExtra(account.Platform, effectiveType, account.IsShadow(), normalizedExtra)
 		if err != nil {
 			return nil, err
 		}
 		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
 			return nil, err
+		}
+		if relayEligible {
+			if _, provided := normalizedExtra[OpenAICodexOAuthRelayExtraKey]; !provided {
+				if current, exists := account.Extra[OpenAICodexOAuthRelayExtraKey]; exists {
+					normalizedExtra[OpenAICodexOAuthRelayExtraKey] = current
+				}
+			}
+		} else {
+			delete(normalizedExtra, OpenAICodexOAuthRelayExtraKey)
 		}
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
@@ -832,6 +855,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.Extra == nil {
 		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
+		if !relayEligible {
+			if _, exists := account.Extra[OpenAICodexOAuthRelayExtraKey]; exists {
+				account.Extra = maps.Clone(account.Extra)
+				delete(account.Extra, OpenAICodexOAuthRelayExtraKey)
+			}
+		}
 	}
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {
 		if requestedProbeEnabledUpdate != nil && !*requestedProbeEnabledUpdate {
@@ -1041,7 +1070,8 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OpenCodeGoUsageSnapshotExtraKey)
 	_, hasLongContextBilling := updates[openAILongContextBillingEnabledKey]
 	_, hasPaidFallback := updates[PaidFallbackExtraKey]
-	if hasLongContextBilling || hasPaidFallback {
+	_, hasCodexOAuthRelay := updates[OpenAICodexOAuthRelayExtraKey]
+	if hasLongContextBilling || hasPaidFallback || hasCodexOAuthRelay {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
 			return err
@@ -1050,6 +1080,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 			return err
 		}
 		if err := validatePaidFallbackExtra(account.Platform, updates, account.Extra); err != nil {
+			return err
+		}
+		if err := ValidateOpenAICodexOAuthRelayExtra(account.Platform, account.Type, updates); err != nil {
 			return err
 		}
 	}

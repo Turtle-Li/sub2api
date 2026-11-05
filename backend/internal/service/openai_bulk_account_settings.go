@@ -10,6 +10,7 @@ import (
 
 type bulkOpenAISettings struct {
 	longContextBilling      bool
+	codexOAuthRelay         bool
 	endpointCapabilities    bool
 	responsesMode           bool
 	capabilitiesIncludeChat bool
@@ -17,13 +18,19 @@ type bulkOpenAISettings struct {
 }
 
 func (s bulkOpenAISettings) any() bool {
-	return s.longContextBilling || s.endpointCapabilities || s.responsesMode
+	return s.longContextBilling || s.codexOAuthRelay || s.endpointCapabilities || s.responsesMode
 }
 
 func normalizeBulkOpenAISettings(input *BulkUpdateAccountsInput) (bulkOpenAISettings, error) {
 	var settings bulkOpenAISettings
 	if input == nil {
 		return settings, nil
+	}
+	if _, exists := input.Extra[OpenAICodexOAuthRelayExtraKey]; exists {
+		settings.codexOAuthRelay = true
+		if err := ValidateOpenAICodexOAuthRelayExtra(PlatformOpenAI, AccountTypeAPIKey, input.Extra); err != nil {
+			return settings, err
+		}
 	}
 
 	if _, exists := input.Extra[openAILongContextBillingEnabledKey]; exists {
@@ -169,6 +176,11 @@ func validateBulkOpenAISettingsTargets(
 			}
 			if account.IsShadow() {
 				inheritedCount++
+			}
+		}
+		if settings.codexOAuthRelay {
+			if err := ValidateOpenAICodexOAuthRelayExtra(account.Platform, account.Type, input.Extra); err != nil {
+				return 0, err
 			}
 		}
 

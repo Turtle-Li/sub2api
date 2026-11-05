@@ -45,6 +45,7 @@ const messages: Record<string, string> = {
   'usage.perMillionTokens': '/ 1M tokens',
   'usage.serviceTier': 'Service tier',
   'usage.serviceTierPriority': 'Fast',
+  'usage.fastBadgeTooltip': 'This request is recorded at the Fast tier. See details for the actual charge.',
   'usage.serviceTierUltrafast': 'Ultrafast',
   'usage.serviceTierFlex': 'Flex',
   'usage.serviceTierStandard': 'Standard',
@@ -103,13 +104,13 @@ const DataTableStub = {
   template: `
     <div>
       <div v-for="row in data" :key="row.request_id" :data-request-id="row.request_id">
-        <slot name="cell-model" :row="row" :value="row.model" />
+        <div data-cell="model"><slot name="cell-model" :row="row" :value="row.model" /></div>
         <slot name="cell-upstream_provider" :row="row" :value="row.upstream_provider" />
         <slot name="cell-reasoning_effort" :row="row" :value="row.reasoning_effort" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-latency" :row="row" />
-        <slot name="cell-cost" :row="row" />
+        <div data-cell="cost"><slot name="cell-cost" :row="row" /></div>
         <slot name="cell-request_id" :row="row" />
         <slot name="cell-upstream_request_id" :row="row" />
       </div>
@@ -146,6 +147,43 @@ const baseImageRow = {
 }
 
 describe('admin UsageTable tooltip', () => {
+  it('shows saved Fast lightning icons only beside costs for every model layout without opening details', () => {
+    // Given saved Fast rows, including free customer billing, plus ordinary tiers.
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          { ...baseImageRow, request_id: 'fast-simple', service_tier: 'priority' },
+          { ...baseImageRow, request_id: 'fast-mapped', service_tier: 'fast', upstream_model: 'gpt-upstream', actual_cost: 0 },
+          { ...baseImageRow, request_id: 'fast-chain', service_tier: ' Priority ', model_mapping_chain: 'client→alias→upstream' },
+          ...[null, 'default', 'standard', 'flex', 'ultrafast', 'unknown'].map((service_tier) => ({ ...baseImageRow, request_id: `other-${service_tier}`, service_tier })),
+        ],
+        loading: false,
+        columns: [{ key: 'model', label: 'Model' }, { key: 'cost', label: 'Cost' }],
+        showAccountBilling: false,
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: false, Teleport: true } },
+    })
+
+    // When the list is rendered before any hover or click.
+    const badges = wrapper.findAll('[data-cell="cost"] [data-testid="usage-fast-badge"]')
+
+    // Then only the saved priority/fast rows are visibly marked.
+    expect(badges).toHaveLength(3)
+    expect(wrapper.find('[data-cell="model"] [data-testid="usage-fast-badge"]').exists()).toBe(false)
+    for (const badge of badges) {
+      expect(badge.attributes('role')).toBe('img')
+      expect(badge.attributes('aria-label')).toBe('Fast')
+      expect(badge.attributes('title')).toBe(messages['usage.fastBadgeTooltip'])
+      expect(badge.text()).toBe('')
+      expect(badge.get('svg').attributes('aria-hidden')).toBe('true')
+      expect(badge.get('svg').attributes('stroke-width')).toBe('2.2')
+      expect(badge.get('svg').classes()).toEqual(expect.arrayContaining(['h-3', 'w-3']))
+    }
+    for (const requestId of ['fast-simple', 'fast-mapped', 'fast-chain']) {
+      expect(wrapper.get(`[data-request-id="${requestId}"] [data-cell="cost"]`).find('[data-testid="usage-fast-badge"]').exists()).toBe(true)
+    }
+  })
+
   it('shows output TPS in the latency cell using total duration', () => {
     const row = { ...baseImageRow, image_count: 0, billing_mode: 'token', output_tokens: 1000, duration_ms: 20_000, first_token_ms: 10_000 }
     const wrapper = mount(UsageTable, {
@@ -186,6 +224,7 @@ describe('admin UsageTable tooltip', () => {
           {
             ...baseImageRow,
             request_id: 'req-long-context-enabled',
+            service_tier: 'priority',
             long_context_billing_applied: true,
           },
           {
@@ -215,6 +254,9 @@ describe('admin UsageTable tooltip', () => {
     const marker = wrapper.get('[data-request-id="req-long-context-enabled"] [data-testid="long-context-billing-marker"]')
     expect(marker.text()).toBe(label)
     expect(marker.attributes('title')).toBe(tooltip)
+    expect(marker.element.previousElementSibling?.getAttribute('data-testid')).toBe('usage-fast-badge')
+    expect(marker.element.nextElementSibling?.classList.contains('group')).toBe(true)
+    expect(marker.element.parentElement?.firstElementChild?.textContent).toBe('$0.400000')
     expect(wrapper.find('[data-request-id="req-long-context-disabled"] [data-testid="long-context-billing-marker"]').exists()).toBe(false)
     expect(wrapper.find('[data-request-id="req-long-context-absent"] [data-testid="long-context-billing-marker"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('x2')
@@ -318,6 +360,7 @@ describe('admin UsageTable tooltip', () => {
       },
     })
 
+    expect(wrapper.get('[data-cell="cost"]').find('[data-testid="usage-fast-badge"]').exists()).toBe(true)
     const tooltipTriggers = wrapper.findAll('.group.relative')
     await tooltipTriggers[tooltipTriggers.length - 1].trigger('mouseenter')
     await nextTick()

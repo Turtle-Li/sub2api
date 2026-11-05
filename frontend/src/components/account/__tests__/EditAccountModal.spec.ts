@@ -371,6 +371,36 @@ function mountModal(
 }
 
 describe('EditAccountModal', () => {
+  it('loads a stored Codex relay opt-in and saves an explicit disable', async () => {
+    // Given an OpenAI API-key relay with compatibility already enabled.
+    const account = { ...buildAccount(), extra: { openai_codex_oauth_relay: true } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="openai-codex-oauth-relay-toggle"]')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    await toggle.trigger('click')
+
+    // When saving the ordinary edit form.
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    // Then false is sent rather than omitting the declaration.
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_codex_oauth_relay).toBe(false)
+  })
+
+  it('hides Codex relay compatibility for a native OAuth account', async () => {
+    // Given a native OAuth credential rather than an API-key relay.
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+
+    // When its edit form finishes loading.
+    await flushPromises()
+
+    // Then no relay compatibility control is offered.
+    expect(wrapper.find('[data-testid="openai-codex-oauth-relay-toggle"]').exists()).toBe(false)
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
     bulkUpdateMock.mockReset()

@@ -43,6 +43,9 @@ vi.mock('@/stores/auth', () => ({
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
+    accountPools: {
+      list: vi.fn().mockResolvedValue([]),
+    },
     accounts: {
       create: createAccountMock,
       probeUpstreamBilling: probeUpstreamBillingMock,
@@ -200,6 +203,35 @@ async function openCodexImportStep(toggleClicks = 0) {
 }
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
+  it('defaults Codex relay compatibility off and saves an explicit false', async () => {
+    // Given a new OpenAI API-key account with no compatibility selection.
+    // When submitting its normal form.
+    const wrapper = await submitApiKeyAccount('openai')
+
+    // Then the eligible control is visible and its false value is persisted.
+    expect(wrapper.get('[data-testid="openai-codex-oauth-relay-toggle"]').attributes('aria-checked')).toBe('false')
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_codex_oauth_relay).toBe(false)
+  })
+
+  it('saves Codex relay compatibility only after the administrator opts in', async () => {
+    // Given a new API-key account.
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(wrapper.find('[data-testid="openai-codex-oauth-relay-toggle"]').exists()).toBe(false)
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('CPR relay')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="openai-codex-oauth-relay-toggle"]').trigger('click')
+
+    // When saving the opted-in account.
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    // Then the account remains API-key typed and carries the explicit declaration.
+    expect(createAccountMock.mock.calls[0]?.[0]?.type).toBe('apikey')
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_codex_oauth_relay).toBe(true)
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })

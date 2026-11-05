@@ -1,5 +1,11 @@
 # Sub2API project operations
 
+## Codex OAuth relay Fast compatibility
+
+- Before changing CPR relay billing declarations or usage-list Fast badges, read
+  `docs/features/CPR_FAST_COMPAT_20261105.md` for the pinned upstream contract,
+  opt-in scope, public API downgrade protection and Free Fast accounting.
+
 ## Gemini omitted output limits
 
 - Gemini compatibility requests must preserve an omitted output limit through

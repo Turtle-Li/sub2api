@@ -365,8 +365,15 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		extra, err = mergeCRSAccountExtra(existing, PlatformAnthropic, targetType, extra)
+		if err != nil {
+			item.Action = "failed"
+			item.Error = err.Error()
+			result.Failed++
+			result.Items = append(result.Items, item)
+			continue
+		}
 		if existing != nil {
-			extra = mergeMap(existing.Extra, extra)
 			credentials = mergeMap(existing.Credentials, credentials)
 		}
 		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformAnthropic, targetType, credentials, extra)
@@ -501,8 +508,15 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		extra, err = mergeCRSAccountExtra(existing, PlatformAnthropic, AccountTypeAPIKey, extra)
+		if err != nil {
+			item.Action = "failed"
+			item.Error = err.Error()
+			result.Failed++
+			result.Items = append(result.Items, item)
+			continue
+		}
 		if existing != nil {
-			extra = mergeMap(existing.Extra, extra)
 			credentials = mergeMap(existing.Credentials, credentials)
 		}
 		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformAnthropic, AccountTypeAPIKey, credentials, extra)
@@ -655,11 +669,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			extra["email"] = crsEmail
 		}
 
-		var existingExtra map[string]any
-		if existing != nil {
-			existingExtra = existing.Extra
-		}
-		extra, err = mergeCRSOpenAILongContextBillingExtra(existingExtra, extra)
+		extra, err = mergeCRSAccountExtra(existing, PlatformOpenAI, AccountTypeOAuth, extra)
 		if err != nil {
 			item.Action = "failed"
 			item.Error = err.Error()
@@ -806,11 +816,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
-		var existingExtra map[string]any
-		if existing != nil {
-			existingExtra = existing.Extra
-		}
-		extra, err = mergeCRSOpenAILongContextBillingExtra(existingExtra, extra)
+		extra, err = mergeCRSAccountExtra(existing, PlatformOpenAI, AccountTypeAPIKey, extra)
 		if err != nil {
 			item.Action = "failed"
 			item.Error = err.Error()
@@ -947,8 +953,15 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		extra, err = mergeCRSAccountExtra(existing, PlatformGemini, AccountTypeOAuth, extra)
+		if err != nil {
+			item.Action = "failed"
+			item.Error = err.Error()
+			result.Failed++
+			result.Items = append(result.Items, item)
+			continue
+		}
 		if existing != nil {
-			extra = mergeMap(existing.Extra, extra)
 			credentials = mergeMap(existing.Credentials, credentials)
 		}
 		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformGemini, AccountTypeOAuth, credentials, extra)
@@ -1077,8 +1090,15 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		extra, err = mergeCRSAccountExtra(existing, PlatformGemini, AccountTypeAPIKey, extra)
+		if err != nil {
+			item.Action = "failed"
+			item.Error = err.Error()
+			result.Failed++
+			result.Items = append(result.Items, item)
+			continue
+		}
 		if existing != nil {
-			extra = mergeMap(existing.Extra, extra)
 			credentials = mergeMap(existing.Credentials, credentials)
 		}
 		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformGemini, AccountTypeAPIKey, credentials, extra)
@@ -1214,8 +1234,24 @@ func reconcileCRSUpstreamBillingProbeExtra(
 	}
 }
 
-func mergeCRSOpenAILongContextBillingExtra(existing, updates map[string]any) (map[string]any, error) {
-	return normalizeOpenAILongContextBillingExtra(PlatformOpenAI, mergeMap(existing, updates))
+func mergeCRSAccountExtra(existing *Account, platform, accountType string, updates map[string]any) (map[string]any, error) {
+	// Validate the source before merging so an unsupported explicit enable is
+	// rejected, while an inherited declaration can be removed on type changes.
+	if err := ValidateOpenAICodexOAuthRelayExtra(platform, accountType, updates); err != nil {
+		return nil, err
+	}
+	var existingExtra map[string]any
+	if existing != nil {
+		existingExtra = existing.Extra
+	}
+	extra := mergeMap(existingExtra, updates)
+	if platform != PlatformOpenAI || accountType != AccountTypeAPIKey {
+		delete(extra, OpenAICodexOAuthRelayExtraKey)
+	}
+	if err := ValidateOpenAICodexOAuthRelayExtra(platform, accountType, extra); err != nil {
+		return nil, err
+	}
+	return normalizeOpenAILongContextBillingExtra(platform, extra)
 }
 
 func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cached *[]Proxy, src *crsProxy, defaultName string) (*int64, error) {

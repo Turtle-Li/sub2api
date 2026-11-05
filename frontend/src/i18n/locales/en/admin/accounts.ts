@@ -730,6 +730,9 @@ export default {
         flattenNamespacesDesc:
           'Disabled by default: Codex namespace tool declarations are forwarded as-is on /responses, which is what the ChatGPT Codex backend expects. Enable only when this OAuth account is routed to a relay that rejects namespace tools — flattening renames them to namespace__tool, which breaks models that address collaboration tools as functions.<namespace>.<tool>. Compaction requests always flatten regardless of this switch.',
         longContextBilling: 'API long-context pricing',
+        codexOAuthRelay: 'Codex OAuth relay compatibility',
+        codexOAuthRelayDesc:
+          'For verified Codex OAuth relays such as CPR, interpret default responses to Fast requests using the relay contract. Force Fast and Free Fast remain group settings; this affects Fast accounting for every group sharing this account.',
         longContextBillingDesc:
           'Disabled by default. Enable only when this account\'s upstream charges OpenAI API long-context rates above the model threshold.',
         responsesWebsocketsV2: 'Responses WebSocket v2',
