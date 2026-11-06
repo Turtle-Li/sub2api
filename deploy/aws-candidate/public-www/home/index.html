@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080b12">
+  <title>TurtleRoute · 多种模型 一个接入入口</title>
+  <meta name="description" content="探索 GPT、Claude、DeepSeek 等模型，通过 TurtleRoute 接入熟悉的工具和应用。">
+  <link rel="modulepreload" href="/helpcenter/turtleroute-20261106-v5/shared.js"><link rel="modulepreload" href="/helpcenter/turtleroute-20261106-v5/catalog-pricing.mjs">
+  <link rel="icon" href="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/shared.css"><link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/ai.css">
+</head>
+<body data-variant="ai">
+  <a class="skip-link" href="#main">跳至主要内容</a>
+  <header class="ai-header shell">
+    <a class="ai-brand" href="/"><img src="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" width="36" height="36" alt=""><span>Turtle<b>Route</b></span></a>
+    <nav aria-label="主导航"><a href="#models">发现模型</a><a href="#connect">开发者接入</a><a href="https://www.turtleligpt.com/model-plaza" target="_blank" rel="noopener">模型广场 <span>↗</span></a></nav>
+    <a class="console-link" href="https://www.turtleligpt.com/login" target="_blank" rel="noopener">控制台 <span>↗</span></a>
+  </header>
+  <main id="main">
+    <section class="ai-hero shell" aria-labelledby="hero-title">
+      <div class="hero-sky" data-hero-sky aria-hidden="true">
+        <picture>
+          <source media="(max-width: 720px)" srcset="/helpcenter/turtleroute-20261106-v5/hero-space-mobile.webp">
+          <img src="/helpcenter/turtleroute-20261106-v5/hero-space.webp" width="1120" height="630" alt="" decoding="async" fetchpriority="low">
+        </picture>
+        <i class="hero-meteor"></i>
+        <i class="hero-meteor hero-meteor--second"></i>
+      </div>
+      <div class="hero-copy">
+        <p class="hero-label"><span class="signal-dot" aria-hidden="true"></span>多模型 API</p>
+        <h1 id="hero-title">多种模型<br><span>一个入口</span></h1>
+        <p class="hero-description"><span>查看模型分组 倍率和价格</span><span>用同一个 API 地址接入你的工具</span></p>
+        <div class="hero-actions">
+          <a class="action-primary" href="https://www.turtleligpt.com/register" target="_blank" rel="noopener">获取 API Key <span>↗</span></a>
+          <a class="action-text" href="#models" data-browse-models>浏览模型广场 <span>↓</span></a>
+        </div>
+        <div class="hero-meta">
+          <span>API 接入地址</span>
+          <code>https://api.turtleligpt.com/v1</code>
+        </div>
+      </div>
+    </section>
+    <section class="model-presence shell" aria-label="公开目录概览"><div><span class="presence-intro">一个目录 <br><strong>多种选择 </strong></span></div><div class="presence-count"><b data-provider-count>—</b><span>模型平台</span></div><div class="platform-marquee" tabindex="0" aria-label="支持的模型平台 聚焦或悬停暂停滚动"><div class="platform-track" data-platform-track><div class="platform-strip"><span>OpenAI</span><span>Anthropic</span><span>DeepSeek</span><span>Kimi</span><span>MiniMax</span><span>GLM</span><span>Gemini</span></div></div></div></section>
+    <section class="ai-catalog shell" id="models" aria-labelledby="models-title">
+      <div class="section-top"><div><p class="eyebrow">MODEL EXPLORER</p><h2 id="models-title">先选模型 再看价格 </h2></div><div class="catalog-intro"><p>倍率与价格直接对比<br>与模型广场保持同步</p><a href="https://www.turtleligpt.com/model-plaza" target="_blank" rel="noopener">进入完整模型广场 <span>↗</span></a></div></div>
+      <div class="catalog-controls"><div class="ai-provider-tabs" data-providers aria-label="按模型平台筛选"></div><label class="model-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.7" cy="10.7" r="6.7" stroke="currentColor" stroke-width="1.6"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="1.6"/></svg><input type="search" data-search aria-label="搜索模型或分组" placeholder="搜索模型或分组"></label></div>
+      <p class="pricing-caption">$ / 百万 tokens　已含倍率　标准时段基础档　图片与视频按标注单位计价</p>
+      <p class="catalog-results" role="status">找到 <b data-result-count>—</b> 个分组　已展示 <b data-shown-count>—</b> 个</p>
+      <div class="ai-model-grid" data-models data-grouped data-limit="6" aria-label="按分组展示模型价格" aria-busy="true"><p class="catalog-loading" role="status">正在读取模型与价格</p></div>
+      <button class="catalog-more" type="button" data-load-more hidden>查看更多分组 <span>↓</span></button>
+      <p data-empty hidden>没有找到匹配的模型或分组 试试其他关键词 或切换到 全部  </p>
+      <div class="catalog-status"><p data-source-status role="status">正在同步公开目录…</p><div><span><b data-model-count>—</b> 款模型 · <b data-group-count>—</b> 个分组</span><button type="button" data-retry>刷新目录 ↻</button></div></div>
+    </section>
+    <section class="getting-started shell" aria-label="接入步骤"><div><span>01</span><h3>选模型</h3><p>比较倍率与价格</p></div><div><span>02</span><h3>建密钥</h3><p>在控制台创建 API Key</p></div><div><span>03</span><h3>开始调用</h3><p>按模型协议配置工具或代码</p></div></section>
+    <section class="connection-section shell" id="connect" aria-labelledby="connection-title">
+      <div class="connection-copy"><p class="eyebrow">BUILT FOR YOUR NEXT IDEA</p><h2 id="connection-title">选好模型 <br>开始接入 </h2><p>先在模型广场确认分组与协议 再创建对应的 API Key 填写接入地址和模型 ID 即可在兼容的客户端或代码中使用 </p><a class="action-text" href="https://www.turtleligpt.com/register" target="_blank" rel="noopener">创建账户 管理 API Key <span>↗</span></a><div class="endpoint"><span>API BASE URL</span><code>https://api.turtleligpt.com/v1</code></div></div>
+      <div class="code-window"><div class="code-window-top"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>your_next_idea</span><span class="code-file">API / EXAMPLE</span></div><div class="code-toolbar"><div role="group" aria-label="代码语言"><button type="button" data-language="python">Python</button><button type="button" data-language="curl">cURL</button></div><button type="button" data-copy>复制示例 <span aria-hidden="true">⧉</span></button></div><pre tabindex="0" aria-label="API 接入代码示例"><code data-code></code></pre><div class="code-window-bottom"><span>OpenAI Responses 协议示例</span><span>其他模型请确认对应协议</span></div></div>
+    </section>
+    <section class="closing-section shell"><div class="closing-orbit" aria-hidden="true"><i></i><i></i><i></i><img src="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" width="48" height="48" alt=""></div><p class="eyebrow">THE NEXT CONNECTION IS YOURS</p><h2>找到合适的模型 <br><span>再开始你的下一步 </span></h2><a class="action-primary" href="https://www.turtleligpt.com/register" target="_blank" rel="noopener">开始使用 TurtleRoute <span>↗</span></a><a class="closing-secondary" href="https://www.turtleligpt.com/model-plaza" target="_blank" rel="noopener">先看看模型与定价 →</a></section>
+  </main>
+  <footer class="ai-footer shell"><a class="ai-brand" href="/"><img src="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" width="28" height="28" alt=""><span>Turtle<b>Route</b></span></a><p>模型 分组 接入 一处连接 </p><a href="https://www.turtleligpt.com/login" target="_blank" rel="noopener">进入控制台 ↗</a></footer>
+
+  <script type="module" src="/helpcenter/turtleroute-20261106-v5/ai.js"></script>
+</body>
+</html>
