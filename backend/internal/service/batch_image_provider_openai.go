@@ -54,11 +54,13 @@ func isOpenAIImageBatchExecution(ctx context.Context) bool {
 
 type OpenAIImageBatchItemRequest struct {
 	BatchID          string
+	StateKey         string
 	CustomID         string
 	Model            string
 	Prompt           string
 	ResponseMimeType string
 	AspectRatio      string
+	ImageSize        string
 	ReferenceImages  []BatchImageReference
 }
 
@@ -79,12 +81,19 @@ type OpenAIImageBatchItemExecutor interface {
 	) (*OpenAIImageBatchItemResult, error)
 }
 
+type resumableImageBatchItemExecutor interface {
+	Resume(context.Context, *Account, OpenAIImageBatchItemRequest) (*OpenAIImageBatchItemResult, error)
+}
+
+var errImageBatchItemPending = errors.New("image task pending")
+
 type openAIImageBatchManifest struct {
 	Version int             `json:"version"`
 	Input   BatchImageInput `json:"input"`
 }
 
 type OpenAIImagesBatchProvider struct {
+	providerName         string
 	store                BatchImageProviderObjectStore
 	executor             OpenAIImageBatchItemExecutor
 	objectPrefix         string
@@ -101,12 +110,24 @@ func NewOpenAIImagesBatchProvider(store BatchImageProviderObjectStore, executor 
 }
 
 func (p *OpenAIImagesBatchProvider) Name() string {
+	if p.providerName != "" {
+		return p.providerName
+	}
 	return BatchImageProviderOpenAI
 }
 
 func (p *OpenAIImagesBatchProvider) SupportsAccount(account *Account) bool {
 	if account == nil || account.Platform != PlatformOpenAI {
 		return false
+	}
+	if p.Name() == BatchImageProviderWorkBuddy {
+		return workBuddyImageAccountReady(account)
+	}
+	if isImageBridgeProvider(p.Name()) {
+		return account.Type == AccountTypeAPIKey && batchImageProviderAPIKey(account) != "" && account.GetCredential("base_url") != ""
+	}
+	if p.Name() == BatchImageProviderMuse {
+		return account.Type == AccountTypeAPIKey && batchImageProviderAPIKey(account) != "" && strings.TrimSpace(account.GetCredential("base_url")) != ""
 	}
 	switch account.Type {
 	case AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey:
@@ -117,6 +138,24 @@ func (p *OpenAIImagesBatchProvider) SupportsAccount(account *Account) bool {
 }
 
 func (p *OpenAIImagesBatchProvider) SubmissionAvailable() bool {
+	if p != nil && p.Name() == BatchImageProviderWorkBuddy {
+		e, ok := p.executor.(*workBuddyImageExecutor)
+		if !ok || e.gateway == nil || e.gateway.httpUpstream == nil || e.gateway.concurrencyService == nil {
+			return false
+		}
+	}
+	if p != nil && isImageBridgeProvider(p.Name()) {
+		e, ok := p.executor.(*bridgeImageExecutor)
+		if !ok || !e.available() {
+			return false
+		}
+	}
+	if p != nil && p.Name() == BatchImageProviderMuse {
+		e, ok := p.executor.(*museImageBatchExecutor)
+		if !ok || e.gateway == nil || e.gateway.httpUpstream == nil || e.gateway.concurrencyService == nil {
+			return false
+		}
+	}
 	return p != nil && p.store != nil && p.hasSafeObjectPrefix()
 }
 
@@ -133,13 +172,35 @@ func (p *OpenAIImagesBatchProvider) Submit(ctx context.Context, job *BatchImageJ
 	if input.Model == "" && job != nil {
 		input.Model = job.Model
 	}
-	if !isSafeOpenAIImageBatchID(input.BatchID) || !isOpenAIImageBatchModel(input.Model) || len(input.Items) == 0 || len(input.Items) > batchImageOpenAIMaxItems {
+	if (p.Name() == BatchImageProviderMuse || p.Name() == BatchImageProviderWorkBuddy) && !batchImageAccountSupportsProviderModel(p.Name(), account, input.Model) {
 		return nil, ErrBatchImageProviderInvalidInput
 	}
-	if _, err := batchImageOpenAI1KSizeForAspectRatio(input.AspectRatio); err != nil {
+	if !isSafeOpenAIImageBatchID(input.BatchID) || !p.supportsModel(input.Model) || len(input.Items) == 0 || len(input.Items) > batchImageOpenAIMaxItems {
+		return nil, ErrBatchImageProviderInvalidInput
+	}
+	if _, err := batchImageOpenAI1KSizeForAspectRatio(input.AspectRatio); err != nil && !isImageBridgeProvider(p.Name()) {
 		return nil, err
 	}
+	if p.Name() == BatchImageProviderMuse && (input.AspectRatio != "" || (input.ImageSize != "" && input.ImageSize != "1K") || (input.ResponseMimeType != "" && input.ResponseMimeType != "image/png")) {
+		return nil, ErrBatchImageProviderInvalidInput
+	}
 	for _, item := range input.Items {
+		if p.Name() == BatchImageProviderWorkBuddy {
+			if err := validateWorkBuddyImageRequest(OpenAIImageBatchItemRequest{Model: input.Model, ImageSize: input.ImageSize, AspectRatio: input.AspectRatio, ResponseMimeType: input.ResponseMimeType, ReferenceImages: item.ReferenceImages}); err != nil {
+				return nil, err
+			}
+		}
+		if e, ok := p.executor.(*bridgeImageExecutor); ok {
+			if !batchImageAccountSupportsProviderModel(p.Name(), account, input.Model) {
+				return nil, ErrBatchImageProviderInvalidInput
+			}
+			if err := e.validate(OpenAIImageBatchItemRequest{Model: input.Model, Prompt: item.Prompt, ImageSize: input.ImageSize, AspectRatio: input.AspectRatio, ResponseMimeType: input.ResponseMimeType, ReferenceImages: item.ReferenceImages}); err != nil {
+				return nil, err
+			}
+		}
+		if p.Name() == BatchImageProviderMuse && len(item.ReferenceImages) > 1 {
+			return nil, ErrBatchImageProviderInvalidInput
+		}
 		if strings.TrimSpace(item.CustomID) == "" || strings.TrimSpace(item.Prompt) == "" {
 			return nil, ErrBatchImageProviderInvalidInput
 		}
@@ -212,8 +273,12 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		}
 
 		attemptKey := p.itemAttemptKey(batchID, itemIndex)
+		previouslyStarted := false
+		resumable, canResume := p.executor.(resumableImageBatchItemExecutor)
 		if started, startedErr := p.store.Exists(ctx, attemptKey); startedErr != nil {
 			return nil, ErrBatchImageProviderStorageUnavailable.WithCause(startedErr)
+		} else if started && canResume {
+			previouslyStarted = true
 		} else if started {
 			if !advance {
 				return batchImageOpenAIRunningStatus(batchImageOpenAIContinueDelay), nil
@@ -237,19 +302,27 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 			return &BatchProviderStatus{RawState: "CANCELLED", InternalState: BatchProviderStateCancelled, Done: true}, nil
 		}
 
-		started := false
+		started := previouslyStarted
 		executionTimeout := p.itemExecutionTimeout
 		if executionTimeout <= 0 {
 			executionTimeout = batchImageOpenAIItemTimeout
 		}
 		itemCtx, cancelItem := context.WithTimeout(ctx, executionTimeout)
-		result, executeErr := p.executor.Execute(itemCtx, account, OpenAIImageBatchItemRequest{
+		execute := p.executor.Execute
+		if previouslyStarted {
+			execute = func(ctx context.Context, a *Account, r OpenAIImageBatchItemRequest, _ func() error) (*OpenAIImageBatchItemResult, error) {
+				return resumable.Resume(ctx, a, r)
+			}
+		}
+		result, executeErr := execute(itemCtx, account, OpenAIImageBatchItemRequest{
+			StateKey:         attemptKey + ".upstream",
 			BatchID:          batchID,
 			CustomID:         item.CustomID,
 			Model:            manifest.Input.Model,
 			Prompt:           item.Prompt,
 			ResponseMimeType: manifest.Input.ResponseMimeType,
 			AspectRatio:      manifest.Input.AspectRatio,
+			ImageSize:        manifest.Input.ImageSize,
 			ReferenceImages:  item.ReferenceImages,
 		}, func() error {
 			// This hook is the upstream-attempt linearization point. Check before
@@ -285,6 +358,9 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		})
 		itemTimedOut := errors.Is(executeErr, context.DeadlineExceeded) && ctx.Err() == nil
 		cancelItem()
+		if errors.Is(executeErr, errImageBatchItemPending) {
+			return batchImageOpenAIRunningStatus(2 * time.Second), nil
+		}
 		if errors.Is(executeErr, errBatchImageOpenAIAccountBusy) && !started {
 			return batchImageOpenAIRunningStatus(batchImageOpenAIAccountBusyDelay), nil
 		}
@@ -517,6 +593,7 @@ func (p *OpenAIImagesBatchProvider) cleanupItemObjects(ctx context.Context, batc
 	for itemIndex := 0; itemIndex < itemCount; itemIndex++ {
 		keys = append(keys,
 			p.itemAttemptKey(batchID, itemIndex),
+			p.itemAttemptKey(batchID, itemIndex)+".upstream",
 			p.itemResultKey(batchID, itemIndex),
 		)
 	}
@@ -542,7 +619,7 @@ func batchImageOpenAIJobBatchID(job *BatchImageJob) (string, error) {
 }
 
 func batchImageOpenAICleanupBatchID(job *BatchImageJob) (string, error) {
-	if job == nil || job.Provider != BatchImageProviderOpenAI || !isSafeOpenAIImageBatchID(job.BatchID) {
+	if job == nil || (job.Provider != BatchImageProviderOpenAI && job.Provider != BatchImageProviderMuse && job.Provider != BatchImageProviderWorkBuddy && !isImageBridgeProvider(job.Provider)) || !isSafeOpenAIImageBatchID(job.BatchID) {
 		return "", ErrBatchImageProviderMissingJobName
 	}
 	jobName := batchImageProviderJobName(job)
@@ -948,4 +1025,18 @@ func detectOpenAIImageBatchMimeType(encoded, declaredMimeType, expectedMimeType 
 		}
 	}
 	return "image/png"
+}
+
+func (p *OpenAIImagesBatchProvider) supportsModel(model string) bool {
+	if p.Name() == BatchImageProviderWorkBuddy {
+		return isWorkBuddyImageModel(model)
+	}
+	if e, ok := p.executor.(*bridgeImageExecutor); ok {
+		_, ok := e.models[model]
+		return ok
+	}
+	if p.Name() == BatchImageProviderMuse {
+		return model == "muse-image"
+	}
+	return isOpenAIImageBatchModel(model)
 }

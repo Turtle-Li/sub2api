@@ -7,6 +7,38 @@
   source/test references and local privacy, authorization and statistics rules.
   Anonymous publication is opt-in; no samples or stale data must remain unknown.
 
+## WorkBuddy Hunyuan image batches
+
+- Read `docs/features/WORKBUDDY_IMAGE_PROVIDER_20261107.md` and its pinned
+  upstream before changing the adapter. Preserve exact realm/model identities,
+  explicit readiness modes (verified single attempt or accepted native retry),
+  no Sub2 unknown-attempt replay and existing account egress, concurrency and
+  settlement. Official-runtime mode preserves automatic gateway updates and
+  explicitly accepts possible extra upstream quota consumption.
+
+## Native Wan and Seedream image batches
+
+- Read `image-provider-bridge/README.md` and `SOURCE_MANIFEST.json` before changing
+  the native adapters. They reuse VSO revision `4edef85ab3716fd43989b4a49561a148ba500d93`.
+  Preserve original HTTP/policy cores, exact catalog mappings, shared account
+  admission, stdin-only secrets and no replay after uncertain submission.
+  The optional Python runtime defaults disabled; installation is separate from activation.
+
+## Muse batch images
+
+- Before changing `muse_images` / `muse-image`, read
+  `docs/features/MUSE_BATCH_PROVIDER_20261107.md` for the pinned native Muse task
+  contract, exact mapping, one-reference limit, resumable receipt and billing rules.
+  Reuse the original sequential batch lifecycle; never retry an ambiguous POST.
+
+## Image Studio integration
+
+- For the session-authenticated image workspace, read
+  `docs/features/IMAGE_STUDIO_SESSION_API_20261107.md` and
+  `frontend/src/features/image-studio/UPSTREAM.md` before editing. The latter
+  pins the UI reference, executed source modules and intentional host adapters.
+  Preserve server-owned tasks, per-key ownership and the existing single ledger.
+
 ## Codex OAuth relay Fast compatibility
 
 - Before changing CPR relay billing declarations or usage-list Fast badges, read

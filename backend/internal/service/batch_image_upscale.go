@@ -41,6 +41,9 @@ type BatchImageUpscaleWritePermit interface {
 }
 
 func batchImageJobRequiresUpscale(job *BatchImageJob) bool {
+	if job != nil && isImageBridgeProvider(job.Provider) {
+		return false
+	}
 	if job == nil {
 		return false
 	}

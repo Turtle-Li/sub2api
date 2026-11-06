@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sub2-image-bridge"
+version = "0.1.0"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = ["requests==2.34.2"]
+
+[tool.setuptools.packages.find]
+include = ["sub2_image_bridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.data-files]
+"share/sub2-image-bridge" = ["SOURCE_MANIFEST.json", "README.md"]

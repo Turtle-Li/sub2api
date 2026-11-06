@@ -148,7 +148,9 @@ func (r *apiKeyRepository) withAPIKeyGroupLimitTx(
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	m, err := r.activeQuery().
 		Where(apikey.IDEQ(id)).
-		WithUser().
+		WithUser(func(q *dbent.UserQuery) {
+			q.WithAllowedGroups(func(gq *dbent.GroupQuery) { gq.Select(group.FieldID) })
+		}).
 		WithGroup().
 		Only(ctx)
 	if err != nil {
