@@ -58,3 +58,21 @@ Owner's existing authenticated Chrome session verified model selection, server-o
 Scope limits remain explicit: Gemini baseline failed in the pre-existing delivery boundary with its hold released; this release does not claim a Gemini success. Wan and Seedream native cores/runtime passed source and packaging tests, but production activation remains off because no verified reusable native credential reference was available (Vault was locked; no unlock or VSO secret extraction performed). The temporary test prices do not establish public pricing or enable all providers for ordinary users.
 
 Cleanup verified from database: key127 restored to group27; account227 groups `[27]`; account249 groups `[4,6,8,12,13,16]`; canary group40 and routing account250 inactive; zero unfinished canary jobs. Historical task access still succeeds after restoration. Keep task/ledger records and generated files; do not erase financial evidence. Formal native platform exposure/prices remain administrator configuration decisions, separate from this isolated acceptance.
+
+## Group image administration
+
+[Production run 42313044021](https://github.com/Turtle-Li/sub2api/actions/runs/42313044021)
+activated source `9e18ead867895f5935ab667e246cbd4d7c180ebe` on
+`sub2api-blue`. The active image was
+`sha256:68354866ee88b566634961b3dc196b4b5e69102d7545b5f704b5f84d3707a81b`,
+healthy with zero restarts. Public health returned OK; the anonymous admin
+catalogue request returned HTTP 401. The previous healthy revision was
+`58b71f4f1e215dd2462f75c59377b14ada7c7875`.
+
+In the authenticated admin browser, the new sidebar link and page loaded.
+Switching to Muse showed its saved batch-disabled state and the Muse candidate;
+switching to Gemini showed separate batch discount and hold controls plus six
+models available by configuration. The save button remained disabled because
+no configuration was edited. This release adds no migration and activates no
+provider. See `docs/features/IMAGE_STUDIO_ADMIN_20261107.md` for ownership and
+rollback details.
