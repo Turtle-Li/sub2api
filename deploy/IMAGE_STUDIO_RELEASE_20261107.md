@@ -37,3 +37,24 @@ Image2.5 Sunburst task `imgbatch_d60ab240b3cd825ffae582f024032636` completed wit
 Native Muse/WorkBuddy admission exposed two missing production-boundary regressions: public service wiring still passed nil gateway, and catalog pricing ignored the group image tier override. Both fail before upstream generation; the rejected native attempt IDs have zero persisted jobs. Fixes inject the existing shared gateway and reuse the existing submission pricing snapshot, with constructor and real-pricing-resolver failing-to-passing regressions. See `docs/bugs/backend/BUG-20261107-image-public-native-runtime.md` and `docs/bugs/backend/BUG-20261107-image-catalog-group-price.md`. Key127 is returned to group27 while the correction is reviewed/released.
 
 Separate pre-cutover Gemini baseline `imgbatch_e6c1f53be7b90340f3790d267d2d35b4`, submitted on0c699b5, failed in the unchanged delivery pump boundary (`RESULT_DELIVERY_FAILED`). One hold was fully released, zero capture. Read-only signed pump GET using Go's actual User-Agent returns application404 for the run; Python's default UA instead triggers Cloudflare1010 and is not evidence of the production cause. Original failure detail was not retained, so exact delivery failure cause remains unproven. No generation retry or authentication/pump configuration change was made.
+
+## Corrected release and completed acceptance
+
+Correction `4cce05dd203d5989939156b3d9124b2344877717` includes the two production-boundary fixes. Native race regression:61 scenarios, zero failures/skips; real resolver catalog regression:35 top-level tests, zero failures/skips. Independent review: CLEAR/APPROVE. Concurrent monitor documentation was fast-forwarded before the correction; no unrelated source change was introduced.
+
+[Production run42302982486](https://github.com/Turtle-Li/sub2api/actions/runs/42302982486) succeeded. Active `sub2api-blue` reports that exact revision, healthy with zero restarts; image `sha256:b7ed6a3c67a67fdfeeb2e05027737e728d67c22bd4367fab95a486a25973a227`. Native catalog now advertises Muse, both observed CN Hunyuan identities and existing Image2.5 models using the canary group's configured image price. No WorkBuddy image/updater pin or patch was applied.
+
+| Real task | Model / outcome | Result | Ledger |
+| --- | --- | --- | --- |
+| `imgbatch_d60ab240b3cd825ffae582f024032636` | Image2.5 Sunburst text generation; completed | PNG1536x1024, one red boat | One hold, one capture,0.01 |
+| `imgbatch_ae405b8d04e4aa00dfcbf2403946c80a` | Image2.5 Flare edit through owner's Chrome session; completed | PNG1536x1024, yellow boat with source reference; persisted parent is preceding task | One hold, one capture,0.01 |
+| `imgbatch_acb384bfa312ccd2caf704b115b4113f` | Muse native persisted task; completed | WebP1920x1280, one image | One hold, one capture,0.01 |
+| `imgbatch_9cb2b2957d3c9d55f22ac35ca0c8dff1` | Official WorkBuddy CN Hunyuan; completed | PNG1248x1872, one image | One hold, one capture,0.01 |
+
+All amounts above are isolated test internal units, not customer/provider tariffs. Four captures total0.04; no duplicate ledger entries. Image bytes were decoded/validated locally. Muse's first concurrent GET hit the existing user download limiter429; a subsequent sequential GET succeeded. No generation was repeated for that download response.
+
+Owner's existing authenticated Chrome session verified model selection, server-owned gallery/history, original-image reference loading, editing submission, persisted parent linkage, result preview and billing display. Local evidence: `.omo/release/live-gallery-all-providers.png`, `live-edit-preview.png`, and per-task `results/*/{image,audit,status,resume}.json`. Images and machine consumer scripts stay ignored; no session or API key was exported to the browser or repository.
+
+Scope limits remain explicit: Gemini baseline failed in the pre-existing delivery boundary with its hold released; this release does not claim a Gemini success. Wan and Seedream native cores/runtime passed source and packaging tests, but production activation remains off because no verified reusable native credential reference was available (Vault was locked; no unlock or VSO secret extraction performed). The temporary test prices do not establish public pricing or enable all providers for ordinary users.
+
+Cleanup verified from database: key127 restored to group27; account227 groups `[27]`; account249 groups `[4,6,8,12,13,16]`; canary group40 and routing account250 inactive; zero unfinished canary jobs. Historical task access still succeeds after restoration. Keep task/ledger records and generated files; do not erase financial evidence. Formal native platform exposure/prices remain administrator configuration decisions, separate from this isolated acceptance.
