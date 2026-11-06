@@ -164,3 +164,54 @@ incident-announcement system. Request success rate is not time-based SLA uptime.
 No full-repository or production acceptance claim is made. UI is retained from
 the pinned design with local accessibility/copy improvements, ready for a future
 visual redesign if desired.
+
+## Production trial (2026-11-07 local / 2026-11-06 UTC)
+
+Owner explicitly authorized commit, merge, release and a few live components.
+Feature revision `0c699b5dd9892608443f436c3ec68f806f693b71` was fast-forwarded
+to fork `main`; canonical GitHub release run `42297682332` succeeded. AWS
+selected healthy `sub2api-blue`, traffic accepting/background active, image
+`sha256:1c158fb1cf9d4a67c6b21489e53ba479b87549222e8e87ef346a25a6fc6b6b47`.
+Previous green revision `ce5f17142704f0fbd269b76b7b9d2a266a4a6f20` stopped
+through the canonical drain flow. Public health returned 200; release audit
+app_5xx/app_fatal/caddy_5xx were all zero. No source compilation on production.
+
+The existing owner browser session configured the trial through normal admin UI:
+mode V3, monitoring enabled, public enabled, category `模型服务`, five-minute
+slots, 90 cells, seven-day request success rate, no featured card. V1 monitor
+list was empty before activation. Display multipliers are off for all three.
+
+| Component | Bound group | Model filter | Audience | TTFT threshold |
+| --- | --- | --- | --- | --- |
+| GPT 按量 · 分组整体 | 按量-0.25倍率 | All requested models | Public | 60 seconds |
+| Claude 官方 · 分组整体 | Claude 官方 | All requested models | Public | 30 seconds |
+| GPT PLUS · 分组整体 | GPT PLUS | All requested models | Group-authorized | 60 seconds |
+
+Anonymous `/status` and status/incidents APIs returned only the first two
+components, no internal group IDs, multiplier or request volumes, and no-store.
+Unauthenticated access to the signed-in API returned 401. Historical paging
+returned `latest:false` with the same scope. The owner signed-in `/monitor`
+displayed all three; ordinary-user group authorization remains separately
+covered by the Go tests. Briefly hiding Claude removed only that component
+from public output; restoring it returned the two public rows.
+
+Collector watermark advanced from 21:50 through 21:54 UTC without synthetic
+model calls. All three rows had no recent samples and correctly remained
+unknown; this is not a claim that those models were healthy. At the final
+bounded observation the application was healthy with zero restarts/OOM and no
+monitor collection errors in the inspected log interval. A single resource
+snapshot was 2.33% CPU / 117.8 MiB; it does not establish long-term overhead.
+Leave the three components enabled to collect natural traffic. No scheduled
+polling automation or paid probe was created.
+
+Rollback configuration: disable public access to withdraw the anonymous page,
+or toggle one component off to hide it. Disable monitoring to stop aggregation;
+the prior saved state was disabled/V2. Preserve V3 tables/history. For an actual
+binary rollback, use the canonical release procedure and compatible retained
+image; never restore a database backup to remove this feature.
+
+Sanitized live QA: `.omo/evidence/model-status-live-public-qa.md`. Owner-local
+release report and screenshot are under `reports/model-availability-release-20261107.md`
+and `artifacts/model-status-qa-20261107/production-public-desktop.png` in the
+Sub2API workspace outside Git. These observations are a bounded startup smoke,
+not a full-production or sustained-availability acceptance claim.
