@@ -89,6 +89,8 @@ func NewBatchImageProviderRegistryFromConfig(cfg *config.Config) *BatchImageProv
 		NewGeminiAPIBatchImageProvider(nil),
 		NewVertexBatchImageProviderFromConfig(cfg, nil, nil, nil),
 		NewOpenAIImagesBatchProvider(nil, nil, batchImageOpenAIStoragePrefix(cfg)),
+		NewMuseImagesBatchProvider(nil, batchImageOpenAIStoragePrefix(cfg), nil),
+		newWorkBuddyImagesProvider(nil, batchImageOpenAIStoragePrefix(cfg), nil),
 	)
 }
 
@@ -106,6 +108,10 @@ func NewBatchImageProviderRegistryWithRuntime(
 		NewGeminiAPIBatchImageProvider(nil),
 		NewVertexBatchImageProviderFromConfig(cfg, nil, nil, nil),
 		NewOpenAIImagesBatchProvider(providerStore, executor, batchImageOpenAIStoragePrefix(cfg)),
+		NewMuseImagesBatchProvider(providerStore, batchImageOpenAIStoragePrefix(cfg), openAIGateway),
+		newWorkBuddyImagesProvider(providerStore, batchImageOpenAIStoragePrefix(cfg), openAIGateway),
+		newBridgeImagesProvider(cfg, providerStore, openAIGateway, BatchImageProviderWan),
+		newBridgeImagesProvider(cfg, providerStore, openAIGateway, BatchImageProviderSeedream),
 	)
 }
 

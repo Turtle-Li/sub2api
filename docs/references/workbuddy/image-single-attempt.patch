@@ -1,0 +1,15 @@
+diff --git a/internal/server/images.go b/internal/server/images.go
+index 01b3998..255dcf7 100644
+--- a/internal/server/images.go
++++ b/internal/server/images.go
+@@ -70,8 +70,8 @@ func (h *Handler) firstAllowedGenerationImage() (string, string, bool) {
+ 	return "", "", false
+ }
+ 
+-// imageAttempts 失败换号上限（与 chat 路径同量级：图像按次人工触发，3 次足够绕开坏号）。
+-const imageAttempts = 3
++// imageAttempts 图像 POST 无幂等保证；失败时上游可能已出图扣费，禁止自动重试。
++const imageAttempts = 1
+ 
+ // imagesGenerations / imagesEdits 共用实现；edit 决定上游路径与入参校验。
+ func (h *Handler) images(w http.ResponseWriter, r *http.Request, edit bool) {

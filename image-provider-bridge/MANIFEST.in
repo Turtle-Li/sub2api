@@ -1,0 +1,1 @@
+include README.md SOURCE_MANIFEST.json uv.lock

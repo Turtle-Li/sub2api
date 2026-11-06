@@ -16,6 +16,9 @@ const (
 	BatchImageProviderGeminiAPI = "gemini_api"
 	BatchImageProviderVertex    = "vertex"
 	BatchImageProviderOpenAI    = "openai_images"
+	BatchImageProviderMuse      = "muse_images"
+	BatchImageProviderWan       = "wan_images"
+	BatchImageProviderSeedream  = "seedream_images"
 )
 
 const (
@@ -419,7 +422,7 @@ func NewBatchImageID() (string, error) {
 
 func IsSupportedBatchImageProvider(provider string) bool {
 	switch provider {
-	case BatchImageProviderGeminiAPI, BatchImageProviderVertex, BatchImageProviderOpenAI:
+	case BatchImageProviderGeminiAPI, BatchImageProviderVertex, BatchImageProviderOpenAI, BatchImageProviderMuse, BatchImageProviderWorkBuddy, BatchImageProviderWan, BatchImageProviderSeedream:
 		return true
 	default:
 		return false

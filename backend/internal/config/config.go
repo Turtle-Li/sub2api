@@ -253,6 +253,7 @@ type IdempotencyConfig struct {
 }
 
 type BatchImageConfig struct {
+	PythonBridgeExecutable            string `mapstructure:"python_bridge_executable"`
 	Enabled                           bool   `mapstructure:"enabled"`
 	MaxItemsPerJobDefault             int    `mapstructure:"max_items_per_job_default"`
 	MaxItemsPerJobTrial               int    `mapstructure:"max_items_per_job_trial"`
@@ -2489,6 +2490,7 @@ func setDefaults() {
 
 	// Batch Image queue
 	viper.SetDefault("batch_image.enabled", false)
+	viper.SetDefault("batch_image.python_bridge_executable", "")
 	viper.SetDefault("batch_image.max_items_per_job_default", 50)
 	viper.SetDefault("batch_image.max_items_per_job_trial", 50)
 	viper.SetDefault("batch_image.max_output_images_per_job", 50)

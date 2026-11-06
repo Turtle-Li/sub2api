@@ -124,10 +124,21 @@ RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
 # -----------------------------------------------------------------------------
 FROM ${POSTGRES_IMAGE} AS pg-client
 
+# Install the native bridge once at build time using its committed lockfile.
+FROM ghcr.io/astral-sh/uv:0.9.3 AS image-bridge-uv
+FROM ${ALPINE_IMAGE} AS image-bridge-builder
+RUN apk add --no-cache python3
+COPY --from=image-bridge-uv /uv /usr/local/bin/uv
+WORKDIR /opt/sub2-image-bridge
+COPY image-provider-bridge/pyproject.toml image-provider-bridge/uv.lock image-provider-bridge/README.md image-provider-bridge/SOURCE_MANIFEST.json ./
+COPY image-provider-bridge/sub2_image_bridge ./sub2_image_bridge
+RUN UV_PYTHON_DOWNLOADS=never uv sync --locked --no-dev --no-editable --python /usr/bin/python3 \
+    && rm -rf /root/.cache/uv
+
 # -----------------------------------------------------------------------------
 # Stage 4: Final Runtime Image
 # -----------------------------------------------------------------------------
-FROM ${ALPINE_IMAGE}
+FROM ${ALPINE_IMAGE} AS image-bridge-runtime
 
 # Labels
 LABEL maintainer="Wei-Shaw <github.com/Wei-Shaw>"
@@ -145,6 +156,7 @@ RUN apk add --no-cache \
     krb5-libs \
     libldap \
     libedit \
+    python3 \
     && rm -rf /var/cache/apk/*
 
 # Copy pg_dump and psql from the same postgres image used in docker-compose
@@ -159,6 +171,35 @@ RUN addgroup -g 1000 sub2api && \
 
 # Set working directory
 WORKDIR /app
+
+COPY --from=image-bridge-builder /opt/sub2-image-bridge /opt/sub2-image-bridge
+# Retain the adopted UI's attribution alongside the installed bridge provenance.
+COPY frontend/src/features/image-studio/upstream/LICENSE /app/licenses/image-studio/LICENSE
+
+# Exercise the installed module as the application UID without network or secrets.
+RUN --network=none su-exec 1000:1000 /opt/sub2-image-bridge/.venv/bin/python - <<'PY'
+import json
+import os
+import subprocess
+import sys
+import requests
+assert os.getuid() == 1000
+assert sys.version_info >= (3, 11)
+assert requests.__version__ == "2.34.2"
+for provider in ("wan", "seedream"):
+    result = subprocess.run(
+        [sys.executable, "-m", "sub2_image_bridge"],
+        input=json.dumps({"provider": provider, "operation": "capabilities"}),
+        text=True, capture_output=True, check=True, timeout=10,
+    )
+    catalog = json.loads(result.stdout)
+    assert catalog["state"] == "completed", catalog
+    assert len(catalog["models"]) == 2, catalog
+    assert all(model["sizes"] for model in catalog["models"]), catalog
+    print(f"bridge smoke PASS: uid=1000 provider={provider} models=2 network=none")
+PY
+
+FROM image-bridge-runtime
 
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api

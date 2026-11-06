@@ -99,7 +99,17 @@ export interface BatchImageJobsResponse {
   has_more: boolean
 }
 
+export interface BatchImageModelCapabilities {
+  readonly image_sizes: string[]
+  readonly aspect_ratios: string[]
+  readonly default_image_size: string
+  readonly default_aspect_ratio: string
+  readonly max_reference_images: number
+  readonly response_mime_types: string[]
+}
+
 export interface BatchImageModel {
+  capabilities?: BatchImageModelCapabilities
   id: string
   object: string
   provider: string

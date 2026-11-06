@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -175,9 +177,10 @@ type BatchImagePublicListResponse struct {
 }
 
 type BatchImagePublicModel struct {
-	ID       string `json:"id"`
-	Object   string `json:"object"`
-	Provider string `json:"provider"`
+	Capabilities *BatchImageModelCapabilities `json:"capabilities,omitempty"`
+	ID           string                       `json:"id"`
+	Object       string                       `json:"object"`
+	Provider     string                       `json:"provider"`
 }
 
 type BatchImagePublicModelsResponse struct {
@@ -413,6 +416,9 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		ExplicitImageConfig: true,
 		Metadata:            normalized.Metadata,
 		Items:               make([]BatchImageInputItem, 0, len(normalized.Items)),
+	}
+	if isImageBridgeProvider(job.Provider) {
+		input.ImageSize = normalized.ImageSize
 	}
 	// Both supported upstream families always receive an explicit source-tier
 	// image config. The durable job retains the requested 1K/2K/4K tier; the
@@ -871,11 +877,15 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				continue
 			}
 			for _, model := range batchImageModelsFromAccountMapping(&account) {
+				if isImageBridgeProvider(providerName) && s.bridgeModel(model) == nil {
+					continue
+				}
 				modelPlatform, ok := batchImageModelPlatform(model)
 				if !ok || modelPlatform != batchImageProviderPlatform(providerName) {
 					continue
 				}
-				if _, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: providerName, Model: model}); err != nil {
+				if price, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: providerName,
+					Model: model}); err != nil || ((providerName == BatchImageProviderMuse || providerName == BatchImageProviderWorkBuddy || isImageBridgeProvider(providerName)) && price <= 0) {
 					continue
 				}
 				if !batchImageAccountSupportsProviderModel(providerName, &account, model) {
@@ -898,9 +908,10 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		sort.Strings(models)
 		for _, model := range models {
 			out = append(out, BatchImagePublicModel{
-				ID:       model,
-				Object:   "image.batch.model",
-				Provider: providerName,
+				ID:           model,
+				Object:       "image.batch.model",
+				Provider:     providerName,
+				Capabilities: s.modelCapabilities(model),
 			})
 		}
 	}
@@ -1363,6 +1374,12 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	if !ok {
 		return req, ErrBatchImageInvalidModel
 	}
+	if (isWorkBuddyImageModel(req.Model) && req.Provider != "" && req.Provider != BatchImageProviderWorkBuddy) || (req.Provider == BatchImageProviderWorkBuddy && !isWorkBuddyImageModel(req.Model)) {
+		return req, ErrBatchImageUnsupportedProvider
+	}
+	if (req.Model == "muse-image" && req.Provider != "" && req.Provider != BatchImageProviderMuse) || (req.Provider == BatchImageProviderMuse && req.Model != "muse-image") {
+		return req, ErrBatchImageUnsupportedProvider
+	}
 	if req.TaskName == "" {
 		req.TaskName = defaultBatchImageTaskName(time.Now())
 	}
@@ -1397,26 +1414,50 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 		[]BatchImageSharedReferenceInput(nil),
 		req.SharedReferenceImages...,
 	)
+	bridge := s.bridgeModel(req.Model)
+	if imageBridgeProviderForModel(req.Model) != "" {
+		if bridge == nil || (req.Provider != "" && req.Provider != imageBridgeProviderForModel(req.Model)) {
+			return req, ErrBatchImageInvalidModel
+		}
+		if req.ImageSize == "" {
+			req.ImageSize = bridge.DefaultImageSize
+		}
+		if req.AspectRatio == "" {
+			req.AspectRatio = bridge.DefaultAspectRatio
+		}
+	}
 	if req.ResponseMimeType == "" {
 		req.ResponseMimeType = s.defaultResponseMimeType()
 	}
 	if req.ImageSize == "" {
 		req.ImageSize = s.defaultImageSize()
 	}
-	req.ImageSize = strings.ToUpper(req.ImageSize)
-	switch req.ImageSize {
-	case "1K":
-	case "2K", "4K":
-		if !isImage25SupportedAspectRatio(req.AspectRatio) {
-			return req, ErrBatchImageInvalidItems
-		}
-		if s == nil || s.Config == nil || !s.Config.ImageUpscale.Active() {
-			return req, ErrBatchImageUpscaleUnavailable
-		}
-	default:
+	if isWorkBuddyImageModel(req.Model) && (req.AspectRatio != "" || req.ImageSize != "1K" || req.ResponseMimeType != "image/png") {
 		return req, ErrBatchImageInvalidItems
 	}
-	if modelPlatform == PlatformOpenAI {
+	if req.Model == "muse-image" && (req.AspectRatio != "" || req.ImageSize != "1K" || req.ResponseMimeType != "image/png") {
+		return req, ErrBatchImageInvalidItems
+	}
+	req.ImageSize = strings.ToUpper(req.ImageSize)
+	if bridge != nil {
+		if bridge.size(req.ImageSize, req.AspectRatio) == "" || !slices.Contains(bridge.ResponseMimeTypes, req.ResponseMimeType) {
+			return req, ErrBatchImageInvalidItems
+		}
+	} else {
+		switch req.ImageSize {
+		case "1K":
+		case "2K", "4K":
+			if !isImage25SupportedAspectRatio(req.AspectRatio) {
+				return req, ErrBatchImageInvalidItems
+			}
+			if s == nil || s.Config == nil || !s.Config.ImageUpscale.Active() {
+				return req, ErrBatchImageUpscaleUnavailable
+			}
+		default:
+			return req, ErrBatchImageInvalidItems
+		}
+	}
+	if modelPlatform == PlatformOpenAI && bridge == nil {
 		if _, err := batchImageOpenAI1KSizeForAspectRatio(req.AspectRatio); err != nil {
 			return req, ErrBatchImageInvalidItems
 		}
@@ -1443,6 +1484,22 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 		)
 		if resolveErr != nil {
 			return req, resolveErr
+		}
+		if bridge != nil && (len(resolvedReferences) > bridge.MaxReferenceImages || utf8.RuneCountInString(req.Items[i].Prompt) > 6000 || req.Items[i].OutputCount > 1) {
+			return req, ErrBatchImageInvalidItems
+		}
+		if isWorkBuddyImageModel(req.Model) {
+			if len(resolvedReferences) != workBuddyImageReferenceCount(req.Model) || req.Items[i].OutputCount > 1 {
+				return req, ErrBatchImageInvalidItems
+			}
+			for _, ref := range resolvedReferences {
+				if len(ref.Data) > 8<<20 {
+					return req, ErrBatchImageInvalidItems
+				}
+			}
+		}
+		if req.Model == "muse-image" && (len(resolvedReferences) > 1 || req.Items[i].OutputCount > 1) {
+			return req, ErrBatchImageInvalidItems
 		}
 		req.Items[i].ReferenceImages = resolvedReferences
 		req.Items[i].CustomID = strings.TrimSpace(req.Items[i].CustomID)
@@ -1521,7 +1578,7 @@ func normalizeBatchImageReferenceInputs(model string, item *BatchImageSubmitItem
 		// gs:// references are a Gemini/Vertex transport. OpenAI Images receives
 		// only server-validated inline bytes so a private object URI can never be
 		// forwarded as if it were a public image URL.
-		if IsGPTImageGenerationModel(model) && strings.TrimSpace(normalized.FileURI) != "" {
+		if (isWorkBuddyImageModel(model) || model == "muse-image" || imageBridgeProviderForModel(model) != "" || IsGPTImageGenerationModel(model)) && strings.TrimSpace(normalized.FileURI) != "" {
 			return 0, 0, ErrBatchImageInvalidReferenceImage
 		}
 		inlineBytes += len(normalized.Data)
@@ -1635,6 +1692,15 @@ func batchImageRepeatSuffixWidth(count int) int {
 }
 
 func maxBatchImageReferenceImagesForModel(model string) int {
+	if isWorkBuddyImageModel(model) {
+		return workBuddyImageReferenceCount(model)
+	}
+	if imageBridgeProviderForModel(model) != "" {
+		return 14
+	}
+	if model == "muse-image" {
+		return 1
+	}
 	model = strings.ToLower(strings.TrimSpace(model))
 	if IsGPTImageGenerationModel(model) {
 		return 16
@@ -1740,7 +1806,7 @@ func (s *BatchImagePublicService) batchImageGroupPlatform(ctx context.Context, g
 // legacy missing-type groups intentionally keep the legacy normalization rules;
 // this mirrors the ordinary OpenAI usage finalization boundary.
 func batchImageUsesOpenAIWalletPricing(provider string, group *Group) bool {
-	return strings.TrimSpace(provider) == BatchImageProviderOpenAI &&
+	return (strings.TrimSpace(provider) == BatchImageProviderOpenAI || strings.TrimSpace(provider) == BatchImageProviderMuse || strings.TrimSpace(provider) == BatchImageProviderWorkBuddy || isImageBridgeProvider(provider)) &&
 		group != nil &&
 		NormalizeGroupPlatform(group.Platform) == PlatformOpenAI &&
 		group.SubscriptionType == SubscriptionTypeStandard
@@ -1811,10 +1877,13 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		}
 		unit = resolvedUnit
 	}
+	if (provider == BatchImageProviderMuse || provider == BatchImageProviderWorkBuddy || isImageBridgeProvider(provider)) && unit <= 0 {
+		return nil, ErrBatchImageSettlementPricingMissing
+	}
 	// OpenAI Image batch has no Gemini-style batch discount. Keep the hold at
 	// least the undiscounted amount as well, otherwise a successful item could
 	// exceed the reserved balance even though the provider price is correct.
-	openAIImageProvider := strings.TrimSpace(provider) == BatchImageProviderOpenAI
+	openAIImageProvider := (strings.TrimSpace(provider) == BatchImageProviderOpenAI || strings.TrimSpace(provider) == BatchImageProviderMuse || strings.TrimSpace(provider) == BatchImageProviderWorkBuddy || isImageBridgeProvider(provider))
 	if openAIImageProvider {
 		discountMultiplier = 1
 		if holdMultiplier < 1 {
@@ -2091,7 +2160,7 @@ func batchImageProviderPlatform(provider string) string {
 	switch provider {
 	case BatchImageProviderGeminiAPI, BatchImageProviderVertex:
 		return PlatformGemini
-	case BatchImageProviderOpenAI:
+	case BatchImageProviderOpenAI, BatchImageProviderMuse, BatchImageProviderWorkBuddy, BatchImageProviderWan, BatchImageProviderSeedream:
 		return PlatformOpenAI
 	default:
 		return ""
@@ -2103,6 +2172,15 @@ func batchImageProviderSelectionOrder(requestedProvider string, models ...string
 		return []string{strings.TrimSpace(requestedProvider)}
 	}
 	if len(models) > 0 {
+		if p := imageBridgeProviderForModel(models[0]); p != "" {
+			return []string{p}
+		}
+		if isWorkBuddyImageModel(models[0]) {
+			return []string{BatchImageProviderWorkBuddy}
+		}
+		if models[0] == "muse-image" {
+			return []string{BatchImageProviderMuse}
+		}
 		switch platform, ok := batchImageModelPlatform(models[0]); {
 		case !ok:
 			return nil
@@ -2112,11 +2190,11 @@ func batchImageProviderSelectionOrder(requestedProvider string, models ...string
 			return []string{BatchImageProviderGeminiAPI, BatchImageProviderVertex}
 		}
 	}
-	return []string{BatchImageProviderGeminiAPI, BatchImageProviderVertex, BatchImageProviderOpenAI}
+	return []string{BatchImageProviderGeminiAPI, BatchImageProviderVertex, BatchImageProviderOpenAI, BatchImageProviderMuse, BatchImageProviderWorkBuddy, BatchImageProviderWan, BatchImageProviderSeedream}
 }
 
 func batchImageModelPlatform(model string) (string, bool) {
-	if isOpenAIImageBatchModel(model) {
+	if isWorkBuddyImageModel(model) || model == "muse-image" || imageBridgeProviderForModel(model) != "" || isOpenAIImageBatchModel(model) {
 		return PlatformOpenAI, true
 	}
 	if isGeminiCompatibleImageModel(model) {
@@ -2172,6 +2250,24 @@ func batchImageModelsFromAccountMapping(account *Account) []string {
 
 func batchImageAccountSupportsProviderModel(providerName string, account *Account, requestedModel string) bool {
 	if account == nil || !account.IsModelSupported(requestedModel) {
+		return false
+	}
+	if isImageBridgeProvider(providerName) {
+		return imageBridgeProviderForModel(requestedModel) == providerName && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && account.GetModelMapping()[requestedModel] == requestedModel
+	}
+	if imageBridgeProviderForModel(requestedModel) != "" {
+		return false
+	}
+	if providerName == BatchImageProviderWorkBuddy {
+		return isWorkBuddyImageModel(requestedModel) && workBuddyImageAccountReady(account) && account.GetModelMapping()[requestedModel] == requestedModel
+	}
+	if isWorkBuddyImageModel(requestedModel) {
+		return false
+	}
+	if providerName == BatchImageProviderMuse {
+		return requestedModel == "muse-image" && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && account.GetModelMapping()[requestedModel] == "muse-image"
+	}
+	if requestedModel == "muse-image" {
 		return false
 	}
 	if providerName == BatchImageProviderOpenAI {

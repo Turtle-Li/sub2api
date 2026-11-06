@@ -1,0 +1,125 @@
+{
+  "revision": "4edef85ab3716fd43989b4a49561a148ba500d93",
+  "verbatim_segments": [
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/wan_provider_phase.py",
+      "lines": [
+        37,
+        37
+      ],
+      "sha256": "e322ec962a03dc3d44e4a4d6d6b4a5613fa64cedc5b7d8caeaa192c75e6b738b"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/wan_provider_phase.py",
+      "lines": [
+        42,
+        79
+      ],
+      "sha256": "5e5b93f5c8bfce94d672e162f8e25c9818461519274ced407c3f84cf46ca60f8"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/wan_provider_phase.py",
+      "lines": [
+        275,
+        487
+      ],
+      "sha256": "691b57314a811c41e1bbb330dddc532b1b5069a26dd192e2b10f3dea5f7304d6"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/wan_provider_phase.py",
+      "lines": [
+        826,
+        868
+      ],
+      "sha256": "7e20fd4f5ebb1e1f4dd19aabccba4fdfc6bee0cb3886fa716452e5704b24ea7e"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/seedream_provider_phase.py",
+      "lines": [
+        51,
+        108
+      ],
+      "sha256": "1a31dd45fd2266bff68723e841b68cb8497dc65af09c477865ff121909a9f430"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/seedream_provider_phase.py",
+      "lines": [
+        311,
+        428
+      ],
+      "sha256": "757fdc9e74eeb79afb238bc896f3982fb846a071c591a7be3e4778a9841fd592"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/seedream_provider_phase.py",
+      "lines": [
+        580,
+        659
+      ],
+      "sha256": "4de5d4205c419fb19c629eadc264aa858a584c9350656422dfbcd6c742e54e95"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/vso_worker/seedream_model_policy.py",
+      "lines": [
+        1,
+        202
+      ],
+      "sha256": "f78be060a17f584b2c2065f49846d2e0ae887bdf98d4a9b2001e4ae618d0ea2d"
+    }
+  ],
+  "adapted_body_checks": {
+    "wan_provider_phase.py": [
+      249,
+      272
+    ],
+    "seedream_provider_phase.py": [
+      212,
+      303
+    ]
+  },
+  "reused_test_fixtures": [
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/tests/test_seedream_http_transport_shape.py",
+      "symbol": "_ServerState",
+      "lines": [
+        176,
+        179
+      ],
+      "sha256": "f5a66281bc433b177a3a9add618feaee96e7c68d96b11991f8244fbbdbfc11c0"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/tests/test_seedream_http_transport_shape.py",
+      "symbol": "_handler_for",
+      "lines": [
+        182,
+        231
+      ],
+      "sha256": "30e347e683655b2ed0d640949329232bed92ebcd07e5d8f54bd222cfc64f76b3"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/tests/test_seedream_http_transport_shape.py",
+      "symbol": "_fake_ark",
+      "lines": [
+        234,
+        246
+      ],
+      "sha256": "d387eaabdce87a35bf7652d81a88137a2c53f4d12eec7f99c5aa2974cd060950"
+    },
+    {
+      "source": "/Users/lijiayu/auto_work/\u4e00\u952e\u751f\u56fe/video-skill-orchestrator/worker/tests/test_seedream_http_transport_shape.py",
+      "symbol": "_LoopbackSession",
+      "lines": [
+        249,
+        267
+      ],
+      "sha256": "69fd4aed2a001971f8edaf542bcb1be64154679b98cde4b6f05692642d158daa"
+    }
+  ],
+  "intentional_policy_differences": [
+    "Body validators remove VSO lease/envelope predicates; n=1",
+    "Wan text-only content accepted by additional neutral predicate; original _approved_wan_content unchanged",
+    "Seedream image field optional; absent image counted as zero references; upper bound and exact remaining fields retained",
+    "Credentials omit VSO lease/cost fields; endpoint/key/timeout checks retained at CLI boundary",
+    "Bounded Session buffering and conservative malformed-response classification added outside original clients",
+    "Neutral Seedream n=1 validator removes unreachable multi-output fields/options branches; exact remaining allowed-field sets reject sequential_image_generation_options"
+  ]
+}

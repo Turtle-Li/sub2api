@@ -300,6 +300,8 @@ func batchImageUsageUpstreamEndpoint(provider string) string {
 		return "vertex:batchPredictionJobs"
 	case BatchImageProviderOpenAI:
 		return "openai:images"
+	case BatchImageProviderMuse:
+		return "muse:v1/images/tasks"
 	default:
 		return "batch:" + strings.TrimSpace(provider)
 	}
