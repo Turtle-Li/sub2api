@@ -115,13 +115,14 @@ func ProvideBatchImagePublicService(
 	billingRepo UsageBillingRepository,
 	authCache APIKeyAuthCacheInvalidator,
 	deliveryStore BatchImageDeliveryObjectStore,
+	openAIGateway *OpenAIGatewayService,
 	cfg *config.Config,
 ) *BatchImagePublicService {
 	svc := NewBatchImagePublicService(
 		repo, accountRepo, groupRepo, userGroupRateRepo, queue,
 		pricing, billingRepo, authCache, cfg,
 	)
-	svc.ProviderRegistry = NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, nil)
+	svc.ProviderRegistry = NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, openAIGateway)
 	return svc
 }
 

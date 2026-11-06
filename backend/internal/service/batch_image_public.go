@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -884,8 +885,11 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				if !ok || modelPlatform != batchImageProviderPlatform(providerName) {
 					continue
 				}
-				if price, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: providerName,
-					Model: model}); err != nil || ((providerName == BatchImageProviderMuse || providerName == BatchImageProviderWorkBuddy || isImageBridgeProvider(providerName)) && price <= 0) {
+				if providerName == BatchImageProviderMuse || providerName == BatchImageProviderWorkBuddy || isImageBridgeProvider(providerName) {
+					if !s.nativeImageCatalogPriceAvailable(ctx, owner, providerName, model, &account) {
+						continue
+					}
+				} else if _, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: providerName, Model: model}); err != nil {
 					continue
 				}
 				if !batchImageAccountSupportsProviderModel(providerName, &account, model) {
@@ -916,6 +920,19 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		}
 	}
 	return &BatchImagePublicModelsResponse{Object: "list", Data: out}, nil
+}
+
+func (s *BatchImagePublicService) nativeImageCatalogPriceAvailable(ctx context.Context, owner BatchImageOwner, provider, model string, account *Account) bool {
+	caps := s.modelCapabilities(model)
+	if caps == nil {
+		return false
+	}
+	for _, size := range caps.ImageSizes {
+		if _, err := s.resolvePricingSnapshot(ctx, owner, BatchImageSubmitRequest{Model: model, ImageSize: size}, provider, account); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *BatchImagePublicService) ListItems(ctx context.Context, owner BatchImageOwner, batchID string, query BatchImageItemsQuery) (*BatchImagePublicItemsResponse, error) {
@@ -1877,7 +1894,7 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		}
 		unit = resolvedUnit
 	}
-	if (provider == BatchImageProviderMuse || provider == BatchImageProviderWorkBuddy || isImageBridgeProvider(provider)) && unit <= 0 {
+	if (provider == BatchImageProviderMuse || provider == BatchImageProviderWorkBuddy || isImageBridgeProvider(provider)) && (unit <= 0 || math.IsNaN(unit) || math.IsInf(unit, 0)) {
 		return nil, ErrBatchImageSettlementPricingMissing
 	}
 	// OpenAI Image batch has no Gemini-style batch discount. Keep the hold at
