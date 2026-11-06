@@ -64,9 +64,9 @@ entitlements remain the original snapshots.
    with `shop_daypass.weekly_enabled: false`; allow older colors to drain.
    Verify the daily checkout still works. Stage and review the product copy
    change in the existing admin editor.
-3. Under the documented maintenance lock, enable weekly sales and load that
-   configuration only after every serving or draining binary is compatible.
-   Save the reviewed name and copy on the same product in the admin editor.
+3. Save and verify the reviewed name and copy on the same product in the admin
+   editor. Under the documented maintenance lock, enable weekly sales and load
+   that configuration only after every serving or draining binary is compatible.
    Verify the name, both weekly amounts and stored durations with unpaid
    checkout only, and cancel any disposable unpaid orders. Live purchase
    requires its own authorization.
@@ -100,3 +100,40 @@ to reload the exact already-verified image after staging the switch.
   default, both weekly prices, payment method availability, and the CNY 40
   checkout with no horizontal overflow. Browser checkout used fixture data;
   there were no production payments or catalog changes.
+
+## Production evidence, 2026-11-06
+
+- Receiver deployed first: New API `v1.0.0-rc.47-daypass-guard.5.2`. Private
+  Ready returned both periods and tiers. Four disposable receiver-only
+  receipts verified exact 24/168-hour key and subscription deadlines, replay,
+  mismatched period rejection and revoke. Public control stayed 404/isolated.
+  The public corresponding source matched the receiver manifest.
+- Code merged into owner fork `main` at
+  `32adb35ba3da318df06db17315232b6e01285c3b`. The canonical GitHub Actions
+  [run 42175986610](https://github.com/Turtle-Li/sub2api/actions/runs/42175986610)
+  succeeded. Image `sub2api:auto-20261105-225106-32adb35b`,
+  ID `sha256:90055a83236698d9087c877358719d62e191cd64ca6721ea20201b6cb7898ec6`.
+  Archive: 94190975 bytes, SHA256
+  `440dfb53649a6f4394c99dfd3f0a8b50df73a9e0f0c41abd363ed4a3c699cc1d`.
+- Phase one `gha-20261105-225106-32adb35b-3279882` kept weekly disabled.
+  Daily checkout displayed CNY 6/8. The previous revision exited normally.
+  The admin editor saved the period-neutral name and description on product 3;
+  its base price, duration and automatic action remained intact.
+- Phase two `daypass-weekly-enable-20261106T065703Z` reused the same image
+  through the locked prebuilt path with the configured API health URL.
+  Config helper SHA256
+  `da912f40a5c3c176a20239424c3cf5d7825a9d76ff33cd8935bf86a4b9894d69`,
+  backup `/opt/sub2api/staging/daypass-weekly-config-nqta477g`.
+  Caddy selected healthy `sub2api-blue` at the exact revision with zero
+  restarts; green exited normally. Release audit app_5xx/app_fatal/caddy_5xx
+  were zero. Both public health checks passed.
+- Real browser: [product 3](https://www.turtleligpt.com/shop/products/3)
+  displayed **DeepSeek API 不限量订阅卡**, 24 hours by default, and
+  an optional 7 days. Orders 70 and 71 stored 7 days, respectively
+  2 concurrent/CNY 30 and 3 concurrent/CNY 40. Both show cancelled,
+  unpaid and delivery not started. No payment or callback was simulated.
+  Local screenshot: `artifacts/ds-weekly-20261106/live-weekly-picker.jpg`.
+
+The first weekly checkouts now exist. Keep revision 32adb35b or a compatible
+later Sub2 binary, plus guard.5.2 or later compatible receiver, when stopping
+new weekly sales or recovering. Preserve the live databases and receipts.
