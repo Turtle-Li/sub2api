@@ -764,7 +764,7 @@ export interface SystemSettings {
 
   // Channel Monitor feature switch
   channel_monitor_enabled: boolean;
-  channel_monitor_mode?: 'v1' | 'v2';
+  channel_monitor_mode?: 'v1' | 'v2' | 'v3';
   channel_monitor_default_interval_seconds: number;
   channel_monitor_hide_throughput?: boolean;
   channel_monitor_show_quota?: boolean;
@@ -1081,7 +1081,7 @@ export interface UpdateSettingsRequest {
 
   // Channel Monitor feature switch
   channel_monitor_enabled?: boolean;
-  channel_monitor_mode?: 'v1' | 'v2';
+  channel_monitor_mode?: 'v1' | 'v2' | 'v3';
   channel_monitor_default_interval_seconds?: number;
   channel_monitor_hide_throughput?: boolean;
   channel_monitor_show_quota?: boolean;

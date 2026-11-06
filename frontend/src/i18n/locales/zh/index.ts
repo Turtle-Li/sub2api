@@ -2,6 +2,7 @@ import adminAccessKeys from './adminAccessKeys'
 import landing from './landing'
 import common from './common'
 import dashboard from './dashboard'
+import channelMonitorV3 from './channelMonitorV3'
 import channelMonitorV2 from './channelMonitorV2'
 import batchImage from './batchImage'
 import admin from './admin'
@@ -13,6 +14,7 @@ export default {
   ...common,
   ...dashboard,
   ...channelMonitorV2,
+  ...channelMonitorV3,
   ...batchImage,
   admin,
   ...misc,

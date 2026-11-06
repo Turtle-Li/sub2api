@@ -136,6 +136,7 @@ func RegisterAdminRoutes(
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h, settingService)
 		registerChannelMonitorV2Routes(admin, h, settingService)
+		registerChannelMonitorV3AdminRoutes(admin, h)
 
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
@@ -1053,7 +1054,7 @@ func channelMonitorModeV2Guard(settingService *service.SettingService) gin.Handl
 			c.Abort()
 			return
 		}
-		if !rt.PassiveAggregationAllowed() {
+		if !rt.V2Active() {
 			response.ErrorFrom(c, service.ErrChannelMonitorModeMismatch)
 			c.Abort()
 			return

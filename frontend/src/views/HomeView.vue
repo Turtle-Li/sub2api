@@ -49,6 +49,7 @@
             <Icon name="grid" size="md" />
             <span class="hidden sm:inline">{{ t('nav.modelPlaza') }}</span>
           </router-link>
+          <router-link to="/status" class="flex h-10 shrink-0 items-center rounded-lg px-2.5 text-sm text-gray-500 hover:bg-gray-100 dark:text-dark-400 dark:hover:bg-dark-800">{{ t('channelMonitorV3.page.systemStatus') }}</router-link>
           <button
             class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:text-dark-400 dark:hover:bg-dark-800"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"

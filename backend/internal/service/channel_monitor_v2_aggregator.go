@@ -158,7 +158,7 @@ func (s *ChannelMonitorV2Aggregator) loop() {
 			continue
 		}
 		if cfg, err := s.repo.GetConfig(ctx); err == nil {
-			if !cfg.Enabled {
+			if !channelMonitorCollectionEnabled(s.settings.GetChannelMonitorRuntime(ctx), cfg.Enabled) {
 				cancel()
 				if !s.wait(interval) {
 					return

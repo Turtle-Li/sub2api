@@ -8,7 +8,11 @@ import ChannelMonitorView from '@/views/admin/ChannelMonitorView.vue'
 // P2-7(d)：provider 徽章旁并列 check_mode 徽章，三种检测模式一眼可分
 // （quota 系 = 账号配额数据源，probe = 纯探活）。
 
-const { listMonitors } = vi.hoisted(() => ({ listMonitors: vi.fn() }))
+const { listMonitors, setMode } = vi.hoisted(() => ({ listMonitors: vi.fn(), setMode: vi.fn() }))
+vi.mock('@/api/channelMonitorV3', () => ({ setMonitorMode: setMode }))
+vi.mock('@/features/channel-monitor-v3/V3SettingsPanel.vue', () => ({
+  default: { template: '<div data-testid="v3-settings" />' },
+}))
 
 vi.mock('@/utils/featureFlags', () => ({
   isChannelMonitorV1Mode: () => true,
@@ -120,6 +124,22 @@ describe('ChannelMonitorView check-mode badge', () => {
   beforeEach(() => {
     localStorage.clear()
     listMonitors.mockReset()
+  })
+  it('navigates all three configuration tabs without changing the global mode', async () => {
+    listMonitors.mockResolvedValue({ items: [], total: 0 })
+    const wrapper = mountView()
+    await flushPromises()
+    const tabs = wrapper.findAll('[role="tab"]')
+    expect(tabs).toHaveLength(3)
+    await wrapper.get('[data-testid="monitor-v3-tab"]').trigger('click')
+    expect(wrapper.find('[data-testid="v3-settings"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="monitor-v3-tab"]').attributes('aria-selected')).toBe('true')
+    await tabs[1].trigger('click')
+    expect(wrapper.find('[data-testid="v2-settings"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="monitor-v3-tab"]').trigger('click')
+    expect(wrapper.find('[data-testid="v3-settings"]').exists()).toBe(true)
+    expect(setMode).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it.each([

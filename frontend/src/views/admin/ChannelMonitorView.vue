@@ -1,6 +1,7 @@
 <template>
   <AppLayout>
     <div class="w-full min-w-0 space-y-6 pb-8">
+      <div class="flex gap-2"><button v-for="mode in (['v1', 'v2', 'v3'] as const)" :key="mode" class="btn btn-secondary" :disabled="switchingMode" @click="selectMode(mode)">{{ mode }}</button><router-link to="/status" class="btn btn-secondary">/status</router-link></div>
       <header
         class="page-header mb-0 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-800 dark:ring-dark-700 sm:p-6"
       >
@@ -14,7 +15,7 @@
           {{
             isV1Mode
               ? t('channelMonitorV2.admin.descriptionV1')
-              : t('channelMonitorV2.admin.descriptionV2')
+              : getChannelMonitorMode() === 'v3' ? t('channelMonitorV3.admin.modeDescription') : t('channelMonitorV2.admin.descriptionV2')
           }}
         </p>
         <div class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700">
@@ -23,6 +24,15 @@
             role="tablist"
             :aria-label="t('channelMonitorV2.admin.tabAria')"
           >
+            <button
+              type="button"
+              role="tab"
+              class="tab flex-1 sm:flex-none"
+              :class="adminMonitorTab === 'v3' ? 'tab-active' : ''"
+              :aria-selected="adminMonitorTab === 'v3'"
+              data-testid="monitor-v3-tab"
+              @click="adminMonitorTab = 'v3'"
+            >{{ t('channelMonitorV3.admin.tab') }}</button>
             <button
               type="button"
               role="tab"
@@ -47,7 +57,8 @@
         </div>
       </header>
 
-      <MonitorSettingsPanel v-if="adminMonitorTab === 'v2'" />
+      <V3SettingsPanel v-if="adminMonitorTab === 'v3'" />
+      <MonitorSettingsPanel v-else-if="adminMonitorTab === 'v2'" />
 
       <TablePageLayout v-else>
       <template #filters>
@@ -198,13 +209,28 @@ import MonitorPrimaryModelCell from '@/components/admin/monitor/MonitorPrimaryMo
 import MonitorActionsCell from '@/components/admin/monitor/MonitorActionsCell.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
+import V3SettingsPanel from '@/features/channel-monitor-v3/V3SettingsPanel.vue'
+import { setMonitorMode } from '@/api/channelMonitorV3'
 import MonitorSettingsPanel from '@/features/channel-monitor-v2/MonitorSettingsPanel.vue'
-import { isChannelMonitorV1Mode } from '@/utils/featureFlags'
+import { getChannelMonitorMode, isChannelMonitorV1Mode, type ChannelMonitorMode } from '@/utils/featureFlags'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const isV1Mode = computed(() => isChannelMonitorV1Mode())
-const adminMonitorTab = ref<'v2' | 'legacy'>(isChannelMonitorV1Mode() ? 'legacy' : 'v2')
+const adminMonitorTab = ref<'v2' | 'legacy' | 'v3'>(getChannelMonitorMode() === 'v3' ? 'v3' : isChannelMonitorV1Mode() ? 'legacy' : 'v2')
+const switchingMode = ref(false)
+async function selectMode(mode: ChannelMonitorMode) {
+  switchingMode.value = true
+  try {
+    await setMonitorMode(mode)
+    if (appStore.cachedPublicSettings) appStore.cachedPublicSettings.channel_monitor_mode = mode
+    adminMonitorTab.value = mode === 'v1' ? 'legacy' : mode
+  } catch {
+    appStore.showError(t('common.error'))
+  } finally {
+    switchingMode.value = false
+  }
+}
 const {
   providerLabel,
   providerBadgeClass,

@@ -404,13 +404,13 @@ const (
 	defaultChannelMonitorMode      = ChannelMonitorModeV1
 )
 
-// normalizeChannelMonitorMode accepts only v1/v2; empty/invalid → v1 (safe default).
+// normalizeChannelMonitorMode accepts v1/v2/v3; empty/invalid defaults to v1.
 func normalizeChannelMonitorMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case ChannelMonitorModeV1, "":
 		return ChannelMonitorModeV1
-	case ChannelMonitorModeV2:
-		return ChannelMonitorModeV2
+	case ChannelMonitorModeV2, ChannelMonitorModeV3:
+		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return defaultChannelMonitorMode
 	}
@@ -464,15 +464,15 @@ func (r ChannelMonitorRuntime) ActiveProbesAllowed() bool {
 
 // PassiveAggregationAllowed reports whether V2 passive aggregation may run.
 func (r ChannelMonitorRuntime) PassiveAggregationAllowed() bool {
-	return r.Enabled && r.Mode == ChannelMonitorModeV2
+	return r.Enabled && (r.Mode == ChannelMonitorModeV2 || r.Mode == ChannelMonitorModeV3)
 }
 
 // GetChannelMonitorRuntime reads the channel monitor feature flags directly from
-// the settings store. Fail-open: on error returns Enabled=true, Mode=v1, default interval.
+// the settings store. Missing dependencies or read errors disable monitoring.
 func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMonitorRuntime {
 	if s == nil || s.settingRepo == nil {
 		return ChannelMonitorRuntime{
-			Enabled:                true,
+			Enabled:                false,
 			Mode:                   defaultChannelMonitorMode,
 			DefaultIntervalSeconds: channelMonitorIntervalFallback,
 			HideThroughput:         true,
@@ -488,7 +488,7 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 	})
 	if err != nil {
 		return ChannelMonitorRuntime{
-			Enabled:                true,
+			Enabled:                false,
 			Mode:                   defaultChannelMonitorMode,
 			DefaultIntervalSeconds: channelMonitorIntervalFallback,
 			HideThroughput:         true,

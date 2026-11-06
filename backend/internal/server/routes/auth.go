@@ -23,6 +23,7 @@ func RegisterAuthRoutes(
 	panelRateLimiter *servermiddleware.PanelRateLimiter,
 ) {
 	// 创建速率限制器
+	registerChannelMonitorV3PublicRoutes(v1, h, settingService, panelRateLimiter)
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// 公开接口

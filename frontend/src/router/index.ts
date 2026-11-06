@@ -20,6 +20,9 @@ import { resolveRouteDocumentTitle } from './title'
 const routes: RouteRecordRaw[] = [
   // ==================== Setup Routes ====================
   {
+    path: '/status', component: () => import('@/views/user/ChannelStatusV3View.vue'), props: { publicView: true }, meta: { requiresAuth: false, title: 'Model status' }
+  },
+  {
     path: '/setup',
     name: 'Setup',
     component: () => import('@/views/setup/SetupWizardView.vue'),

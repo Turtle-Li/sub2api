@@ -1,5 +1,12 @@
 # Sub2API project operations
 
+## Model availability status
+
+- Before changing public/model availability, component history, incidents or
+  monitor mode V3, read `docs/features/MODEL_AVAILABILITY_STATUS.md` for pinned
+  source/test references and local privacy, authorization and statistics rules.
+  Anonymous publication is opt-in; no samples or stale data must remain unknown.
+
 ## Codex OAuth relay Fast compatibility
 
 - Before changing CPR relay billing declarations or usage-list Fast badges, read

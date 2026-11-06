@@ -3,9 +3,11 @@ import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 
 const isV1 = vi.fn(() => false)
+const mode = vi.fn(() => 'v2')
 
 vi.mock('@/utils/featureFlags', () => ({
   isChannelMonitorV1Mode: () => isV1(),
+  getChannelMonitorMode: () => mode(),
 }))
 
 vi.mock('../ChannelStatusV1View.vue', () => ({
@@ -16,10 +18,14 @@ vi.mock('../ChannelStatusV2View.vue', () => ({
 }))
 
 import ChannelStatusView from '../ChannelStatusView.vue'
+vi.mock('../ChannelStatusV3View.vue', () => ({
+  default: defineComponent({ setup: () => () => h('div', { 'data-testid': 'v3' }) }),
+}))
 
 describe('ChannelStatusView mode switch', () => {
   beforeEach(() => {
     isV1.mockReset()
+    mode.mockReturnValue('v2')
   })
 
   it('renders V2 when not in v1 mode', () => {
@@ -27,6 +33,10 @@ describe('ChannelStatusView mode switch', () => {
     const wrapper = mount(ChannelStatusView)
     expect(wrapper.find('[data-testid="v2"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="v1"]').exists()).toBe(false)
+  })
+  it('renders V3 when selected', () => {
+    mode.mockReturnValue('v3')
+    expect(mount(ChannelStatusView).find('[data-testid="v3"]').exists()).toBe(true)
   })
 
   it('renders V1 when in v1 mode', () => {
