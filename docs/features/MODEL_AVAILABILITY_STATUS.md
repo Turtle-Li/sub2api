@@ -49,6 +49,25 @@ Historical availability is request success rate, not time-based SLA uptime.
 Use user-facing labels that identify this denominator. Unknown does not resolve
 an ongoing incident, and histories/events must obey the same viewer scope.
 
+### HTTP request outcomes
+
+Both pinned passive aggregation versions build usage successes and final
+errors independently. A failed HTTP stream can still write a positive-cost
+usage record for tokens it already delivered. For availability and latency
+only, the local V2 collector gives a terminal Ops error precedence over that
+partial usage. It matches the `client:` usage key to the gateway-generated
+`ops_error_logs.client_request_id` with the same API key, using the existing
+index. The client-facing `X-Request-ID` can be reused and is not used for
+this match; WebSocket billing keys are per turn and are not matched to a
+connection-wide ID.
+
+Recovered attempts logged with a final 2xx do not override a success. The
+existing final-error deduplication, V3 ignored error categories, usage token
+volumes and billing remain unchanged. Usage, errors and latency are computed
+from one transaction snapshot. The recent overlap rechecks late writes even
+when usage and its terminal error fall in different minutes. Older aggregates
+are refreshed only by the existing collector when it recomputes their range.
+
 ## Delivery plan
 
 | Task | Owner / allowed writes | Dependencies | Acceptance and evidence |
