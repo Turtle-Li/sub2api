@@ -81,7 +81,7 @@ onMounted(load)
           :key="product.id"
           class="flex min-w-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition-colors hover:border-primary-300 dark:border-dark-700 dark:bg-dark-800 dark:hover:border-primary-700"
         >
-          <div class="flex-1 px-4 pb-2 pt-4">
+          <div class="flex-1 p-4">
             <div class="flex min-h-[44px] items-center gap-3">
               <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-900 dark:bg-dark-700 dark:text-white" aria-hidden="true">
                 <PlatformIcon v-if="product.name.toLowerCase().includes('chatgpt')" platform="openai" size="lg" class="!h-7 !w-7" />
@@ -90,19 +90,6 @@ onMounted(load)
               <h2 class="min-w-0 break-words text-base font-semibold leading-[22px] text-gray-900 dark:text-white">{{ product.name }}</h2>
             </div>
             <p class="mt-3 min-h-[40px] line-clamp-2 break-words text-sm leading-5 text-gray-600 dark:text-gray-300">{{ product.summary }}</p>
-            <div class="mt-1 min-h-[44px]">
-              <RouterLink
-                v-if="product.guide_key"
-                :to="`/shop/help/${product.guide_key}`"
-                :aria-label="product.name + '：必看使用教程'"
-                class="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg text-xs font-medium text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-200"
-              >
-                <Icon name="book" size="sm" aria-hidden="true" />
-                <span>使用教程</span>
-                <span class="rounded bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">必看</span>
-                <Icon name="chevronRight" size="xs" aria-hidden="true" />
-              </RouterLink>
-            </div>
           </div>
 
           <div class="mt-auto flex items-end justify-between gap-3 border-t border-gray-100 bg-gray-50/60 px-4 py-3 dark:border-dark-700 dark:bg-dark-900/30">

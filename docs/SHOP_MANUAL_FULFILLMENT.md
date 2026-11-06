@@ -53,7 +53,7 @@ SHOP-20261104；实现范围：可配置商品、统一收银台、人工代充�
 
 教程依据 owner 提供的 `gptibo-help/chatgpt-plus-account-inline.md` 和 `https://gptibo.com/help/chatgpt-plus-account` 手工整理为语义化 HTML，保留操作、13 张本地示意图及售后范围，合并重复强调。页面 `/shop/help/chatgpt-plus-account`，正文 `frontend/src/content/shop/chatgpt-plus-account.html`，图片 `frontend/public/shop/help/`；不再通过 Markdown 渲染教程。没有参考站品牌、商店导航、推广、页脚或外部图片请求；外链仅限操作需要的微软/Outlook、ChatGPT 与 2fa.cn。
 
-桌面教程使用固定章节目录、限宽正文、分步图文和图片大图入口，手机目录按需展开，FAQ 与两种 2FA 方式使用原生 details。成品号买家订单在账号资料之前显示独立的“必看”使用指南入口，摘要不再重复同一教程链接。商品卡、详情和交付邮件仍可访问教程。
+商品列表卡片只提供详情入口。SKU 商品详情内直接显示 DeepSeek 使用指南，ChatGPT 成品号图文指南可在同一区域展开。两处指南和独立教程页共用正文；订单和交付邮件仍可打开独立页，成品号订单的“必看”入口仍在账号资料之前。独立页在桌面使用固定章节目录和限宽正文，手机目录按需展开；FAQ 与两种 2FA 方式使用原生 details。
 
 实际查看了参考页面 `https://aishop.ovooo.cc/shop`。采用分类工具栏和商品卡的组织方式，保留 Sub2 的 AppLayout、组件、间距、青绿色和明暗主题。没有复制参考站点商品、价格、销量、库存或发货承诺。
 

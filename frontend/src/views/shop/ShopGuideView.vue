@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import DOMPurify from 'dompurify'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import content from '@/content/shop/chatgpt-plus-account.html?raw'
-import daypassContent from '@/content/shop/deepseek-daypass.html?raw'
+import ShopGuideContent from '@/components/shop/ShopGuideContent.vue'
 
 const route = useRoute()
 const daypass = computed(() => route.path === '/shop/help/deepseek-daypass')
-const html = computed(() => DOMPurify.sanitize(daypass.value ? daypassContent : content))
 const mobileNav = ref<HTMLDetailsElement | null>(null)
 const returnLink = computed(() => {
   for (const [key, path, label] of [['order', 'orders', '返回订单'], ['product', 'products', '返回商品']] as const) {
@@ -89,7 +86,7 @@ const sections = computed(() => daypass.value ? [
             </nav>
           </details>
 
-          <article id='guide-content' class='guide-article' tabindex='-1' v-html='html'></article>
+          <ShopGuideContent id='guide-content' class='guide-article' tabindex='-1' :guide-key="daypass ? 'deepseek-daypass' : 'chatgpt-plus-account'" />
         </div>
       </div>
     </div>
