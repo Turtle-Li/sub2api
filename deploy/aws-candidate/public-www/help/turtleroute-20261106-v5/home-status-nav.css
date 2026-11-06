@@ -1,0 +1,29 @@
+.ai-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.ai-header-actions .home-status-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #b8c0d1;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ai-header-actions .home-status-link:hover,
+.ai-header-actions .home-status-link:focus-visible {
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .ai-header-actions {
+    gap: 12px;
+  }
+
+  .ai-header-actions .home-status-link {
+    font-size: 12px;
+  }
+}

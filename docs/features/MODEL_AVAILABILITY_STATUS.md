@@ -113,8 +113,12 @@ task starts from freshly fetched `fork/main` at
 
 - Public page: `/status`; anonymous GET
   `/api/v1/public/channel-monitor-v3/status` and `/incidents`.
+  Find it under 模型状态 next to 控制台 in the static www homepage header.
+  The homepage is published separately from the application image.
 - Signed-in page: existing `/monitor`, selected when monitor mode is V3;
   GET `/api/v1/channel-monitor-v3/status` and `/incidents`.
+  The 模型状态 link sits below the dashboard for users and admins, and
+  respects the existing channel monitor feature flag.
 - Admin: `/admin/channels/monitor`, V3 configuration tab, category/component
   editors and preview. Mode writes use PUT
   `/api/v1/admin/channel-monitor-v3/mode`. System settings also preserve/select V3.
