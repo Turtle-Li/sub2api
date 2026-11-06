@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+  <defs>
+    <linearGradient id="ribbon" x1="47" y1="9" x2="83" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E3FFF7"/>
+      <stop offset=".38" stop-color="#9EF5E5"/>
+      <stop offset=".72" stop-color="#58BFD3"/>
+      <stop offset="1" stop-color="#7296EC"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="49" y1="10" x2="75" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#B3EFFF" stop-opacity=".05"/>
+    </linearGradient>
+    <g id="segment">
+      <path d="M50 8 83 27v34L68 52V36L50 26Z" fill="url(#ribbon)"/>
+      <path d="m75 32 8-5v34l-8-5Z" fill="#375B91" fill-opacity=".65"/>
+      <path d="M50 8 83 27l-8 5-25-15Z" fill="#D9FFF6" fill-opacity=".28"/>
+      <path d="m50 9 32 18v32M51 18l23 14v23" stroke="url(#edge)" stroke-linejoin="round"/>
+    </g>
+  </defs>
+  <use href="#segment"/>
+  <use href="#segment" transform="rotate(120 48 48)"/>
+  <use href="#segment" transform="rotate(240 48 48)"/>
+</svg>
