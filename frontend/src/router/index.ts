@@ -544,6 +544,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/image-models',
+    name: 'AdminImageModels',
+    component: () => import('@/views/admin/ImageModelsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Image Management',
+      titleKey: 'admin.imageModels.title',
+      descriptionKey: 'admin.imageModels.description'
+    }
+  },
+  {
     path: '/admin/channels',
     redirect: '/admin/channels/pricing'
   },

@@ -33,6 +33,11 @@
 
 ## Image Studio integration
 
+- For group-based image administration, read
+  `docs/features/IMAGE_STUDIO_ADMIN_20261107.md`. Reuse group/account updates,
+  preserve shared non-image allowlist rules, and distinguish configuration
+  availability from a real provider probe. WorkBuddy policy is an atomic
+  account-extra update; never modify its official updater or verified flag.
 - For the session-authenticated image workspace, read
   `docs/features/IMAGE_STUDIO_SESSION_API_20261107.md` and
   `frontend/src/features/image-studio/UPSTREAM.md` before editing. The latter

@@ -11,6 +11,7 @@ import plugins from './plugins'
 import modelTrace from './modelTrace'
 import clineUpstream from './clineUpstream'
 import paidFallback from './paidFallback'
+import imageModels from './imageModels'
 
 export default {
   ...codexTurnState,
@@ -26,4 +27,5 @@ export default {
   ...modelTrace,
   ...clineUpstream,
   ...paidFallback,
+  ...imageModels,
 }
