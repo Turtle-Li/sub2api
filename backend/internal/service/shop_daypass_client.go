@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -46,7 +47,7 @@ type shopDaypassGrant struct {
 }
 
 type shopDaypassGateway interface {
-	Ready(context.Context) error
+	Ready(context.Context, int) error
 	Provision(context.Context, shopDaypassBinding) (*shopDaypassGrant, error)
 	Revoke(context.Context, shopDaypassBinding) error
 }
@@ -104,7 +105,7 @@ func validShopDaypassBearer(value string) bool {
 	return true
 }
 
-func (c *shopDaypassClient) Ready(ctx context.Context) error {
+func (c *shopDaypassClient) Ready(ctx context.Context, durationDays int) error {
 	bearer, err := c.loadBearer(ctx)
 	if err != nil {
 		return errShopDaypassUnavailable
@@ -125,6 +126,7 @@ func (c *shopDaypassClient) Ready(ctx context.Context) error {
 		Success bool `json:"success"`
 		Data    struct {
 			Concurrencies []int  `json:"concurrencies"`
+			DurationDays  []int  `json:"duration_days"`
 			Instance      string `json:"instance"`
 			ProductID     int64  `json:"product_id"`
 			Status        string `json:"status"`
@@ -132,6 +134,10 @@ func (c *shopDaypassClient) Ready(ctx context.Context) error {
 	}
 	if err != nil || len(raw) > 4096 || json.Unmarshal(raw, &result) != nil || res.StatusCode != http.StatusOK || !result.Success ||
 		result.Data.Instance != shopDaypassInstance || result.Data.ProductID != c.productID || result.Data.Status != "ready" || len(result.Data.Concurrencies) != 2 || result.Data.Concurrencies[0] != 2 || result.Data.Concurrencies[1] != 3 {
+		return errShopDaypassUnavailable
+	}
+	// Older receivers omit duration_days. They still serve existing day passes.
+	if durationDays != 1 && !slices.Contains(result.Data.DurationDays, durationDays) {
 		return errShopDaypassUnavailable
 	}
 	return nil
@@ -147,6 +153,10 @@ func (c *shopDaypassClient) Revoke(ctx context.Context, binding shopDaypassBindi
 }
 
 func (c *shopDaypassClient) call(ctx context.Context, action string, binding shopDaypassBinding) (*shopDaypassGrant, error) {
+	duration := shopDaypassDurationForPrice(binding.PriceFen)
+	if duration == 0 {
+		return nil, errShopDaypassUnavailable
+	}
 	bearer, err := c.loadBearer(ctx)
 	if err != nil {
 		return nil, errShopDaypassUnavailable
@@ -189,7 +199,7 @@ func (c *shopDaypassClient) call(ctx context.Context, action string, binding sho
 	}
 	grant := &result.Data
 	if response.StatusCode != http.StatusOK || !result.Success || grant.Instance != binding.Instance || grant.OrderID != binding.OrderID ||
-		grant.ProductID != binding.ProductID || grant.PaidAt != binding.PaidAt || grant.ExpiresAt != binding.PaidAt+86400 {
+		grant.ProductID != binding.ProductID || grant.PaidAt != binding.PaidAt || grant.ExpiresAt != binding.PaidAt+duration {
 		return nil, errShopDaypassUnavailable
 	}
 	if action == "revoke" {

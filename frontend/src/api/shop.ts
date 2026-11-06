@@ -1,11 +1,11 @@
 import { apiClient } from './client'
 import type { CreateOrderResult } from '@/types/payment'
-import type { ShopAction, ShopInputCheck, ShopIntegrationOption, ShopOrderDetail, ShopProduct, ShopProductInput } from '@/types/shop'
+import type { ShopAction, ShopInputCheck, ShopIntegrationOption, ShopOrderDetail, ShopPassDurationDays, ShopProduct, ShopProductInput } from '@/types/shop'
 
 export const shopAPI = {
   products: () => apiClient.get<ShopProduct[]>('/shop/products'),
   product: (id: number) => apiClient.get<ShopProduct>(`/shop/products/${id}`),
-  createOrder: (input: { product_id: number; product_revision: number; payment_type: 'alipay' | 'wxpay'; concurrency?: number }, key: string) =>
+  createOrder: (input: { product_id: number; product_revision: number; payment_type: 'alipay' | 'wxpay'; concurrency?: number; duration_days?: ShopPassDurationDays }, key: string) =>
     apiClient.post<CreateOrderResult>('/shop/orders', input, { headers: { 'Idempotency-Key': key } }),
   order: (id: number) => apiClient.get<ShopOrderDetail>(`/shop/orders/${id}`),
   checkInput: (id: number, input: { content: string; revision: number }) => apiClient.post<ShopInputCheck>(`/shop/orders/${id}/input/check`, input),

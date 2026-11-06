@@ -40,7 +40,7 @@ func enqueueShopOrderActionTx(ctx context.Context, client *dbent.Client, o *dben
 		state, kind = shopaction.Review, "SNAPSHOT_INVALID"
 	} else {
 		snapshot.Binding = p.PaymentActions[0]
-		if !validateActionSnapshot(snapshot.Binding) || snapshot.Binding.Adapter == shopaction.Native && (!validShopDaypassProduct(p) || snapshot.Request.Order.AmountFen != shopConcurrencyFen(shopProductConcurrency(p))) {
+		if !validateActionSnapshot(snapshot.Binding) || snapshot.Binding.Adapter == shopaction.Native && (!validShopDaypassProduct(p) || snapshot.Request.Order.AmountFen != shopProductSKU(p).priceFen()) {
 			state, kind = shopaction.Review, "ACTION_INVALID"
 			snapshot.Binding.Params = json.RawMessage(`{}`)
 		}

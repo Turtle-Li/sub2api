@@ -133,7 +133,11 @@
   native-adapter release: `deploy/SHOP_PAYMENT_ACTIONS_RELEASE_20261105.md`.
   Generic HTTP activation still requires its separate approved agent/mount and
   receiver acceptance; the payment/Feishu agents must not hold its credentials.
-- For DeepSeek24-hour API-key shop delivery, read
+- For DeepSeek API key shop delivery, read
+  `docs/operations/DAYPASS_WEEKLY_SKU_20261106.md` for the day/week SKU,
+  receiver readiness, rollout and rollback boundaries. The paid clock is
+  always original `paid_at` plus the purchased duration.
+- For the original DeepSeek day-pass rollout, read
   `docs/operations/DAYPASS_CONCURRENCY_TIERS_20261105.md` for the two approved
   shop tiers (default2/CNY6, max3/CNY8), immutable purchased params and ordered
   activation. From the first tier3 checkout, all running/rollback app images
@@ -142,7 +146,7 @@
   `docs/operations/DEEPSEEK_DAYPASS_20261105.md`. Product3 is live at6yuan/24h:
   one paid order/key, original paid_at expiry, exact SKU, existing money/review
   fences, encrypted buyer-only delivery and separate memory-only machine agent.
-  Preserve original paid_at+86400, native receipts/tombstones and the documented
+  Preserve the original paid clock, native receipts/tombstones and the documented
   production boundary. Do not restore an older DB or promote an unaware binary
   after automatic delivery has been enabled. Pause new work while retaining
   exact revocation and manual approved refunds for aftersales.

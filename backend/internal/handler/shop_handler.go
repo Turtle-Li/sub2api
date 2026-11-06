@@ -131,20 +131,25 @@ func (h *ShopHandler) CreateOrder(c *gin.Context) {
 		ProductRevision int             `json:"product_revision"`
 		PaymentType     string          `json:"payment_type"`
 		Concurrency     json.RawMessage `json:"concurrency"`
+		DurationDays    json.RawMessage `json:"duration_days"`
 	}
 	if !decodeShopRequest(c, &in, 4096) {
 		return
 	}
-	concurrency := 0
-	if len(in.Concurrency) != 0 && (json.Unmarshal(in.Concurrency, &concurrency) != nil || concurrency != 2 && concurrency != 3) {
+	var sku service.ShopSKUSelection
+	if len(in.Concurrency) != 0 && (json.Unmarshal(in.Concurrency, &sku.Concurrency) != nil || sku.Concurrency != 2 && sku.Concurrency != 3) {
 		response.BadRequest(c, "并发必须是整数2或3")
+		return
+	}
+	if len(in.DurationDays) != 0 && (json.Unmarshal(in.DurationDays, &sku.DurationDays) != nil || sku.DurationDays != 1 && sku.DurationDays != 7) {
+		response.BadRequest(c, "有效期必须是整数1或7天")
 		return
 	}
 	if len(c.Request.Header.Values("Idempotency-Key")) != 1 {
 		response.BadRequest(c, "请提供唯一 Idempotency-Key")
 		return
 	}
-	out, err := h.payment.CreateShopOrder(c.Request.Context(), in.ProductID, in.ProductRevision, service.CreateOrderRequest{UserID: subject.UserID, ShopConcurrency: concurrency, PaymentType: in.PaymentType, ClientIP: c.ClientIP(), SrcHost: c.Request.Host, SrcURL: c.Request.Referer(), IdempotencyKey: c.GetHeader("Idempotency-Key"), Locale: c.GetHeader("Accept-Language")})
+	out, err := h.payment.CreateShopOrder(c.Request.Context(), in.ProductID, in.ProductRevision, service.CreateOrderRequest{UserID: subject.UserID, ShopSKU: sku, PaymentType: in.PaymentType, ClientIP: c.ClientIP(), SrcHost: c.Request.Host, SrcURL: c.Request.Referer(), IdempotencyKey: c.GetHeader("Idempotency-Key"), Locale: c.GetHeader("Accept-Language")})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

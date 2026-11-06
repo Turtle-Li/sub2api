@@ -61,7 +61,7 @@ func (s *PaymentService) CreateShopOrder(ctx context.Context, productID int64, p
 	if p.Revision != productRevision {
 		return nil, shopConflict()
 	}
-	selected, err := s.shopService.resolveShopConcurrency(*p, req.ShopConcurrency)
+	selected, err := s.shopService.resolveShopSKU(*p, req.ShopSKU)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +99,8 @@ func revalidateShopProductTx(ctx context.Context, client *dbent.Client, p *ShopP
 	if !row.Enabled || row.Revision != p.Revision {
 		return shopConflict()
 	}
-	resolved, err := selectShopConcurrency(shopProductDTO(row), shopProductConcurrency(*p))
-	if err != nil || resolved.Price != p.Price {
+	resolved, err := selectShopSKU(shopProductDTO(row), shopProductSKU(*p).selection())
+	if err != nil || resolved.Price != p.Price || resolved.DurationValue != p.DurationValue || resolved.DurationUnit != p.DurationUnit {
 		return shopConflict()
 	}
 	*p = resolved
@@ -130,11 +130,12 @@ func (s *PaymentService) replayShopOrderRecord(ctx context.Context, o *dbent.Pay
 	if p.ID != req.shopProduct.ID || p.Revision != req.shopProduct.Revision {
 		return nil, ErrIdempotencyKeyConflict
 	}
-	selected := req.ShopConcurrency
-	if shopProductConcurrency(p) != 0 && selected == 0 {
-		selected = 2
+	purchased := shopProductSKU(p).selection()
+	selected := req.ShopSKU
+	if purchased != (ShopSKUSelection{}) {
+		selected = selected.withNativeDefaults()
 	}
-	if selected != shopProductConcurrency(p) {
+	if selected != purchased {
 		return nil, ErrIdempotencyKeyConflict
 	}
 	if o.Status != OrderStatusPending || o.PaidAt != nil || !o.ExpiresAt.After(time.Now()) || psStringValue(o.PayURL) != "" || psStringValue(o.QrCode) != "" {

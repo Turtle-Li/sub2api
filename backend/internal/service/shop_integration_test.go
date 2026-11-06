@@ -156,17 +156,20 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 		require.Empty(t, f.DeliveryCiphertext)
 		require.Zero(t, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
 	})
-	for _, concurrency := range []int{2, 3} {
-		t.Run(fmt.Sprintf("daypass PostgreSQL claims fence competing workers and lost replies/%d", concurrency), func(t *testing.T) {
+	for _, sku := range []ShopSKUSelection{
+		{Concurrency: 2, DurationDays: 1}, {Concurrency: 3, DurationDays: 1},
+		{Concurrency: 2, DurationDays: 7}, {Concurrency: 3, DurationDays: 7},
+	} {
+		t.Run(fmt.Sprintf("DeepSeek PostgreSQL claims fence competing workers and lost replies/%dd-%d", sku.DurationDays, sku.Concurrency), func(t *testing.T) {
 			p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG DeepSeek", Price: 6, DurationValue: 1, DurationUnit: "day", FulfillmentMode: ShopAccountDelivery, GuideKey: ShopDaypassGuide, PaymentActions: daypassTestActions(s)})
 			require.NoError(t, err)
-			s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID}
-			selected, err := s.resolveShopConcurrency(*p, concurrency)
+			s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID, WeeklyEnabled: true}
+			selected, err := s.resolveShopSKU(*p, sku)
 			require.NoError(t, err)
 			p = &selected
 			gateway := &daypassTestGateway{lost: true}
 			s.daypass = gateway
-			o := createPaymentInvoicePostgresOrder(t, ctx, client, u, fmt.Sprintf("daypass%d", concurrency))
+			o := createPaymentInvoicePostgresOrder(t, ctx, client, u, fmt.Sprintf("daypass-%dd-%d", sku.DurationDays, sku.Concurrency))
 			o = client.PaymentOrder.UpdateOne(o).SetOrderType(payment.OrderTypeManualShop).SetStatus(OrderStatusPaid).SetAmount(0).SetPayAmount(p.Price).ClearCompletedAt().SaveX(ctx)
 			require.NoError(t, createShopFulfillmentTx(ctx, client, o, *p))
 			require.NoError(t, markShopPaidTx(ctx, client, o))
@@ -206,10 +209,11 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 			require.NoError(t, s.deliverDaypass(ctx, second))
 			require.Equal(t, OrderStatusCompleted, client.PaymentOrder.GetX(ctx, o.ID).Status)
 			require.Equal(t, 1, client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID), shopnotification.ChannelEQ("email")).CountX(ctx))
-			require.Equal(t, o.PaidAt.Unix()+86400, gateway.grant.ExpiresAt)
+			require.Equal(t, o.PaidAt.Unix()+int64(sku.DurationDays)*86400, gateway.grant.ExpiresAt)
 			detail, err := s.Order(ctx, o.ID, u.ID, false)
 			require.NoError(t, err)
-			require.Equal(t, concurrency, detail.Product.Concurrency)
+			require.Equal(t, sku.Concurrency, detail.Product.Concurrency)
+			require.Equal(t, sku.DurationDays, detail.Product.DurationValue)
 		})
 	}
 

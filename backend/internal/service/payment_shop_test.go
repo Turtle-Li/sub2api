@@ -88,9 +88,19 @@ func TestShopCheckoutUsesServerPriceAndIdempotentGatewayRecovery(t *testing.T) {
 	}
 }
 
-func TestShopCheckoutConcurrencyPricesSnapshotsAndReplay(t *testing.T) {
-	for _, concurrency := range []int{0, 2, 3} {
-		t.Run(fmt.Sprint(concurrency), func(t *testing.T) {
+func TestShopCheckoutSKUPricesSnapshotsAndReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sku      ShopSKUSelection
+		expected ShopSKUSelection
+		price    float64
+	}{
+		{"legacy", ShopSKUSelection{}, ShopSKUSelection{Concurrency: 2, DurationDays: 1}, 6},
+		{"day-three", ShopSKUSelection{Concurrency: 3, DurationDays: 1}, ShopSKUSelection{Concurrency: 3, DurationDays: 1}, 8},
+		{"week-two", ShopSKUSelection{DurationDays: 7}, ShopSKUSelection{Concurrency: 2, DurationDays: 7}, 30},
+		{"week-three", ShopSKUSelection{Concurrency: 3, DurationDays: 7}, ShopSKUSelection{Concurrency: 3, DurationDays: 7}, 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			f := newOwnerTestOrderFixture(t)
 			createInvoiceUnitRefundFenceTables(t, ctx, f.client)
@@ -98,37 +108,53 @@ func TestShopCheckoutConcurrencyPricesSnapshotsAndReplay(t *testing.T) {
 			f.service.shopService = s
 			f.settings.values[SettingPaymentEnabled] = "true"
 			f.settings.values[SettingPaymentVisibleMethodAlipaySource] = VisibleMethodSourceUnifiedAlipay
-			p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "DeepSeek日卡", Price: 6, DurationValue: 1, DurationUnit: "day", Enabled: true, FulfillmentMode: ShopAccountDelivery, PaymentActions: daypassTestActions(s)})
+			p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "DeepSeek API 不限量订阅卡", Price: 6, DurationValue: 1, DurationUnit: "day", Enabled: true, FulfillmentMode: ShopAccountDelivery, PaymentActions: daypassTestActions(s)})
 			require.NoError(t, err)
-			s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID}
-			s.daypass = &daypassTestGateway{}
-			req := CreateOrderRequest{UserID: f.userID, PaymentType: payment.TypeAlipay, IdempotencyKey: "shop-concurrency-checkout-123456", ShopConcurrency: concurrency, SrcHost: "www.turtleligpt.com", SrcURL: ownerTestReturnURL}
+			s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID, WeeklyEnabled: true}
+			gateway := &daypassTestGateway{}
+			s.daypass = gateway
+			catalog, err := s.Product(ctx, p.ID, false)
+			require.NoError(t, err)
+			require.Equal(t, []ShopConcurrencyOption{{Concurrency: 2, Price: 6, WeeklyPrice: 30}, {Concurrency: 3, Price: 8, WeeklyPrice: 40}}, catalog.ConcurrencyOptions)
+			require.Empty(t, catalog.PaymentActions)
+			req := CreateOrderRequest{UserID: f.userID, PaymentType: payment.TypeAlipay, IdempotencyKey: "shop-sku-checkout-123456", ShopSKU: tc.sku, SrcHost: "www.turtleligpt.com", SrcURL: ownerTestReturnURL}
 			first, err := f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
 			require.NoError(t, err)
-			selected := concurrency
-			if selected == 0 {
-				selected = 2
-			}
-			expected := float64(shopConcurrencyFen(selected)) / 100
-			require.Equal(t, expected, first.PayAmount)
+			require.Equal(t, tc.price, first.PayAmount)
 			row := f.client.PaymentOrder.GetX(ctx, first.OrderID)
-			require.EqualValues(t, selected, row.ProductSnapshot["concurrency"])
+			require.EqualValues(t, tc.expected.Concurrency, row.ProductSnapshot["concurrency"])
+			require.EqualValues(t, tc.expected.DurationDays, row.ProductSnapshot["duration_value"])
 			snapshot, err := shopSnapshot(f.client.ShopFulfillment.Query().Where(shopfulfillment.OrderIDEQ(row.ID)).OnlyX(ctx))
 			require.NoError(t, err)
-			require.Equal(t, selected, shopProductConcurrency(snapshot))
-			require.Equal(t, expected, snapshot.Price)
+			require.Equal(t, tc.expected, shopProductSKU(snapshot).selection())
+			require.Equal(t, tc.price, snapshot.Price)
+			require.Equal(t, tc.expected.DurationDays, snapshot.DurationValue)
+			require.Equal(t, "day", snapshot.DurationUnit)
+			s.daypassCfg.WeeklyEnabled = false
+			fresh := req
+			fresh.IdempotencyKey = "shop-new-disabled-123456"
+			fresh.ShopSKU = ShopSKUSelection{DurationDays: 7}
+			_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, fresh)
+			require.Equal(t, "SHOP_DURATION_INVALID", infraerrors.Reason(err))
 			s.daypassCfg.MaxConcurrency = 2
-			if selected == 3 {
-				fresh := req
-				fresh.IdempotencyKey = "shop-concurrency-new-disabled-123456"
-				_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, fresh)
-				require.Equal(t, "SHOP_CONCURRENCY_INVALID", infraerrors.Reason(err))
-			}
+			fresh.ShopSKU = ShopSKUSelection{Concurrency: 3}
+			_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, fresh)
+			require.Equal(t, "SHOP_CONCURRENCY_INVALID", infraerrors.Reason(err))
+			catalog, err = s.Product(ctx, p.ID, false)
+			require.NoError(t, err)
+			require.Equal(t, []ShopConcurrencyOption{{Concurrency: 2, Price: 6}}, catalog.ConcurrencyOptions)
 			// A sales switch cannot retroactively change an already issued checkout.
 			changed := req
-			changed.ShopConcurrency = 3
-			if selected == 3 {
-				changed.ShopConcurrency = 2
+			changed.ShopSKU.Concurrency = 3
+			if tc.expected.Concurrency == 3 {
+				changed.ShopSKU.Concurrency = 2
+			}
+			_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, changed)
+			require.ErrorIs(t, err, ErrIdempotencyKeyConflict)
+			changed = req
+			changed.ShopSKU.DurationDays = 7
+			if tc.expected.DurationDays == 7 {
+				changed.ShopSKU.DurationDays = 0
 			}
 			_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, changed)
 			require.ErrorIs(t, err, ErrIdempotencyKeyConflict)
@@ -139,7 +165,7 @@ func TestShopCheckoutConcurrencyPricesSnapshotsAndReplay(t *testing.T) {
 			replay, err := f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
 			require.NoError(t, err)
 			require.Equal(t, first.OrderID, replay.OrderID)
-			require.Equal(t, expected, replay.PayAmount)
+			require.Equal(t, tc.price, replay.PayAmount)
 			// Local fixture only: exercise trusted paid-outbox delivery after a catalog edit.
 			row = f.client.PaymentOrder.UpdateOne(row).SetStatus(OrderStatusPaid).SetPaidAt(time.Now()).SaveX(ctx)
 			require.NoError(t, markShopPaidTx(ctx, f.client, row))
@@ -150,8 +176,11 @@ func TestShopCheckoutConcurrencyPricesSnapshotsAndReplay(t *testing.T) {
 			require.NoError(t, s.executeShopAction(ctx, claim))
 			buyer, err := s.Order(ctx, row.ID, f.userID, false)
 			require.NoError(t, err)
-			require.Equal(t, selected, buyer.Product.Concurrency)
-			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("%d并发", selected))
+			require.Equal(t, tc.expected.Concurrency, buyer.Product.Concurrency)
+			require.Equal(t, tc.expected.DurationDays, buyer.Product.DurationValue)
+			require.Equal(t, row.PaidAt.Unix()+int64(tc.expected.DurationDays)*86400, gateway.grant.ExpiresAt)
+			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("%d并发", tc.expected.Concurrency))
+			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("有效期：%d 天", tc.expected.DurationDays))
 		})
 	}
 }

@@ -68,7 +68,7 @@ function save() {
         <label for="payment-action" class="mt-4 block text-sm font-medium text-gray-700 dark:text-gray-200">处理方式</label>
         <select id="payment-action" v-model="selectedIntegration" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
           <option value="">人工处理</option>
-          <option v-for="item in integrations" :key="`${item.id}@${item.version}`" :value="`${item.id}@${item.version}`">{{ item.adapter === 'newapi.daypass.v1' ? 'DeepSeek 日卡' : 'HTTP 钩子' }} · {{ item.id }} v{{ item.version }}{{ item.enabled ? '' : '（尚未启用）' }}</option>
+          <option v-for="item in integrations" :key="`${item.id}@${item.version}`" :value="`${item.id}@${item.version}`">{{ item.adapter === 'newapi.daypass.v1' ? 'DeepSeek 自动发 Key' : 'HTTP 钩子' }} · {{ item.id }} v{{ item.version }}{{ item.enabled ? '' : '（尚未启用）' }}</option>
           <option v-if="selectedIntegration && !integrations.some(item => `${item.id}@${item.version}` === selectedIntegration)" :value="selectedIntegration">原配置 {{ selectedIntegration }}（当前未登记）</option>
         </select>
         <template v-if="draft.payment_actions?.length">
@@ -126,8 +126,8 @@ function save() {
         <div class="grid gap-4 md:grid-cols-2">
           <div>
             <label for="guide-key" class="text-sm font-medium text-gray-700 dark:text-gray-200">使用指南</label>
-            <select id="guide-key" v-model="draft.guide_key" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="">不使用指南</option><option value="chatgpt-plus-account">ChatGPT Plus 账号使用指南</option><option value="deepseek-daypass">DeepSeek API 日卡使用指南</option></select>
-            <p v-if="draft.guide_key === 'deepseek-daypass' && !draft.payment_actions?.length" class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">指南仅用于说明。自动发 Key 还需在“付款后操作”中选择日卡集成。</p>
+            <select id="guide-key" v-model="draft.guide_key" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="">不使用指南</option><option value="chatgpt-plus-account">ChatGPT Plus 账号使用指南</option><option value="deepseek-daypass">DeepSeek API 使用指南</option></select>
+            <p v-if="draft.guide_key === 'deepseek-daypass' && !draft.payment_actions?.length" class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">指南仅用于说明。自动发 Key 还需在“付款后操作”中选择 DeepSeek 集成。</p>
           </div>
           <div>
             <label for="sort-order" class="text-sm font-medium text-gray-700 dark:text-gray-200">排序值</label>

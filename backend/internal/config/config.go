@@ -157,6 +157,7 @@ type FeishuPaymentAlertsConfig struct {
 type ShopDaypassConfig struct {
 	MaxConcurrency int   `mapstructure:"max_concurrency"`
 	Enabled        bool  `mapstructure:"enabled"`
+	WeeklyEnabled  bool  `mapstructure:"weekly_enabled"`
 	ProductID      int64 `mapstructure:"product_id"`
 }
 
@@ -2994,6 +2995,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("shop_daypass.enabled", false)
 	viper.SetDefault("shop_daypass.product_id", int64(0))
 	viper.SetDefault("shop_daypass.max_concurrency", 3)
+	viper.SetDefault("shop_daypass.weekly_enabled", false)
 	viper.SetDefault("shop_actions.enabled", false)
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its

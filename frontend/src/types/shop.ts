@@ -22,9 +22,10 @@ export const shopAutomationLabels: Record<ShopAutomationState, string> = {
 export type ShopMode = 'session_topup' | 'account_delivery'
 export type ShopStatus = 'WAITING_PAYMENT' | 'WAITING_INPUT' | 'QUEUED' | 'PROCESSING' | 'NEEDS_INPUT' | 'COMPLETED' | 'CLOSED'
 export type ShopNotificationStatus = 'NOT_SENT' | 'PENDING' | 'SENDING' | 'SENT' | 'FAILED'
+export type ShopPassDurationDays = 1 | 7
 export interface ShopProduct {
   concurrency?: number
-  concurrency_options?: { concurrency: number; price: number }[]
+  concurrency_options?: { readonly concurrency: number; readonly price: number; readonly weekly_price?: number }[]
   id: number
   name: string
   category: string

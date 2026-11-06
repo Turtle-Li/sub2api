@@ -18,7 +18,10 @@ func publicShopProduct(p ShopProduct) ShopProduct {
 	p.Concurrency = shopProductConcurrency(p)
 	p.ConcurrencyOptions = nil
 	if validShopDaypassProduct(p) {
-		p.ConcurrencyOptions = []ShopConcurrencyOption{{Concurrency: 2, Price: 6}, {Concurrency: 3, Price: 8}}
+		for _, concurrency := range []int{2, 3} {
+			sku := shopDaypassParams{Duration: shopDaypassDaySeconds, Concurrency: concurrency}
+			p.ConcurrencyOptions = append(p.ConcurrencyOptions, ShopConcurrencyOption{Concurrency: concurrency, Price: float64(sku.priceFen()) / 100})
+		}
 	}
 	p.PaymentActions = nil
 	return p
@@ -56,14 +59,11 @@ func (s *ShopService) normalizePaymentActions(p *ShopProduct) error {
 	}
 	if b.Adapter == shopaction.Native {
 		if p.Price != 6 || !validShopDaypassCatalog(*p) {
-			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "日卡处理器要求6元、24小时的交付商品")
+			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "DeepSeek 自动交付商品的基础规格为6元、24小时")
 		}
-		var native struct {
-			Duration    int `json:"duration_seconds"`
-			Concurrency int `json:"default_concurrency"`
-		}
-		if json.Unmarshal(b.Params, &native) != nil || (native.Duration != 0 && native.Duration != 86400) || (native.Concurrency != 0 && native.Concurrency != 2) {
-			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "日卡固定24小时、默认2并发")
+		var native shopDaypassParams
+		if json.Unmarshal(b.Params, &native) != nil || (native.Duration != 0 && native.Duration != shopDaypassDaySeconds) || (native.Concurrency != 0 && native.Concurrency != 2) {
+			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "基础规格固定24小时、默认2并发")
 		}
 		b.Params = json.RawMessage(`{"duration_seconds":86400,"default_concurrency":2}`)
 	}
@@ -106,7 +106,7 @@ func (s *ShopService) actionAdapterFor(b shopaction.Binding, cleanup bool) (shop
 		if client, ok := s.daypass.(*shopDaypassClient); ok && client.endpoint != i.Endpoint {
 			gateway = newShopDaypassGateway(s.daypassCfg.ProductID, i.Endpoint)
 		}
-		return &shopDaypassAdapter{gateway: gateway, productID: s.daypassCfg.ProductID}, nil
+		return &shopDaypassAdapter{gateway: gateway, productID: s.daypassCfg.ProductID, durationDays: shopNativeSKU(b.Params).selection().DurationDays}, nil
 	case shopaction.HTTP:
 		return s.webhook(i), nil
 	default:
@@ -147,14 +147,8 @@ func (s *ShopService) checkoutProduct(ctx context.Context, id int64) (*ShopProdu
 
 func validateActionSnapshot(b shopaction.Binding) bool {
 	var params map[string]json.RawMessage
-	if b.Adapter == shopaction.Native {
-		var native struct {
-			Duration    int `json:"duration_seconds"`
-			Concurrency int `json:"default_concurrency"`
-		}
-		if json.Unmarshal(b.Params, &native) != nil || native.Duration != 86400 || shopConcurrencyFen(native.Concurrency) == 0 {
-			return false
-		}
+	if b.Adapter == shopaction.Native && shopNativeSKU(b.Params).Duration == 0 {
+		return false
 	}
 	return b.BindingKey == "primary-delivery" && b.Integration != nil && b.Integration.ID == b.IntegrationRef &&
 		b.Integration.Version == b.IntegrationVersion && b.Integration.Adapter == b.Adapter &&

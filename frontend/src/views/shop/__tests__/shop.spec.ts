@@ -28,8 +28,9 @@ const global = { stubs: { AppLayout: { template: '<main><slot /></main>' }, Rout
 enableAutoUnmount(afterEach)
 beforeEach(() => { route.params.id = '42'; vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
 describe('automatic day-pass surfaces', () => {
+  const daypass = { ...product, name: 'DeepSeek API 不限量订阅卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
   it('rechecks payment method limits when the selected tier changes', async () => {
-    api.product.mockResolvedValue({ data: { ...product, concurrency_options: [{ concurrency: 2, price: 6 }, { concurrency: 3, price: 8 }] } })
+    api.product.mockResolvedValue({ data: { ...daypass, concurrency_options: [{ concurrency: 2, price: 6, weekly_price: 30 }, { concurrency: 3, price: 8, weekly_price: 40 }] } })
     checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', single_max: 6 }, wxpay: { currency: 'CNY', single_max: 10 } } } })
     const wrapper = mount(ShopProductView, { global })
     await flushPromises()
@@ -37,10 +38,13 @@ describe('automatic day-pass surfaces', () => {
     await wrapper.get('input[name="concurrency"][value="3"]').setValue()
     expect(wrapper.find('input[name="payment-method"][value="alipay"]').exists()).toBe(false)
     expect((wrapper.get('input[name="payment-method"][value="wxpay"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('input[name="duration-days"][value="7"]').setValue()
+    expect(wrapper.findAll('input[name="payment-method"]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('暂无可用支付方式')
   })
-  it('selects the server priced tier and keeps changed attempts separate', async () => {
+  it('selects server priced SKUs and keeps retries for different durations or tiers separate', async () => {
     checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', available: true } } } })
-    api.product.mockResolvedValue({ data: { ...product, guide_key: 'deepseek-daypass', automatic_fulfillment: true, concurrency: 2, concurrency_options: [{ concurrency: 2, price: 6 }, { concurrency: 3, price: 8 }] } })
+    api.product.mockResolvedValue({ data: { ...daypass, concurrency: 2, concurrency_options: [{ concurrency: 2, price: 6, weekly_price: 30 }, { concurrency: 3, price: 8, weekly_price: 40 }] } })
     api.createOrder.mockRejectedValue(new Error('lost response'))
     const wrapper = mount(ShopProductView, { global })
     await flushPromises()
@@ -63,8 +67,19 @@ describe('automatic day-pass surfaces', () => {
     expect(api.createOrder.mock.calls[2][0]).toMatchObject({ concurrency: 3 })
     expect(api.createOrder.mock.calls[2][0]).not.toHaveProperty('price')
     expect(api.createOrder.mock.calls[2][1]).not.toBe(firstKey)
+    await wrapper.get('input[name="duration-days"][value="7"]').setValue()
+    expect(price()).toBe('¥40.00')
+    expect(wrapper.text()).toContain('有效期 7 天')
+    await buy().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[3][0]).toMatchObject({ concurrency: 3, duration_days: 7 })
+    expect(api.createOrder.mock.calls[3][1]).not.toBe(api.createOrder.mock.calls[2][1])
+    await buy().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[4][1]).toBe(api.createOrder.mock.calls[3][1])
+    await wrapper.get('input[name="concurrency"][value="2"]').setValue()
+    expect(price()).toBe('¥30.00')
   })
-  const daypass = { ...product, name: 'DeepSeek 24 小时日卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
   it('shows the paid clock and key restrictions without the manual delivery estimate', async () => {
     api.product.mockResolvedValue({ data: daypass })
     const wrapper = mount(ShopProductView, { global })
@@ -72,6 +87,7 @@ describe('automatic day-pass surfaces', () => {
     expect(wrapper.text()).toContain('付款时开始计时')
     expect(wrapper.text()).toContain('默认 2 并发')
     expect(wrapper.text()).toContain('同一 IP')
+    expect(wrapper.find('input[name="duration-days"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('5分钟')
     expect(wrapper.text()).not.toContain('2小时操作')
   })

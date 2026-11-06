@@ -15,7 +15,8 @@ describe('account guide navigation', () => {
     route.path = '/shop/help/deepseek-daypass'
     route.query = { order: '42' }
     const wrapper = mount(ShopGuideView, options)
-    expect(wrapper.get('h1').text()).toBe('DeepSeek API 日卡使用指南')
+    expect(wrapper.get('h1').text()).toBe('DeepSeek API 使用指南')
+    expect(wrapper.get('#expiry').text()).toContain('按购买时所选规格')
     expect(wrapper.find('#receive').exists()).toBe(true)
     expect(wrapper.find('#email-login').exists()).toBe(false)
     expect(wrapper.get('.guide-desktop-nav a[href="#configure"]').text()).toContain('配置客户端')

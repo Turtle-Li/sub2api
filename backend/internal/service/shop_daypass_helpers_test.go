@@ -42,11 +42,15 @@ type daypassTestGateway struct {
 	afterProvision          func()
 }
 
-func (*daypassTestGateway) Ready(context.Context) error { return nil }
+func (*daypassTestGateway) Ready(context.Context, int) error { return nil }
 func (g *daypassTestGateway) Provision(_ context.Context, b shopDaypassBinding) (*shopDaypassGrant, error) {
 	g.provisions++
 	if g.grant == nil {
-		g.grant = &shopDaypassGrant{Instance: b.Instance, OrderID: b.OrderID, ProductID: b.ProductID, PaidAt: b.PaidAt, ExpiresAt: b.PaidAt + 86400, TokenID: 71, Status: "active", Key: "sk-" + strings.Repeat("d", 48)}
+		duration := int64(86400)
+		if b.PriceFen == 3000 || b.PriceFen == 4000 {
+			duration *= 7
+		}
+		g.grant = &shopDaypassGrant{Instance: b.Instance, OrderID: b.OrderID, ProductID: b.ProductID, PaidAt: b.PaidAt, ExpiresAt: b.PaidAt + duration, TokenID: 71, Status: "active", Key: "sk-" + strings.Repeat("d", 48)}
 	}
 	if g.afterProvision != nil {
 		g.afterProvision()

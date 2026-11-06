@@ -109,7 +109,8 @@ onMounted(load)
             <div class="min-w-0 pb-1">
               <div class="flex flex-wrap items-baseline gap-x-1 gap-y-1">
                 <strong class="text-2xl font-semibold leading-7 tabular-nums tracking-tight text-gray-900 dark:text-white">¥{{ product.price.toFixed(2) }}</strong>
-                <span class="text-xs text-gray-500 dark:text-gray-400">/ {{ shopDuration(product) }}</span>
+                <span v-if="product.concurrency_options?.some(option => option.weekly_price)" class="text-xs text-gray-500 dark:text-gray-400">起 · 可选周卡</span>
+                <span v-else class="text-xs text-gray-500 dark:text-gray-400">/ {{ shopDuration(product) }}</span>
               </div>
             </div>
             <RouterLink

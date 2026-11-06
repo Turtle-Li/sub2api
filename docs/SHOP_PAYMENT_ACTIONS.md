@@ -48,16 +48,18 @@ shop_actions:
 shop_daypass:
   enabled: false
   product_id: 0 # 启用日卡前填实际已创建的商品 ID；暂停后保留该 ID
+  weekly_enabled: false # 接收端和所有商城实例兼容后才开启周卡新购
 ```
 
 `id@version` 固定 adapter、目的端、Ready 地址与凭据别名。修改这些字段需发新版本，
 保留旧版本供旧订单恢复；enabled 可切换。不要删除仍有未撤销订单的原生版本。
-日卡目录保留6元人民币、1天、默认2并发。购买可选择2并发/6元或3并发/8元，
-最高3；价格表由服务端固定，买家不能传价格或任意动作参数。所选价格和
-default_concurrency 写入付款与交付快照；旧订单继续使用原快照。GuideKey 只控制教程。
-部署配置 shop_daypass.max_concurrency 为2时只停止创建新的3并发订单，已创建订单
-仍可恢复付款、自动交付和撤销。分阶段发布与回滚下限见
-`operations/DAYPASS_CONCURRENCY_TIERS_20261105.md`。
+DeepSeek 目录保留6元人民币、1天、默认2并发作为基础规格。买家可选择日卡
+（24小时，2并发/6元或3并发/8元），周卡开放后可选择7天（2并发/30元或3并发/40元）。
+价格由服务端按所选规格计算；买家不能传价格或任意动作参数。所选周期、并发及
+价格写入付款与交付快照；旧订单继续使用原快照。GuideKey 只控制教程。
+`shop_daypass.max_concurrency=2` 只停止新的3并发订单；`weekly_enabled=false`
+只停止新的周卡订单。已创建订单仍可恢复付款、自动交付和撤销。发布顺序见
+`operations/DAYPASS_WEEKLY_SKU_20261106.md`。
 
 商品绑定示例（后台使用）：
 

@@ -53,7 +53,7 @@ const sections = computed(() => daypass.value ? [
           <svg aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.75'><path d='m14 6-6 6 6 6' /></svg>
           {{ returnLink.label }}
         </RouterLink>
-        <h1>{{ daypass ? 'DeepSeek API 日卡使用指南' : 'ChatGPT Plus 成品号使用指南' }}</h1>
+        <h1>{{ daypass ? 'DeepSeek API 使用指南' : 'ChatGPT Plus 成品号使用指南' }}</h1>
       </header>
 
       <div class='guide-layout'>
