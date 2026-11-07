@@ -72,3 +72,53 @@ The existing PostgreSQL `TestChannelMonitorV2AggregatesHTTPFinalOutcomeOnce`
 checks recovered success, duplicate terminal errors, reused external request
 IDs and499cancellation independently. Customer-side retries with independent
 request IDs cannot be safely collapsed into an invented shared request.
+
+## Validation and production release
+
+Local red/green regressions cover the Kimi reasoning-only receipt, recovered
+checks, three failed attempts, configuration withdrawal, missing receipts and
+progress-write failure. Native WorkBuddy forwarding retains6369input/16output.
+Real PostgreSQL18/Redis integration verifies claim ownership, durable progress,
+hidden history, and the actual operator report SQL. Independent review caught
+and corrected a zero-attempt cancellation being counted as a legacy attempt:
+legacy claims now retain NULL, new claims explicitly start at0. Focused service,
+repository/handler/migration checks and `go build ./...` pass. Independent
+Standards and Spec re-review both approved with no blockers.
+
+Owner-authorized canonical production release:
+
+- Source `6d39b7edb066bae4572e1e0731f44a6d3bc12718`, version0.2.21.
+- GitHub run[42414927792](https://github.com/Turtle-Li/sub2api/actions/runs/42414927792)
+  completed successfully. Ordinary pushes still do not deploy.
+- Image `sub2api:auto-20261107-132452-6d39b7ed`; archive110002794bytes,
+  SHA256 `95850e101357a89b0c8f14fa1250bdf8453e644c26a3edd52bc7c7eb7e4f5128`.
+- Canonical evidence directory
+  `/var/log/sub2api-release/gha-20261107-132452-6d39b7ed-1856014`.
+- New green started21:25:14UTC, healthy and sole background owner. Caddy
+  routes new connections to green. Blue went standby and naturally stopped
+  after draining, confirmed stopped by21:27:31UTC; no request connections were forcibly ended.
+- Migration269is installed. Probe configuration remains version5/digest
+  `ec263ba0fb0fddbde71cc8786192c207`, the six owner-selected groups unchanged.
+- Under the canonical shared maintenance lock, hid13legacy group18Kimi
+  monitoring rows (`attempt_count IS NULL`) after verifying the active reviewed
+  image and the group's Kimi identity. Unique claims and82869input/240output
+  tokens are preserved. Customer usage and financial records were untouched.
+- First corrected scheduled slot21:30UTC: all six groups succeeded on attempt1;
+  Kimi6369input/16output, no missing usage. The real browser shows Kimi running
+  normally, a new green cell, and gray cleared history. No fabricated history
+  or cache percentages were inserted. No static homepage publication was needed.
+
+The original trial window stays2026-11-07T20:03:22UTC through
+2026-11-08T20:03:22UTC. Existing thread follow-up24was updated rather than
+duplicated. The private baseline records the policy change and one direct
+WorkBuddy diagnostic at20:51:34UTC (6369input/16output) outside the check table;
+the report must list and add it separately. Cleared monitoring rows remain in
+the consumption report. Input/output totals include recovered failed attempts;
+missing usage and pending checks remain unknown. A zero-attempt new cancellation
+does not invent a paid execution. Do not report a completed24h trial early.
+
+Rollback preserves migration269, claims and all private usage receipts. Use the
+canonical rollback flow and prefer a corrected compatible image. Intentionally
+restoring an older verdict requires disabling the affected monitoring first to
+avoid republishing this known false outage; never restore an older database or
+delete consumption records as a rollback mechanism.
