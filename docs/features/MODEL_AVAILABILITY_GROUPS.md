@@ -47,6 +47,13 @@ including account-mapped media and wildcard IDs. No accounts returns no models,
 and lookup failure remains an error. Existing unavailable choices are retained
 and explained, never silently substituted. Discovery sends no provider requests.
 
+Later November8 refinement: singleton platform sections share a fluid grid;
+platforms with multiple selected groups expand across the row. Search recomputes
+the layout. The homepage uses a fluid card grid in immutable asset namespacev4.
+Each card explicitly labels its own group's request scope and explains missing
+real-request cache/latency metrics. Cache share is an observed input-token ratio,
+not a cache-service availability percentage, and never blends other groups.
+
 The owner authorized one inexpensive request model per enabled group,
 one check every ten minutes and minimal output. Active checks supplement quiet
 groups; they never enter real-request success-rate denominators. Unknown,
@@ -126,6 +133,13 @@ attempt bound the trial; actual input/output tokens are retained privately.
 The existing HTTP stream-drain helpers preserve the private probe execution
 deadline/cancellation; ordinary clients still retain their normal usage drain.
 
+Private check input receipts count all provider-reported input tokens. OpenAI
+already reports a total, while native Claude requires summing its disjoint
+ordinary, cache-creation and cache-read buckets. Historical receipts are not
+rewritten. The operator-only24h consumption report is
+`deploy/model-status-probe-consumption.sql`; missing upstream usage remains
+unknown rather than proven zero. It never reads customer usage or bills users.
+
 The independent same-origin status endpoint returns only sanitized public groups.
 The plaza endpoint no longer enriches pricing with availability. Current state is unknown after
 15 minutes without observation; passive collection must also be fresh within
@@ -154,7 +168,7 @@ anonymous publication still requires the explicit opt-in. It discloses neither
 request/token counts nor accounts, upstream errors or custom prices.
 Vue and static clients refresh every minute
 while visible. Failed refresh removes old status while preserving group identity.
-Homepage assets are additive under `turtleroute-status-20261108-v3`; the prior
+Homepage assets are additive under `turtleroute-status-20261108-v4`; prior
 catalog module remains authoritative and untouched.
 
 Failures and recoveries use existing ops email recipients, templates, minimum

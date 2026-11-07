@@ -111,7 +111,9 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 		result, forwardErr := p.gateway.Forward(ctx, c, account, parsed)
 		err = forwardErr
 		if result != nil {
-			out.InputTokens = int64(result.Usage.InputTokens)
+			// Anthropic reports disjoint input buckets; unlike OpenAI's total,
+			// input_tokens alone omits the cached consumption of this check.
+			out.InputTokens = int64(result.Usage.InputTokens) + int64(result.Usage.CacheCreationInputTokens) + int64(result.Usage.CacheReadInputTokens)
 			out.OutputTokens = int64(result.Usage.OutputTokens)
 		}
 	}
