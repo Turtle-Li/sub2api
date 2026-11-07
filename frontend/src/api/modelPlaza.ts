@@ -94,6 +94,8 @@ export interface ModelPlazaResponse {
 
 export interface PlazaGroupAvailability {
 	cache_read_rate?: number | null
+	cache_sample_state?: 'none' | 'insufficient' | 'ready' | 'below_threshold'
+	cache_scope?: 'shared_account_pool'
 	ttft_p50_ms?: number | null
 	request_sample_state?: 'none' | 'insufficient' | 'ready' | 'stale'
 	probe_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled'

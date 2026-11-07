@@ -58,6 +58,9 @@ type ChannelMonitorV3Repository interface {
 	RangeFacts(ctx context.Context, groupIDs []int64, from, to time.Time) (*ChannelMonitorV3Facts, error)
 	// DataThrough is how far the passive aggregation has processed; nil before its first run.
 	DataThrough(ctx context.Context) (*time.Time, error)
+	// GroupRequestCache uses real text usage on the group's bound account pool,
+	// across active groups on the same platform; only pool ratios are published. Counts/tokens stay private.
+	GroupRequestCache(ctx context.Context, groupIDs []int64, from, to time.Time) (map[int64]ChannelMonitorV3RequestCache, error)
 }
 
 type channelMonitorV3Groups interface {

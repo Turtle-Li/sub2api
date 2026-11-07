@@ -50,9 +50,44 @@ and explained, never silently substituted. Discovery sends no provider requests.
 Later November8 refinement: singleton platform sections share a fluid grid;
 platforms with multiple selected groups expand across the row. Search recomputes
 the layout. The homepage uses a fluid card grid in immutable asset namespacev4.
-Each card explicitly labels its own group's request scope and explains missing
-real-request cache/latency metrics. Cache share is an observed input-token ratio,
-not a cache-service availability percentage, and never blends other groups.
+That revision used group-only request metrics. The owner's later correction
+below supersedes its cache scope; success, latency and history remain group-only.
+
+Latest owner correction, November8: inexpensive selected models measure only
+connectivity. Cache comes directly from the dashboard's `usage_logs` token
+buckets over the preceding180minutes, across every real text model served by
+the selected group's currently bound, nondeleted accounts in active
+groups on the same platform, including subscription traffic. Other accounts, inactive/deleted
+groups, media and scheduled checks are excluded. Never filter by the check
+model or average model percentages: sum cache-read tokens divided by the sum
+of uncached input + cache creation + cache read, as the dashboard does. Real
+zero-price token usage is included. The account/peer joins must not duplicate
+a request; scopes are resolved on every read so revoked bindings are immediate.
+
+This cache sample state is independent of group request sample state and the
+passive collector watermark. At least20token-bearing requests (or the higher
+configured minimum) are required. Following the owner's request to omit low
+cache figures, the public cache metric is collapsed below90%, with the display
+standard explained in Statistics and color definitions. Values are never
+rounded up, clamped to a desired result or changed in the dashboard/ledger.
+Subscription groups contribute only to the account-pool aggregate, never to a
+public card, group identity, success rate or history. The sanitized status DTO
+includes `cache_scope=shared_account_pool` and an
+independent `cache_sample_state`; no accounts, models, counts or tokens leave
+the status endpoint. Every displayed metric labels its scope. Availability,
+success, first-token latency and history still describe the selected group.
+The homepage uses immutable asset namespacev5 and the same publication guards.
+
+Reference checked: ranxi2001/sub2api at
+`5f0b6321a50153a738aef3fbade57c969dbe710c`, LGPLv3; its
+`frontend/src/components/charts/TokenUsageTrend.vue` uses the same dashboard
+formula, and `backend/internal/service/channel_monitor_v2_test.go` tests the
+disjoint denominator (1input+3creation+4read=8). Local dashboard source is
+`backend/internal/repository/usage_log_repo_trend.go`. The explicit shared
+account-pool scope and90% display rule are intentional local differences.
+Regression coverage: `channel_monitor_v3_cache_test.go`, real PostgreSQL
+`channel_monitor_v3_cache_integration_test.go`, `GroupStatusCards.spec.ts`, and
+the versioned homepage's `status-metrics.test.mjs`. Existing attribution remains.
 
 The owner authorized one inexpensive request model per enabled group,
 one check every ten minutes and minimal output. Active checks supplement quiet

@@ -17,9 +17,9 @@ flock -w 20 8 || { echo 'Production maintenance is busy' >&2; exit 1; }
 
 caddy=sub2api-candidate-caddy
 home=/data/sub2-web/home
-version=turtleroute-status-20261108-v4
+version=turtleroute-status-20261108-v5
 assets=/data/sub2-web/help/$version
-backup="$home/index.before-status-layout-20261108.html"
+backup="$home/index.before-status-cache-20261108.html"
 [[ $(docker inspect --format '{{.State.Status}}' "$caddy") == running ]]
 read_remote_sha() { docker exec "$caddy" sha256sum "$1" | awk '{print $1}'; }
 read_origin_sha() {
@@ -28,7 +28,7 @@ read_origin_sha() {
 [[ "$(read_remote_sha "$home/index.html")" == "$previous_sha" ]]
 [[ "$(read_origin_sha /)" == "$previous_sha" ]]
 curl -fsS --max-time 15 --resolve www.turtleligpt.com:443:127.0.0.1 https://www.turtleligpt.com/api/v1/model-status |
-  python3 -c 'import json,sys; p=json.load(sys.stdin); d=p.get("data",{}); assert p.get("code")==0 and any((g.get("availability") or {}).get("window_minutes")==180 for g in d.get("groups",[]))'
+  python3 -c 'import json,sys; p=json.load(sys.stdin); d=p.get("data",{}); assert p.get("code")==0 and any((g.get("availability") or {}).get("window_minutes")==180 for g in d.get("groups",[])) and all((g.get("availability") or {}).get("cache_scope")=="shared_account_pool" for g in d.get("groups",[]))'
 
 evidence=$(mktemp -d /var/log/sub2api-release/model-groups-20261107.XXXXXX)
 for name in index.html group-availability.mjs group-availability.css; do install -m 0644 "$incoming/$name" "$evidence/$name"; done

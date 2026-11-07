@@ -32,6 +32,13 @@ configuration, and model selection always remains an explicit owner action.
 The homepage has its own `#status` card section with the same sample guards,
 metrics and observation window. Model plaza contains prices without status.
 The November 8 correction aligns 18 cells to ten-minute checks (180 minutes).
+The later cache correction independently labels cache as shared-account-pool,
+all-model real usage; success and latency keep their own group scope. Cache
+only occupies a metric column when independently ready and at least90%; other
+states collapse that column and let the remaining two figures fill the card.
+Statistics disclosure explains the display threshold without changing values.
+An idle check group can therefore show valid pool cache while its group-only
+figures await traffic. The homepage uses the same behavior in immutable v5.
 Sparse observations retain success/error labels without a percentage; a current
 empty partial slot is collecting. Public configuration is grouped by platform,
 searchable, excludes private/inactive groups and includes domestic providers.

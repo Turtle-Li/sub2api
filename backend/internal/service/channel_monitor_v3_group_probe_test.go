@@ -314,7 +314,7 @@ func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testi
 	got := out[4]
 	require.Equal(t, "ready", got.RequestSampleState)
 	require.InDelta(t, 100.0*29/30, *got.RequestSuccessRate, 0.00001)
-	require.Equal(t, 80.0, *got.CacheReadRate, "cache share includes fresh input and cache creation in its denominator")
+	require.Nil(t, got.CacheReadRate, "group/probe facts cannot substitute for real account-pool cache usage")
 	require.EqualValues(t, 3000, *got.TTFTP50Ms)
 	require.Len(t, got.Cells, 18)
 	require.Equal(t, "none", got.Cells[0].Source)

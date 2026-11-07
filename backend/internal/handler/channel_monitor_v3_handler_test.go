@@ -42,6 +42,10 @@ func (r *monitorV3HandlerRepo) RangeFacts(context.Context, []int64, time.Time, t
 }
 func (r *monitorV3HandlerRepo) DataThrough(context.Context) (*time.Time, error) { return nil, nil }
 
+func (r *monitorV3HandlerRepo) GroupRequestCache(context.Context, []int64, time.Time, time.Time) (map[int64]service.ChannelMonitorV3RequestCache, error) {
+	return nil, nil
+}
+
 type monitorV3AccessStub struct {
 	groups []service.Group
 	rates  map[int64]float64

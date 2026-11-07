@@ -14,15 +14,17 @@ import (
 
 // monitorV3RepoFake keeps V3 state in memory and serves canned passive facts.
 type monitorV3RepoFake struct {
-	mu         sync.Mutex
-	config     ChannelMonitorV3Config
-	categories []ChannelMonitorV3Category
-	components []ChannelMonitorV3Component
-	slotFacts  ChannelMonitorV3Facts
-	totals     ChannelMonitorV3Facts
-	through    *time.Time
-	slotCalls  []monitorV3SlotCall
-	nextID     int64
+	mu                 sync.Mutex
+	config             ChannelMonitorV3Config
+	categories         []ChannelMonitorV3Category
+	components         []ChannelMonitorV3Component
+	slotFacts          ChannelMonitorV3Facts
+	totals             ChannelMonitorV3Facts
+	through            *time.Time
+	requestCache       map[int64]ChannelMonitorV3RequestCache
+	cacheFrom, cacheTo time.Time
+	slotCalls          []monitorV3SlotCall
+	nextID             int64
 }
 
 type monitorV3SlotCall struct {
@@ -158,6 +160,11 @@ func (r *monitorV3RepoFake) RangeFacts(context.Context, []int64, time.Time, time
 	return &totals, nil
 }
 func (r *monitorV3RepoFake) DataThrough(context.Context) (*time.Time, error) { return r.through, nil }
+
+func (r *monitorV3RepoFake) GroupRequestCache(_ context.Context, _ []int64, from, to time.Time) (map[int64]ChannelMonitorV3RequestCache, error) {
+	r.cacheFrom, r.cacheTo = from, to
+	return r.requestCache, nil
+}
 
 var monitorV3Now = time.Date(2026, 10, 4, 9, 31, 20, 0, time.UTC)
 

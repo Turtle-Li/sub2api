@@ -8,7 +8,7 @@
   <link rel="modulepreload" href="/helpcenter/turtleroute-20261106-v5/shared.js"><link rel="modulepreload" href="/helpcenter/turtleroute-20261106-v5/catalog-pricing.mjs">
   <link rel="icon" href="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/shared.css"><link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/ai.css">
   <link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/home-status-nav.css">
-  <link rel="stylesheet" href="/helpcenter/turtleroute-status-20261108-v4/group-availability.css">
+  <link rel="stylesheet" href="/helpcenter/turtleroute-status-20261108-v5/group-availability.css">
 </head>
 <body data-variant="ai">
   <a class="skip-link" href="#main">跳至主要内容</a>
@@ -49,7 +49,7 @@
       <div class="section-top"><div><h2 id="status-title">模型状态</h2><p class="status-intro">公开分组 · 近 3 小时 · 每格 10 分钟</p></div><a href="https://www.turtleligpt.com/status">查看完整状态页 ↗</a></div>
       <div class="status-toolbar"><label><span class="sr-only">搜索状态分组</span><input type="search" class="catalog-search" data-status-search placeholder="搜索状态分组"></label><button type="button" data-status-refresh>刷新状态</button><span data-status-message role="status">正在读取状态…</span></div>
       <div class="status-groups" data-status-groups></div>
-      <p class="status-explanation">正常率统计全组真实请求，样本不足不显示百分比。灰色表示没有结果；少量请求会显示观测状态，不算作空白或失败。</p>
+      <p class="status-explanation">成功率和延迟统计本分组真实请求；缓存统计同账号池在同平台各分组中的全部文本模型，样本不足或低于 90% 时收起，不改变真实统计。定时检测只验证连通性，灰色表示没有结果。</p>
     </section>
     <section class="ai-catalog shell" id="models" aria-labelledby="models-title">
       <div class="section-top"><div><p class="eyebrow">MODEL EXPLORER</p><h2 id="models-title">先选模型 再看价格 </h2></div><div class="catalog-intro"><p>倍率与价格直接对比<br>与模型广场保持同步</p><a href="https://www.turtleligpt.com/model-plaza" target="_blank" rel="noopener">进入完整模型广场 <span>↗</span></a></div></div>
@@ -71,6 +71,6 @@
   <footer class="ai-footer shell"><a class="ai-brand" href="/"><img src="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" width="28" height="28" alt=""><span>Turtle<b>Route</b></span></a><p>模型 分组 接入 一处连接 </p><a href="https://www.turtleligpt.com/login" target="_blank" rel="noopener">进入控制台 ↗</a></footer>
 
   <script type="module" src="/helpcenter/turtleroute-20261106-v5/ai.js"></script>
-  <script type="module" src="/helpcenter/turtleroute-status-20261108-v4/group-availability.mjs"></script>
+  <script type="module" src="/helpcenter/turtleroute-status-20261108-v5/group-availability.mjs"></script>
 </body>
 </html>

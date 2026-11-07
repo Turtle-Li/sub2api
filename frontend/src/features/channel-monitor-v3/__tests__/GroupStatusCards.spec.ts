@@ -27,7 +27,7 @@ const group = (overrides: Record<string, unknown> = {}): ModelStatusGroup => ({
   id: 6, name: 'GPT 按量', platform: 'openai',
   availability: { status: 'operational', source: 'probe', checked_at: '2026-11-07T09:10:00Z', probe_enabled: true,
     probe_model: 'owner-selected', request_success_rate: 99.9, probe_success_rate: 100, cache_read_rate: 97.2, ttft_p50_ms: 3000,
-    request_sample_state: 'ready', probe_sample_state: 'ready', min_requests: 20, window_minutes: 90,
+    request_sample_state: 'ready', cache_sample_state: 'ready', cache_scope: 'shared_account_pool', probe_sample_state: 'ready', min_requests: 20, window_minutes: 180,
     cells: Array.from({ length: 18 }, (_, i) => ({ start: `2026-11-07T09:${String(i).padStart(2, '0')}:00Z`, status: i < 3 ? 'unknown' : 'operational', source: i < 3 ? 'none' : 'requests' })), ...overrides },
 })
 beforeEach(() => {
@@ -49,16 +49,36 @@ describe('status group cards', () => {
     wrapper.unmount()
   })
   it('does not publish small-sample numerics, including probe percentages', () => {
-    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'insufficient', probe_sample_state: 'insufficient', request_success_rate: 66.7 }) } })
-    expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['—', '—', '—'])
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'insufficient', cache_sample_state: 'insufficient', probe_sample_state: 'insufficient', request_success_rate: 66.7 }) } })
+    expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['—', '—'])
     expect(wrapper.text()).not.toMatch(/66\.7%|100\.0%/)
     expect(wrapper.text()).toContain('channelMonitorV3.cards.insufficient')
     wrapper.unmount()
   })
   it('never uses a synthetic check as request latency or cache data', () => {
-    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', request_success_rate: null, cache_read_rate: null, ttft_p50_ms: null }) } })
-    expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['—', '—', '—'])
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', cache_sample_state: 'none', request_success_rate: null, cache_read_rate: null, ttft_p50_ms: null }) } })
+    expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['—', '—'])
     expect(wrapper.text()).not.toContain('100.0%')
+    wrapper.unmount()
+  })
+  it('shows real pool cache independently of idle check-group metrics and labels its scope', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null }) } })
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe('97.2%')
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('—')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.cacheScope')
+    wrapper.unmount()
+  })
+  it.each([
+    { cache_sample_state: 'below_threshold', cache_read_rate: 52 },
+    { cache_sample_state: 'ready', cache_read_rate: 89.99 },
+    { cache_sample_state: 'ready', cache_read_rate: 101 },
+    { cache_sample_state: undefined },
+    { cache_scope: undefined },
+  ])('collapses unpublished cache while preserving group metrics: %j', overrides => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group(overrides) } })
+    expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('99.9%')
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('3.0s')
     wrapper.unmount()
   })
   it('renders ordinary-user cards with no management controls or admin reads', async () => {
