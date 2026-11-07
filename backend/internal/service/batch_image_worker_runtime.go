@@ -56,6 +56,7 @@ func ProvideBatchImageWorkerRuntime(
 				Config:       cfg,
 				Upscaler:     upscaler,
 				UpscaleStore: upscaleStore,
+				Thumbnails:   newBatchImageThumbnailService(repo, deliveryStore, cfg),
 			},
 			BillingRepo:                   billingRepo,
 			AuthCache:                     authCache,

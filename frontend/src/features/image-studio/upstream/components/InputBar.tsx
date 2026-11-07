@@ -3,6 +3,7 @@ import React from 'react'
 import type { BatchImageModel, BatchImageModelCapabilities } from '@/api/batchImage'
 import { CloseIcon } from './icons'
 import { modelIdentity } from '../../workspaceAPI'
+import { ModelPicker, modelPrice } from '../../ModelPicker'
 interface Props {
  readonly capabilities?: BatchImageModelCapabilities; readonly imageSize: string; readonly aspectRatio: string;
  readonly setImageSize: (size: string) => void; readonly setAspectRatio: (ratio: string) => void; readonly referenceError: string;
@@ -13,9 +14,11 @@ interface Props {
 }
 export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, model, setModel, busy, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError, batchMode, setBatchMode }: Props) {
  const count = batchMode && !editing ? prompt.split(/\n\s*---\s*\n/).filter(text => text.trim()).length : prompt.trim() ? 1 : 0
+ const selected = models.find(item => modelIdentity(item) === model)
+ const estimate = modelPrice(selected, imageSize, Math.max(1, count))
  return <section data-input-bar className="studio-input">
   <div className="studio-input-fields">
-   <label className="studio-field"><span>图片模型</span><select aria-label="图片模型" value={model} disabled={busy} onChange={event => setModel(event.target.value)}>{!models.length && <option value="">暂无可用生图模型</option>}{models.map(item => <option key={modelIdentity(item)} value={modelIdentity(item)}>{item.id}</option>)}</select></label>
+   <ModelPicker models={models} value={model} size={imageSize} disabled={busy} onChange={setModel} />
    {!models.length && <p className="studio-muted">管理员配置可用模型后，即可在这里开始创作。</p>}
    {!editing && <div className="studio-tabs studio-mode" aria-label="创作模式"><button disabled={busy} aria-pressed={!batchMode} onClick={() => setBatchMode(false)}>单张创作</button><button disabled={busy} aria-pressed={batchMode} onClick={() => setBatchMode(true)}>批量创作</button></div>}
    <div className="studio-prompt-heading"><label htmlFor="studio-prompt">{editing ? '修改描述' : '画面描述'}</label><span className="studio-muted">{prompt.length} 字</span></div>
@@ -35,7 +38,8 @@ export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, 
    {capabilities && <p className="studio-muted">尺寸与比例为生成目标，实际尺寸以下载图片为准。</p>}
   </div>
   <div className="studio-submit-area">
-   <p className="studio-muted">每条提示词生成一张 · 按模型配置计费</p>
+   <div className="studio-estimate"><span>预计消耗{count > 1 ? ` · ${count} 张` : ''}</span><strong>{estimate}{estimate !== '价格待配置' && ' 额度'}</strong></div>
+   <p className="studio-muted">按模型价格预估，以任务结算为准</p>
    <button className="studio-submit" aria-label={editing ? '生成修改图' : '开始生成'} disabled={busy || !model || !prompt.trim() || Boolean(referenceError) || count === 0} onClick={submit}>{busy ? '正在提交…' : editing ? '生成修改图' : `开始生成${count > 1 ? ` · ${count} 张` : ''}`}<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></button>
    </div>
  </section>

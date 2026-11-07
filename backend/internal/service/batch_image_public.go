@@ -178,10 +178,11 @@ type BatchImagePublicListResponse struct {
 }
 
 type BatchImagePublicModel struct {
-	Capabilities *BatchImageModelCapabilities `json:"capabilities,omitempty"`
-	ID           string                       `json:"id"`
-	Object       string                       `json:"object"`
-	Provider     string                       `json:"provider"`
+	Prices       map[string]BatchImageModelPriceRange `json:"prices,omitempty"`
+	Capabilities *BatchImageModelCapabilities         `json:"capabilities,omitempty"`
+	ID           string                               `json:"id"`
+	Object       string                               `json:"object"`
+	Provider     string                               `json:"provider"`
 }
 
 type BatchImagePublicModelsResponse struct {
@@ -200,9 +201,10 @@ type BatchImageJobsQuery struct {
 }
 
 type BatchImageItemsQuery struct {
-	Status string
-	Limit  int
-	Cursor string
+	CustomIDs []string
+	Status    string
+	Limit     int
+	Cursor    string
 }
 
 func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRepository, groupRepo GroupRepository, userGroupRateRepo UserGroupRateRepository, queue BatchImageQueue, pricing *BatchImageModelPricingResolver, billingRepo UsageBillingRepository, authCache APIKeyAuthCacheInvalidator, cfg *config.Config) *BatchImagePublicService {
@@ -856,6 +858,8 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 	}
 
 	modelsByProvider := make(map[string]map[string]struct{})
+	pricesByProvider := make(map[string]map[string]map[string]BatchImageModelPriceRange)
+	priceTemplates := make(map[string]map[string]BatchImageModelPriceRange)
 	groupPlatform, err := s.batchImageGroupPlatform(ctx, owner.GroupID)
 	if err != nil {
 		return nil, err
@@ -899,6 +903,28 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 					modelsByProvider[providerName] = make(map[string]struct{})
 				}
 				modelsByProvider[providerName][model] = struct{}{}
+				if pricesByProvider[providerName] == nil {
+					pricesByProvider[providerName] = make(map[string]map[string]BatchImageModelPriceRange)
+				}
+				if pricesByProvider[providerName][model] == nil {
+					pricesByProvider[providerName][model] = make(map[string]BatchImageModelPriceRange)
+				}
+				identity := providerName + ":" + model
+				template, priced := priceTemplates[identity]
+				if !priced {
+					template = s.cataloguePrices(ctx, owner, providerName, model, nil)
+					priceTemplates[identity] = template
+				}
+				accountPrices := make(map[string]BatchImageModelPriceRange, len(template))
+				for size, price := range template {
+					rate := math.Max(0, account.BillingRateMultiplier())
+					value := price.Min * rate
+					if math.IsNaN(value) || math.IsInf(value, 0) {
+						continue
+					}
+					accountPrices[size] = BatchImageModelPriceRange{Min: value, Max: value}
+				}
+				mergeBatchImagePrices(pricesByProvider[providerName][model], accountPrices)
 			}
 		}
 	}
@@ -916,6 +942,7 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				Object:       "image.batch.model",
 				Provider:     providerName,
 				Capabilities: s.modelCapabilities(model),
+				Prices:       pricesByProvider[providerName][model],
 			})
 		}
 	}
@@ -937,6 +964,10 @@ func (s *BatchImagePublicService) nativeImageCatalogPriceAvailable(ctx context.C
 
 func (s *BatchImagePublicService) ListItems(ctx context.Context, owner BatchImageOwner, batchID string, query BatchImageItemsQuery) (*BatchImagePublicItemsResponse, error) {
 	filter := BatchImageItemFilter{Limit: query.Limit, Offset: parseBatchImageCursor(query.Cursor)}
+	if len(query.CustomIDs) > 100 {
+		return nil, ErrBatchImageInvalidItems
+	}
+	filter.CustomIDs = query.CustomIDs
 	switch strings.TrimSpace(query.Status) {
 	case "", "all":
 	case "succeeded", "success":

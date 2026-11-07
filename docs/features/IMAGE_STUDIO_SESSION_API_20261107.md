@@ -28,11 +28,13 @@ Request and response bodies are exactly those of the existing `/v1/images/batche
 | Method | Path | Existing handler |
 | --- | --- | --- |
 | GET | `/batches/models` | Models (capability and model allowlist filtered) |
+| GET | `/batches/gallery` | Gallery (joined, owner/key-bound item metadata page) |
 | POST | `/batches` | Submit (validation, idempotency, security audit, service/billing) |
 | GET | `/batches` | List |
 | GET | `/batches/:id` | Get |
 | GET | `/batches/:id/items` | Items |
 | GET | `/batches/:id/items/:custom_id/content` | ItemContent |
+| GET | `/batches/:id/items/:custom_id/thumbnail` | ItemThumbnail (first image, JPEG preview) |
 | GET | `/batches/:id/result-files` | ResultFiles |
 | GET | `/batches/:id/download` | Download |
 | POST | `/batches/:id/cancel` | Cancel |
@@ -69,3 +71,43 @@ This is not a claim of real-provider or browser acceptance.
 
 The current frontend model directory/history adapter and its scoped browser
 acceptance are documented separately in `IMAGE_STUDIO_REDESIGN_20261108.md`.
+
+## Gallery and price extension (2026-11-08)
+
+`GET /batches/gallery` returns raw `{data:[{job,item}],next_cursor?}`. Defaults
+to 24 items, maximum 50; query parameters are `limit`, `cursor`, `status`
+(`all|pending|completed|failed`), literal substring `q` (max240 bytes), and
+optional `root` batch ID (max200 bytes, root plus direct children). The cursor
+is a positive `job-row-id:item-row-id` descending boundary. It conveys no
+authorization: every query still binds the session owner and selected key.
+Changing filters starts a new page. This is a live status listing rather than
+a frozen snapshot. No object reads occur in the metadata query. Existing
+`/batches` and `/items` responses remain compatible. Repeated `custom_id`
+parameters on `/items` (max100) let polling update only loaded items from very
+large batches; ownership still uses the existing ListItems service.
+
+Models now include optional `prices: {"1K":{"min":number,"max":number},...}`
+for supported sizes. These reuse submission pricing, currency conversion,
+user/group/image/account multipliers and provider-specific batch discounts.
+An account range is not a price guarantee; settlement remains authoritative.
+The UI deduplicates and routes using the same first eligible key, preserving its
+quotes. Missing prices display as unconfigured; an explicit zero stays zero.
+
+The thumbnail endpoint uses the existing completed-job/content ownership and
+retention gates. It emits a white-composited JPEG, quality80, long edge at most
+480px, without upscaling; it never marks an explicit original download.
+Response caching is private for 300s, varying on Authorization and X-API-Key-ID.
+Server cache: 32MiB/256 entries, coalesced reads, owner and output rechecked
+on each actual request. Source decoding is bounded by32MiB/40MP and two
+concurrent decodes. The browser cache is scoped to the mounted user's workspace,
+64 blobs/16MiB. New successful items persist private cloud previews while their
+result bytes are available; 2K/4K previews use final pixels. A process-cold read
+opens the stored JPEG, without a provider account or original result read.
+Only historical/missing previews trigger a shared-lease batch backfill, reusing
+all already stored covers and scanning normal JSONL once for missing items.
+An ETag supports authenticated 304 revalidation. Migration270 adds concurrent
+metadata paging indexes; migration271 adds nullable deletion/retry fences to
+existing jobs. No second generation task table or billing operation is added.
+Storage prerequisites, bounded retry and deletion contracts are documented in
+`IMAGE_STUDIO_PERSISTENT_THUMBNAILS_20261108.md`.
+Current evidence and limitations: `IMAGE_STUDIO_GALLERY_OPTIMIZATION_20261108.md`.

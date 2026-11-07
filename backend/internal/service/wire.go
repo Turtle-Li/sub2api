@@ -133,6 +133,12 @@ func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo Acco
 	return svc
 }
 
+func ProvideBatchImageDownloadService(repo BatchImageRepository, accountRepo AccountRepository, limiter BatchImageDownloadLimiter, store BatchImageDeliveryObjectStore, cfg *config.Config, lockCache LeaderLockCache, db *sql.DB) *BatchImageDownloadService {
+	svc := NewBatchImageDownloadService(repo, accountRepo, limiter, store, cfg)
+	svc.thumbnailLock = newSingletonJobLock(lockCache, db, "image-studio-thumbnails", 2*time.Minute)
+	return svc
+}
+
 // ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
 func ProvideOpenAIOAuthService(
 	proxyRepo ProxyRepository,
@@ -983,7 +989,7 @@ var ProviderSet = wire.NewSet(
 	ProvideImageTaskService,
 	ProvideBatchImageModelPricingResolver,
 	ProvideBatchImagePublicService,
-	NewBatchImageDownloadService,
+	ProvideBatchImageDownloadService,
 	ProvideBatchImageCleanupService,
 	ProvideBatchImageWorkerRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),

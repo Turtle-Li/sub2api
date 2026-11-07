@@ -1,0 +1,76 @@
+import React, { useRef, useState } from 'react'
+import type { BatchImageModel } from '@/api/batchImage'
+import { modelIdentity } from './workspaceAPI'
+
+const platforms: Readonly<Record<string, string>> = {
+  gemini_api: 'Google Gemini', vertex: 'Google Vertex', openai_images: 'OpenAI',
+  wan_images: '通义万相', seedream_images: '豆包 Seedream',
+  muse_images: 'Muse', workbuddy_images: '腾讯混元',
+}
+export const modelPlatform = (provider: string) => platforms[provider] || provider
+export function modelPrice(model: BatchImageModel | undefined, size: string, count = 1): string {
+  const price = model?.prices?.[size || model.capabilities?.default_image_size || '1K']
+  if (!price || !Number.isFinite(price.min) || !Number.isFinite(price.max) || price.min < 0 || price.max < price.min) return '价格待配置'
+  const format = (value: number) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(value * count)
+  return price.min === price.max ? format(price.min) : `${format(price.min)}–${format(price.max)}`
+}
+
+export function ModelPicker({ models, value, size, disabled, onChange }: {
+  readonly models: readonly BatchImageModel[]; readonly value: string; readonly size: string
+  readonly disabled: boolean; readonly onChange: (value: string) => void
+}) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [platform, setPlatform] = useState('')
+  const selected = models.find(model => modelIdentity(model) === value)
+  const query = search.trim().toLowerCase()
+  const groups = new Map<string, BatchImageModel[]>()
+  for (const model of models) {
+    const name = modelPlatform(model.provider)
+    if (query && !`${name} ${model.id}`.toLowerCase().includes(query)) continue
+    const existing = groups.get(name) || []
+    existing.push(model); groups.set(name, existing)
+  }
+  const active = groups.has(platform) ? platform : groups.keys().next().value
+  const visible = active ? groups.get(active) || [] : []
+  function close() { dialog.current?.close(); setOpen(false); trigger.current?.focus() }
+  return <div className="studio-model-picker">
+    <span className="studio-field-label" id="studio-model-label">图片模型</span>
+    <button ref={trigger} type="button" aria-label="图片模型" aria-haspopup="dialog" aria-expanded={open} className="studio-model-trigger" disabled={disabled || !models.length} onClick={() => {
+      setSearch(''); setPlatform(selected ? modelPlatform(selected.provider) : '')
+      setOpen(true); dialog.current?.showModal(); dialog.current?.querySelector<HTMLInputElement>('input')?.focus()
+    }}>
+      <span className="studio-model-mark" aria-hidden="true">{(selected ? modelPlatform(selected.provider) : 'AI').slice(0, 1)}</span>
+      <span className="studio-model-copy"><small>{selected ? modelPlatform(selected.provider) : '生图模型'}</small><strong>{selected?.id || '暂无可用模型'}</strong></span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+    </button>
+    <div className="studio-model-current-price"><span>{size || selected?.capabilities?.default_image_size || '1K'} 分辨率</span><span><strong>{modelPrice(selected, size)}</strong>{modelPrice(selected, size) !== '价格待配置' && ' 额度 / 张'}</span></div>
+    <dialog ref={dialog} className="studio-model-dialog" aria-label="选择图片模型" onCancel={event => { event.preventDefault(); close() }} onClose={() => { setOpen(false); trigger.current?.focus() }} onClick={event => { if (event.target === event.currentTarget) close() }}>
+      <div className="studio-model-dialog-heading"><h2>选择图片模型</h2><button type="button" aria-label="关闭模型选择" onClick={close}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button></div>
+      <input type="search" autoFocus aria-label="搜索生图模型" placeholder="搜索平台或模型" value={search} onChange={event => setSearch(event.target.value)} />
+      <div className="studio-model-browser">
+        <nav className="studio-model-platforms" aria-label="模型平台">{[...groups].map(([name, entries]) => <button key={name} type="button" aria-pressed={active === name} onClick={() => setPlatform(name)}><span>{name}</span><small>{entries.length}</small></button>)}</nav>
+        <div className="studio-model-options" role="listbox" aria-label="可用生图模型" onKeyDown={event => {
+          if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+          const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+          const index = options.findIndex(option => option === document.activeElement)
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length
+          event.preventDefault(); options[next]?.focus()
+        }}>
+          {!visible.length && <p className="studio-model-empty">没有匹配的模型，试试其他名称。</p>}
+          {visible.map(model => {
+            const optionSize = model.capabilities?.image_sizes.includes(size) ? size : model.capabilities?.default_image_size || size || '1K'
+            const price = modelPrice(model, optionSize)
+            return <button type="button" role="option" aria-selected={modelIdentity(model) === value} key={modelIdentity(model)} className="studio-model-option" onClick={() => { onChange(modelIdentity(model)); close() }}>
+            <span className="studio-model-option-copy"><strong>{model.id}</strong><small>{modelPlatform(model.provider)}{model.capabilities?.max_reference_images ? ` · 最多 ${model.capabilities.max_reference_images} 张参考图` : ''}</small></span>
+            <span className="studio-model-option-price"><strong>{price}</strong><small>{price === '价格待配置' ? `${optionSize} 分辨率` : `${optionSize} · 额度 / 张`}</small></span>
+            <svg className="studio-model-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+          </button>})}
+        </div>
+      </div>
+      <p className="studio-model-footnote">价格随分辨率更新，消耗以任务结算为准。</p>
+    </dialog>
+  </div>
+}

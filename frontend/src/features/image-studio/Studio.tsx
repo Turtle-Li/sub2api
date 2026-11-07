@@ -106,8 +106,14 @@ function Workspace({ keys }: { readonly keys: readonly number[] }) {
   const referenceError = capabilities && refs.length > capabilities.max_reference_images ? `当前模型最多支持 ${capabilities.max_reference_images} 张参考图，请移除多余图片后生成。` : ''
   const [prompt, setPrompt] = useState('')
   const [parent, setParent] = useState<StudioTask | null>(null)
+  const rootBatch = parent ? taskRoot(parent) : ''
   const [detail, setDetail] = useState<StudioTask | null>(null)
   const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchInput = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (searchOpen) searchInput.current?.focus() }, [searchOpen])
+  useEffect(() => { const timer = setTimeout(() => setQuery(search), 250); return () => clearTimeout(timer) }, [search])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -121,25 +127,41 @@ function Workspace({ keys }: { readonly keys: readonly number[] }) {
   const [refresh, setRefresh] = useState(0)
   useEffect(() => {
     let active = true
+    api.client.refreshDirectory()
+    void api.client.models().then(catalog => {
+      if (!active) return
+      setModels(catalog)
+      setModel(previous => catalog.some(item => modelIdentity(item) === previous) ? previous : catalog[0] ? modelIdentity(catalog[0]) : '')
+      const warning = api.client.warnings().join(' ')
+      if (warning) setError(warning)
+    }).catch(error => { if (active) setError(errorMessage(error)) })
+    return () => { active = false }
+  }, [api, refresh])
+  useEffect(() => {
+    readVersion.current++; loadedPages.current = 1; setTasks([]); setNextCursor(null)
+  }, [filter, query, rootBatch])
+  useEffect(() => {
+    let active = true
+    setLoading(true)
     async function load() {
       const version = readVersion.current
       try {
-        api.client.refreshDirectory()
-        const [catalog, first] = await Promise.all([api.client.models(), api.client.tasks()])
+        const filters = { status: filter, search: query, root: rootBatch }
+        const first = await api.client.tasks('', filters)
         let cursor = first.nextCursor
         const rows = [...first.tasks]
         const continuations = [...first.itemContinuations]
         for (let page = 1; page < loadedPages.current && cursor; page++) {
-          const next = await api.client.tasks(cursor); rows.push(...next.tasks); continuations.push(...next.itemContinuations); cursor = next.nextCursor
+          const next = await api.client.tasks(cursor, filters); rows.push(...next.tasks); continuations.push(...next.itemContinuations); cursor = next.nextCursor
         }
         if (!active || version !== readVersion.current) return
-        setModels(catalog); setModel(previous => catalog.some(item => modelIdentity(item) === previous) ? previous : catalog[0] ? modelIdentity(catalog[0]) : ''); setTasks(rows); setItemContinuations(continuations); setNextCursor(cursor); setError(api.client.warnings().join(' '))
+        setTasks(rows); setItemContinuations(continuations); setNextCursor(cursor); setError(api.client.warnings().join(' '))
       }
       catch (error) { if (active) setError(errorMessage(error)) }
       finally { if (active) setLoading(false) }
     }
     void load(); return () => { active = false }
-  }, [api, refresh])
+  }, [api, refresh, filter, query, rootBatch])
   const hasPending = tasks.some(taskPending)
   useEffect(() => {
     if (!hasPending) return
@@ -156,9 +178,10 @@ function Workspace({ keys }: { readonly keys: readonly number[] }) {
   async function loadMore() {
     if (!nextCursor || loading) return
     setLoading(true)
-    try { const page = await api.client.tasks(nextCursor); if (!api.controller.signal.aborted) { loadedPages.current++; setTasks(current => [...current, ...page.tasks.filter(task => !current.some(old => old.id === task.id))]); setNextCursor(page.nextCursor); setItemContinuations(current => [...current, ...page.itemContinuations]) } }
-    catch (error) { if (!api.controller.signal.aborted) setError(errorMessage(error)) }
-    finally { if (!api.controller.signal.aborted) setLoading(false) }
+    const version = readVersion.current
+    try { const page = await api.client.tasks(nextCursor, { status: filter, search: query, root: rootBatch }); if (!api.controller.signal.aborted && version === readVersion.current) { loadedPages.current++; setTasks(current => [...current, ...page.tasks.filter(task => !current.some(old => old.id === task.id))]); setNextCursor(page.nextCursor); setItemContinuations(current => [...current, ...page.itemContinuations]) } }
+    catch (error) { if (!api.controller.signal.aborted && version === readVersion.current) setError(errorMessage(error)) }
+    finally { if (!api.controller.signal.aborted && version === readVersion.current) setLoading(false) }
   }
   async function loadItems(continuation: ItemContinuation) {
     if (loading) return
@@ -190,7 +213,7 @@ function Workspace({ keys }: { readonly keys: readonly number[] }) {
       const sourceModel = models.find(item => item.id === task.job.model && item.provider === task.job.provider)
       const linked = sourceModel ? await api.client.canContinue(task, sourceModel) : false
       if (!continuation.isCurrent(selection)) return
-      setRefs([data]); setParent(linked ? task : null); setPrompt(''); setBatchMode(false); setDetail(null)
+      setRefs([data]); setParent(linked ? task : null); setPrompt(''); setBatchMode(false); setDetail(null); setFilter('all'); setSearch('')
       if (sourceModel) setModel(modelIdentity(sourceModel))
       setNotice(linked ? '' : '原模型暂不可用，已保留参考图，可选择模型创建新作品。')
       if (window.matchMedia?.('(max-width: 760px)').matches) composer.current?.showModal()
@@ -235,17 +258,24 @@ function Workspace({ keys }: { readonly keys: readonly number[] }) {
   const selectedDetail = detail ? tasks.find(task => task.id === detail.id) || detail : null
   const visible = tasks.filter(task => (!parent || taskRoot(task) === taskRoot(parent)) && (filter === 'all' || filter === 'pending' && taskPending(task) || filter === 'completed' && task.item.image_count > 0 || filter === 'failed' && taskDisplay(task).status === 'failed') && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase()))
   return <div className="studio-workspace">
-    <dialog ref={composer} open={!mobile} className="studio-composer" aria-label="创作设置">
+    <dialog ref={composer} open={!mobile} className="studio-composer" aria-label="创作设置" onClick={event => { if (mobile && event.target === event.currentTarget) composer.current?.close() }}>
       <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
       {parent && <p className="studio-edit-source studio-muted">基于当前参考图续改 · {parent.job.model}</p>}
       {mobile && error && <p className="studio-error" role="alert">{error}</p>}
       <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} model={model} setModel={value => void changeModel(value)} busy={busy} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
     </dialog>
-    <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-muted">{tasks.length} 个图片任务</span></div><div className="studio-toolbar-actions">{parent && <button onClick={() => { continuation.beginSelection(); setParent(null) }}>返回画廊</button>}<button disabled={loading} onClick={() => setRefresh(value => value + 1)}>刷新</button></div></div>
-    <div className="studio-gallery-filters"><div className="studio-tabs" aria-label="筛选任务">{[['all', '全部'], ['pending', '生成中'], ['completed', '已完成'], ['failed', '失败']].map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div><input aria-label="搜索图片任务" placeholder="搜索提示词或模型" value={search} onChange={event => setSearch(event.target.value)} /></div>
+    <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-gallery-count" aria-label={`已加载 ${tasks.length} 个图片任务`}>{tasks.length}</span></div>
+      <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{[['all', '全部'], ['pending', '生成中'], ['completed', '已完成'], ['failed', '失败']].map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>
+      <select className="studio-gallery-status" aria-label="筛选作品" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部作品</option><option value="pending">生成中</option><option value="completed">已完成</option><option value="failed">失败</option></select>
+      <div className="studio-toolbar-actions">{parent && <button onClick={() => { continuation.beginSelection(); setParent(null) }}>返回画廊</button>}
+        <button className="studio-search-toggle" aria-label="搜索作品" aria-expanded={searchOpen} aria-pressed={searchOpen || Boolean(search)} onClick={() => setSearchOpen(value => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg></button>
+        <button className="studio-refresh" aria-label="刷新作品" disabled={loading} onClick={() => setRefresh(value => value + 1)}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17" /></svg></button>
+      </div>
+      <input ref={searchInput} className={`studio-gallery-search${searchOpen ? ' is-open' : ''}`} type="search" aria-label="搜索图片任务" placeholder="搜索提示词或模型" value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && !search) { setSearchOpen(false); event.currentTarget.closest('.studio-toolbar')?.querySelector<HTMLButtonElement>('.studio-search-toggle')?.focus() } }} />
+    </div>
     {notice && <p className="studio-notice" role="status">{notice}</p>}
     {error && <div className="studio-error" role="alert">{error}</div>}
-    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length ? <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2><p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p></div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} />}
+    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length && error ? <div className="studio-empty"><h2>作品暂时无法显示</h2><p>请刷新作品后重试。</p></div> : !visible.length ? <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2><p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p></div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} />}
 
     {itemContinuations.map(continuation => <button key={continuation.job.id} disabled={loading} onClick={() => void loadItems(continuation)}>加载批次 {continuation.job.id} 的更多图片任务</button>)}
     {nextCursor && <button disabled={loading} onClick={() => void loadMore()}>加载更早的批次</button>}

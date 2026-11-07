@@ -12,6 +12,10 @@ vi.mock('../api', async importOriginal => {
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
 vi.stubGlobal('IntersectionObserver', undefined)
+Object.defineProperties(HTMLDialogElement.prototype, {
+ showModal: { configurable: true, value() { this.open = true } },
+ close: { configurable: true, value() { this.open = false } },
+})
 const seedream: BatchImageModel = { id: 'seedream-fixture', object: 'model', provider: 'fixture', capabilities: { image_sizes: ['1K', '2K', '4K'], aspect_ratios: ['1:1', '16:9'], default_image_size: '2K', default_aspect_ratio: '1:1', max_reference_images: 4, response_mime_types: ['image/png'] } }
 const muse: BatchImageModel = { id: 'muse-fixture', object: 'model', provider: 'fixture', capabilities: { image_sizes: ['large'], aspect_ratios: ['3:2'], default_image_size: 'large', default_aspect_ratio: '3:2', max_reference_images: 1, response_mime_types: [] } }
 const legacy: BatchImageModel = { id: 'legacy-fixture', object: 'model', provider: 'fixture' }
@@ -23,7 +27,14 @@ function element<T extends Element>(host: HTMLElement, selector: string): T {
  return found
 }
 async function change(host: HTMLElement, name: string, value: string) {
- await act(async () => { const select = element<HTMLSelectElement>(host, `select[aria-label="${name}"]`); select.value = name === '图片模型' ? `fixture:${value}` : value; select.dispatchEvent(new Event('change', { bubbles: true })) })
+ if (name === '图片模型') {
+  await act(async () => { element<HTMLButtonElement>(host, 'button[aria-label="图片模型"]').click() })
+  const option = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="option"]')).find(button => button.querySelector('strong')?.textContent === value)
+  if (!option) throw new Error(`Missing model ${value}`)
+  await act(async () => { option.click() })
+  return
+ }
+ await act(async () => { const select = element<HTMLSelectElement>(host, `select[aria-label="${name}"]`); select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })) })
 }
 async function prompt(host: HTMLElement) {
  await act(async () => {
@@ -43,7 +54,7 @@ async function upload(host: HTMLElement, count: number) {
 }
 async function mount(models = [seedream, muse, legacy]) {
  const submit = vi.fn().mockRejectedValue(new Error('Unconfirmed submission'))
- const client = { models: vi.fn(async () => models), tasks: vi.fn(async () => ({ tasks: [], nextCursor: null, itemContinuations: [] })), image: vi.fn(), submit, refreshPending: vi.fn(), items: vi.fn(), cancel: vi.fn() }
+ const client = { models: vi.fn(async () => models), tasks: vi.fn(async () => ({ tasks: [], nextCursor: null, itemContinuations: [] })), image: vi.fn(), thumbnail: vi.fn(), submit, refreshPending: vi.fn(), items: vi.fn(), cancel: vi.fn() }
  vi.mocked(studioAPI).mockReturnValue(client)
  vi.mocked(listKeys).mockResolvedValue([42, 43].map(id => ({ id, name: `key-${id}`, group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false })))
  vi.mocked(readImage).mockResolvedValue('data:image/png;base64,aW1hZ2U=')

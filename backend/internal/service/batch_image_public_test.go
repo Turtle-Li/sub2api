@@ -1327,10 +1327,12 @@ func TestBatchImagePublicService_ListModels(t *testing.T) {
 			ID:       "gemini-2.5-flash-image",
 			Object:   "image.batch.model",
 			Provider: BatchImageProviderGeminiAPI,
+			Prices:   map[string]BatchImageModelPriceRange{"1K": {Min: 0.125, Max: 0.125}, "2K": {Min: 0.125, Max: 0.125}, "4K": {Min: 0.125, Max: 0.125}},
 		}, {
 			ID:       "gemini-2.5-flash-image",
 			Object:   "image.batch.model",
 			Provider: BatchImageProviderVertex,
+			Prices:   map[string]BatchImageModelPriceRange{"1K": {Min: 0.125, Max: 0.125}, "2K": {Min: 0.125, Max: 0.125}, "4K": {Min: 0.125, Max: 0.125}},
 		}}, got.Data)
 	})
 
@@ -1363,6 +1365,7 @@ func TestBatchImagePublicService_ListModels(t *testing.T) {
 			ID:       "gpt-image-2.5-flare",
 			Object:   "image.batch.model",
 			Provider: BatchImageProviderOpenAI,
+			Prices:   map[string]BatchImageModelPriceRange{"1K": {}, "2K": {}, "4K": {}},
 		}}, got.Data)
 	})
 

@@ -42,6 +42,11 @@ func (r *studioJobsRepo) GetBatchImageJobByBatchIDForOwner(_ context.Context, us
 	return &service.BatchImageJob{BatchID: id, Status: service.BatchImageJobStatusCompleted}, nil
 }
 
+func (r *studioJobsRepo) ListBatchImageGalleryForOwner(_ context.Context, user, key int64, _ service.BatchImageGalleryQuery) ([]service.BatchImageGalleryRecord, error) {
+	r.owner = []int64{user, key}
+	return []service.BatchImageGalleryRecord{}, nil
+}
+
 type studioAccountRepo struct {
 	service.BatchImageAccountSelectionRepository
 }
@@ -105,6 +110,16 @@ func TestImageStudioRoutesReuseBatchServiceAndSafeDirectory(t *testing.T) {
 		require.Equal(t, 200, w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), "batch-test")
 		require.Equal(t, []int64{1, 3}, jobs.owner)
+	})
+	t.Run("gallery uses session and owned key", func(t *testing.T) {
+		require.Equal(t, http.StatusUnauthorized, request("GET", "/batches/gallery", "", false).Code)
+		w := request("GET", "/batches/gallery?limit=24", "", true)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.JSONEq(t, `{"data":[]}`, w.Body.String())
+		require.Equal(t, []int64{1, 3}, jobs.owner)
+	})
+	t.Run("thumbnail requires session", func(t *testing.T) {
+		require.Equal(t, http.StatusUnauthorized, request("GET", "/batches/batch-test/items/one/thumbnail", "", false).Code)
 	})
 	t.Run("submit reaches original service group gate", func(t *testing.T) {
 		w := request("POST", "/batches", `{"model":"gemini-2.5-flash-image","items":[{"custom_id":"one","prompt":"cat"}]}`, true)

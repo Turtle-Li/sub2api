@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 )
@@ -60,6 +61,27 @@ func testBatchImageCOSStore(t *testing.T, endpoint string) *batchImageCOSDeliver
 		client:  client,
 		presign: s3.NewPresignClient(client),
 		bucket:  "private-bucket",
+	}
+}
+
+func TestBatchImageCOSOpenDistinguishesMissingObjectFromAccessFailure(t *testing.T) {
+	for _, tc := range []struct {
+		code    string
+		status  int
+		missing bool
+	}{{"NoSuchKey", http.StatusNotFound, true}, {"AccessDenied", http.StatusForbidden, false}} {
+		t.Run(tc.code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, "<Error><Code>"+tc.code+"</Code><Message>unavailable</Message></Error>")
+			}))
+			defer server.Close()
+			_, _, _, err := testBatchImageCOSStore(t, server.URL).Open(t.Context(), "previews/one.jpg")
+			require.Error(t, err)
+			require.Equal(t, tc.missing, errors.Is(err, service.ErrStudioThumbnailObjectMissing))
+			require.NotContains(t, err.Error(), "test-secret")
+		})
 	}
 }
 

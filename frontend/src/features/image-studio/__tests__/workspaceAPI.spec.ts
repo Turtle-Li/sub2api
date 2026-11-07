@@ -6,10 +6,19 @@ vi.mock('../api', () => ({ studioAPI: vi.fn() }))
 const model = (id: string, provider = 'fixture') => ({ id, provider, object: 'model' })
 const task = (id: string) => ({ id: `${id}/one`, job: { id, model: 'image', provider: 'fixture', status: 'completed' }, item: { custom_id: 'one', image_count: 1 } }) as StudioTask
 function client(models = [model('image')]) {
-  return { models: vi.fn(async () => models), tasks: vi.fn(async (_cursor = '') => ({ tasks: [] as StudioTask[], itemContinuations: [], nextCursor: null as string | null })), items: vi.fn(), image: vi.fn(), cancel: vi.fn(), refreshPending: vi.fn(async (tasks: StudioTask[]) => tasks), submit: vi.fn() }
+  return { models: vi.fn(async () => models), tasks: vi.fn(async (_cursor = '') => ({ tasks: [] as StudioTask[], itemContinuations: [], nextCursor: null as string | null })), items: vi.fn(), image: vi.fn(), thumbnail: vi.fn(), cancel: vi.fn(), refreshPending: vi.fn(async (tasks: StudioTask[]) => tasks), submit: vi.fn() }
 }
 beforeEach(() => vi.clearAllMocks())
 describe('model-directed workspace', () => {
+  it('loads history while catalogue discovery is still unresolved', async () => {
+    const source = client()
+    source.models.mockImplementation(() => new Promise(() => {}))
+    vi.mocked(studioAPI).mockReturnValue(source)
+    const api = workspaceAPI([1], new AbortController().signal)
+    void api.models()
+    await api.tasks()
+    expect(source.tasks).toHaveBeenCalledOnce()
+  })
   it('deduplicates model routes while retaining provider identity and ignores non-image admission', async () => {
     const first = client(), duplicate = client(), second = client([model('image', 'other')]), text = client()
     text.models.mockRejectedValue({ status: 403 })
@@ -109,5 +118,26 @@ describe('model-directed workspace', () => {
     await first
     await expect(queued).rejects.toMatchObject({ name: 'AbortError' })
     expect(source.image).toHaveBeenCalledOnce()
+  })
+  it('opens originals while a cover is preparing and skips cancelled queued covers', async () => {
+    const source = client(), a = task('a'), b = task('b'), card = new AbortController()
+    source.tasks.mockResolvedValue({ tasks: [a, b], itemContinuations: [], nextCursor: null })
+    let finish: (blob: Blob) => void = () => {}
+    source.thumbnail.mockImplementation(() => new Promise<Blob>(resolve => { finish = resolve }))
+    source.image.mockResolvedValue(new Blob(['original']))
+    vi.mocked(studioAPI).mockReturnValue(source)
+    const api = workspaceAPI([10], new AbortController().signal)
+    await api.tasks()
+    const cover = api.thumbnail(a), queued = api.thumbnail(b, card.signal)
+    await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledOnce())
+    await expect(api.image(b)).resolves.toBeInstanceOf(Blob)
+    card.abort()
+    const cancelled = expect(queued).rejects.toMatchObject({ name: 'AbortError' })
+    finish(new Blob(['cover']))
+    await cover
+    await cancelled
+    await api.thumbnail(a)
+    expect(source.thumbnail).toHaveBeenCalledOnce()
+    expect(source.image).toHaveBeenCalledWith(b, 0)
   })
 })

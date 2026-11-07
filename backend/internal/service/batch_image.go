@@ -272,9 +272,10 @@ type CreateBatchImageItemParams struct {
 }
 
 type BatchImageItemFilter struct {
-	Status string
-	Limit  int
-	Offset int
+	CustomIDs []string
+	Status    string
+	Limit     int
+	Offset    int
 }
 
 type BatchImageJobFilter struct {
@@ -393,8 +394,8 @@ type BatchImageDeliveryObjectStore interface {
 	Delete(ctx context.Context, keys []string) error
 }
 
-// BatchImageUpscaleObjectStore is the direct object I/O extension used only by
-// post-processed Image 2.5 results. Legacy archive-only fakes and deployments
+// BatchImageUpscaleObjectStore is the direct object I/O extension used by
+// post-processed results and persistent previews. Legacy archive-only fakes and deployments
 // continue to implement the narrower delivery interface above.
 type BatchImageUpscaleObjectStore interface {
 	Put(ctx context.Context, key, contentType string, body io.Reader, size int64) error

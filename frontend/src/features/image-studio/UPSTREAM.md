@@ -120,3 +120,41 @@ explicit; only batch mode splits prompts on a standalone `---` line.
 The old guide component and navigation entry are removed. `/batch-image` and
 `/docs/batch-image` redirect to `/image-studio`; the backend batch API is retained.
 Current redesign and acceptance: `docs/features/IMAGE_STUDIO_REDESIGN_20261108.md`.
+
+## Catalogue and gallery refinement (2026-11-08)
+
+The owner also maps platform/model selection and gallery delivery to VSO
+`4edef85ab3716fd43989b4a49561a148ba500d93`. Inspected its `workspace.js`
+platform/price UI, `GalleryCardQueryService` and its paging/cursor tests,
+`GalleryCardAssetService` and its owner/variant tests, and `ImagePreviewService`
+480px JPEG quality80 variant. Source/test paths and intentional differences are
+recorded in `docs/features/IMAGE_STUDIO_GALLERY_OPTIMIZATION_20261108.md`.
+No VSO source is transplanted; this host uses existing batch job/item rows,
+authenticated cached thumbnails and standard credit units. VSO projection
+tables, direct object capabilities, signed snapshot cursors and its wallet are
+not adopted. The upstream 88lin MIT license and executed virtualization,
+viewport gating, gestures and viewer modules remain retained.
+
+`ModelPicker.tsx` is a host-owned searchable native dialog with platform families,
+exact model IDs and size-sensitive backend quotes. Routing remains the first
+eligible key, including that key's quote; account differences appear as a range.
+History and catalogue now resolve independently. The host `api.ts` reads 24
+joined item/job records per key/page; root/status/search filters run on the server.
+`TaskCard` uses `thumbnail()`; original detail/edit/download uses `image()`.
+No task state moves to browser storage. Originals retain their download queue;
+thumbnail reads use an independent queue and each card cancels when offscreen.
+Server-side historical backfills retain the per-user download permit. A completed
+job transition reloads its cover. DOM rendering remains measured and virtualized.
+
+The persistent-variant contract is also mapped to pinned VSO
+`service/ImageVariantStorageService.java` and
+`service/ImageVariantStorageServiceTest.java`: eager stored variants avoid
+original reads, and historical backfill is persisted and reused. Verified at
+`4edef85ab3716fd43989b4a49561a148ba500d93`; the Sub2 adapter now stores
+versioned JPEG objects in the existing private delivery store. New
+inline/upscaled results capture previews eagerly; historical successful items
+backfill by batch behind a renewable shared lease. Memory is only an accelerator.
+Server ownership, retention and deletion gates precede cache/ETag responses;
+originals stay explicit. No VSO source was copied. Implementation, matching tests,
+storage requirements and archive-only differences are recorded in
+`docs/features/IMAGE_STUDIO_PERSISTENT_THUMBNAILS_20261108.md`.

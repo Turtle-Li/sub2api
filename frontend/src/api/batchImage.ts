@@ -109,6 +109,7 @@ export interface BatchImageModelCapabilities {
 }
 
 export interface BatchImageModel {
+  readonly prices?: Readonly<Record<string, { readonly min: number; readonly max: number }>>
   capabilities?: BatchImageModelCapabilities
   id: string
   object: string

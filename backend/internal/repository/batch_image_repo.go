@@ -686,8 +686,19 @@ func (r *batchImageRepository) ListBatchImageItems(ctx context.Context, batchID 
 
 	query := batchImageItemSelectSQL + " WHERE job_id = $1"
 	args := []any{batchID}
+	if len(filter.CustomIDs) > 0 {
+		query += " AND custom_id IN ("
+		for index, id := range filter.CustomIDs {
+			if index > 0 {
+				query += ","
+			}
+			args = append(args, id)
+			query += "$" + strconv.Itoa(len(args))
+		}
+		query += ")"
+	}
 	if filter.Status != "" {
-		query += " AND status = $2"
+		query += " AND status = $" + strconv.Itoa(len(args)+1)
 		args = append(args, filter.Status)
 	}
 	query += " ORDER BY id ASC LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2)

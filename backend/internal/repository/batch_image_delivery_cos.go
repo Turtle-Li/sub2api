@@ -409,6 +409,10 @@ func (s *batchImageCOSDeliveryStore) Open(ctx context.Context, key string) (io.R
 		return nil, 0, "", err
 	}
 	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) && (apiError.ErrorCode() == "NoSuchKey" || apiError.ErrorCode() == "NotFound") {
+		return nil, 0, "", service.ErrStudioThumbnailObjectMissing
+	}
 	if err != nil || result == nil || result.Body == nil {
 		return nil, 0, "", errors.New("open COS delivery object failed")
 	}

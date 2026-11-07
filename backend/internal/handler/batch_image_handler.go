@@ -187,9 +187,10 @@ func (h *BatchImageHandler) Items(c *gin.Context) {
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	got, err := h.service.ListItems(c.Request.Context(), owner, c.Param("id"), service.BatchImageItemsQuery{
-		Status: c.Query("status"),
-		Limit:  limit,
-		Cursor: c.Query("cursor"),
+		CustomIDs: c.QueryArray("custom_id"),
+		Status:    c.Query("status"),
+		Limit:     limit,
+		Cursor:    c.Query("cursor"),
 	})
 	if err != nil {
 		batchImageError(c, err)

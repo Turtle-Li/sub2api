@@ -140,6 +140,7 @@ func upscaleBatchImageResultLine(
 	writeFencer BatchImageUpscaleWriteFencer,
 	job *BatchImageJob,
 	line []byte,
+	thumbnails ...*batchImageThumbnailCapture,
 ) (mimeType, extension string, imageCount int, storedKeys []string, err error) {
 	if job == nil || upscaler == nil || !upscaler.Active() || store == nil || writeFencer == nil {
 		return "", "", 0, nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
@@ -207,6 +208,9 @@ func upscaleBatchImageResultLine(
 				}
 			}
 			cancelPut()
+		}
+		if keyErr == nil && len(thumbnails) > 0 {
+			thumbnails[0].persistSource(ctx, job, parts.CustomID, result.Data)
 		}
 		clearBytes(result.Data)
 		if keyErr != nil {

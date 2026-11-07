@@ -219,6 +219,9 @@ func (s *BatchImageCleanupService) cleanupJob(ctx context.Context, job *BatchIma
 	}
 
 	if target == CleanupTargetOutput {
+		if err := s.cleanupThumbnails(ctx, job); err != nil {
+			return s.recordCleanupFailure(ctx, job, target, reason, err)
+		}
 		if err := s.cleanupCOSDelivery(ctx, job); err != nil {
 			return s.recordCleanupFailure(ctx, job, target, reason, err)
 		}

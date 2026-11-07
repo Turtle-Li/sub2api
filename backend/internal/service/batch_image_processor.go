@@ -383,6 +383,7 @@ type BatchImageResultIndexer struct {
 	Upscaler           *ImageUpscaleService
 	UpscaleStore       BatchImageUpscaleObjectStore
 	UpscaleWriteFencer BatchImageUpscaleWriteFencer
+	Thumbnails         *BatchImageThumbnailService
 }
 
 func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (*BatchImageIndexResult, error) {
@@ -399,6 +400,7 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 		return nil, ErrBatchImageIndexOutputMissing.WithCause(err)
 	}
 	defer func() { _ = r.Close() }()
+	thumbnails := &batchImageThumbnailCapture{service: i.Thumbnails, parent: ctx, remaining: 10 * time.Second}
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
@@ -464,6 +466,7 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 			if _, upscaleRequired := RequestedImageUpscaleScale(job.ImageSize); upscaleRequired {
 				mimeType, extension, imageCount, _, upscaleErr := upscaleBatchImageResultLine(
 					upscaleCtx, i.Config, i.Upscaler, i.UpscaleStore, writeFencer, job, []byte(line),
+					thumbnails,
 				)
 				if upscaleErr != nil {
 					if errors.Is(upscaleErr, ErrBatchImageIndexStateConflict) || errors.Is(upscaleErr, ErrBatchImageUpscaleWriteFenceFailed) {
@@ -486,6 +489,7 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 				item.Status = BatchImageItemStatusSuccess
 				item.MimeType = batchImageOptionalStringPtr(parsed.MimeType)
 				item.FileExtension = batchImageOptionalStringPtr(parsed.FileExtension)
+				thumbnails.persistLine(ctx, job, []byte(line))
 				result.SuccessCount++
 			}
 		} else {

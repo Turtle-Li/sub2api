@@ -48,6 +48,12 @@
   `frontend/src/features/image-studio/UPSTREAM.md` before editing. The latter
   pins the UI reference, executed source modules and intentional host adapters.
   Preserve server-owned tasks, per-key ownership and the existing single ledger.
+  Catalogue prices, item-level gallery paging and thumbnail cache limits are in
+  `docs/features/IMAGE_STUDIO_GALLERY_OPTIMIZATION_20261108.md`; keep originals
+  explicit and recheck owner/key/output lifecycle before serving cached previews.
+  Persistent previews and historical backfill additionally follow
+  `docs/features/IMAGE_STUDIO_PERSISTENT_THUMBNAILS_20261108.md`: reuse existing
+  job/item rows, fence writes before deletion, and never replay generation.
 
 ## Codex OAuth relay Fast compatibility
 

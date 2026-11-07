@@ -88,6 +88,8 @@ type BatchImageInlineImage struct {
 }
 
 type BatchImageDownloadService struct {
+	thumbnails       batchImageThumbnailCache
+	thumbnailLock    *singletonJobLock
 	Repo             BatchImageRepository
 	ProviderRegistry *BatchImageProviderRegistry
 	AccountResolver  BatchImageAccountResolver
