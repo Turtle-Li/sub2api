@@ -14,8 +14,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelMonitorV3ProbeEmailHonorsFinalSendFence(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	smtp := startNotificationEmailTestSMTPServer(t)
+	repo := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, repo.SetMultiple(context.Background(), smtp.settings()))
+	svc := NewNotificationEmailService(repo, NewEmailService(repo, nil))
+	called := false
+	err := svc.Send(context.Background(), NotificationEmailSendInput{
+		Event: NotificationEmailEventOpsAlert, SourceType: "model_group_probe", SourceID: "probe-fence", RecipientEmail: "operator@test.invalid",
+		Variables:  map[string]string{"rule_name": "Group availability", "severity": "warning", "alert_description": "Fixture"},
+		BeforeSend: func(context.Context) error { called = true; return context.Canceled },
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, called, "the probe source must execute the fence after SMTP/template setup")
+	require.Zero(t, smtp.messageCount())
+}
 
 func TestNotificationEmailPreviewEscapesHTMLAndSanitizesSubject(t *testing.T) {
 	ctx := context.Background()

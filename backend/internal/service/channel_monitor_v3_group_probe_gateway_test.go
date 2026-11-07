@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
@@ -99,4 +100,25 @@ func TestChannelMonitorV3ProbeCaptureOverflowFailsClosed(t *testing.T) {
 	_, err = w.Write([]byte(strings.Repeat("x", 64*1024)))
 	require.NoError(t, err)
 	require.True(t, w.overflow, "a later error outside the capture bound must not turn the check green")
+}
+
+func TestChannelMonitorV3ProbePreservesOwnedDeadline(t *testing.T) {
+	for _, detach := range []func(context.Context) (context.Context, context.CancelFunc){
+		detachUpstreamContext,
+		func(ctx context.Context) (context.Context, context.CancelFunc) {
+			return detachStreamUpstreamContext(ctx, true)
+		},
+	} {
+		base, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx := context.WithValue(base, channelMonitorV3ProbeGroupContextKey{}, int64(4))
+		probe, release := detach(ctx)
+		_, hasDeadline := probe.Deadline()
+		require.True(t, hasDeadline)
+		cancel()
+		require.ErrorIs(t, probe.Err(), context.Canceled)
+		release()
+		ordinary, release := detach(base)
+		require.NoError(t, ordinary.Err(), "ordinary streaming clients retain their existing usage-drain behavior")
+		release()
+	}
 }

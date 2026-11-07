@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -205,4 +207,34 @@ func TestChannelMonitorV3ProbeNotificationTargetFence(t *testing.T) {
 	require.False(t, channelMonitorV3ProbeTargetEnabled(&repo.config, 4, "other-model"))
 	repo.config.GroupProbe.Groups[0].Enabled = false
 	require.False(t, channelMonitorV3ProbeTargetEnabled(&repo.config, 4, "gpt-mini"))
+}
+
+func TestChannelMonitorV3ProbeFailureAndRecoveryEmail(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	smtp := startNotificationEmailTestSMTPServer(t)
+	settings := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, settings.SetMultiple(ctx, smtp.settings()))
+	cfg := defaultOpsEmailNotificationConfig()
+	cfg.Alert.Enabled, cfg.Alert.IncludeResolvedAlerts, cfg.Alert.MinSeverity = true, true, "warning"
+	cfg.Alert.Recipients = []string{"operator@test.invalid"}
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, string(raw)))
+	repo, p, _ := groupProbeFixture()
+	p.ops = &OpsService{settingRepo: settings}
+	p.email = NewNotificationEmailService(settings, NewEmailService(settings, nil))
+	p.emailLimiter = newSlidingWindowLimiter(0, time.Hour)
+	slot := time.Now().UTC().Truncate(ChannelMonitorV3ProbeInterval)
+	failure := ChannelMonitorV3GroupProbeResult{GroupID: 4, Model: "gpt-mini", Slot: slot, Outcome: "failure"}
+	p.notify(ctx, failure)
+	require.EqualValues(t, 1, smtp.messageCount())
+	p.notify(ctx, failure)
+	require.EqualValues(t, 1, smtp.messageCount(), "the same group/outcome/hour must not send twice")
+	repo.results = append(repo.results, failure)
+	recovery := failure
+	recovery.Slot, recovery.Outcome = slot.Add(ChannelMonitorV3ProbeInterval), "success"
+	p.notify(ctx, recovery)
+	require.EqualValues(t, 2, smtp.messageCount(), "a successful check after failure sends the existing recovery notice")
 }

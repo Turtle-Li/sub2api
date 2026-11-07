@@ -594,6 +594,11 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 	if ctx == nil {
 		return context.Background(), func() {}
 	}
+	// Internal probes already own a bounded execution context; unlike an HTTP
+	// client disconnect, its cancellation must stop the paid upstream request.
+	if _, probe := ctx.Value(channelMonitorV3ProbeGroupContextKey{}).(int64); probe {
+		return ctx, func() {}
+	}
 	if !stream {
 		return ctx, func() {}
 	}
@@ -603,6 +608,9 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 func detachUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		return context.Background(), func() {}
+	}
+	if _, probe := ctx.Value(channelMonitorV3ProbeGroupContextKey{}).(int64); probe {
+		return ctx, func() {}
 	}
 	// Async and batch image workers already detached from the submitting HTTP
 	// request and carry their own execution deadline/ownership cancellation.

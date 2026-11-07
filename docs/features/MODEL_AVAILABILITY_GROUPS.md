@@ -76,6 +76,8 @@ conversion floors still apply, and native Codex OAuth strips unsupported output
 limits. Do not promise a strict one-token upper bound for that protocol. A tiny
 prompt, inexpensive selected model, 45-second deadline and a single claimed
 attempt bound the trial; actual input/output tokens are retained privately.
+The existing HTTP stream-drain helpers preserve the private probe execution
+deadline/cancellation; ordinary clients still retain their normal usage drain.
 
 The same-origin plaza endpoint returns an optional sanitized availability object
 only after the original viewer/group filter. Current state is unknown after
@@ -97,6 +99,8 @@ deduplicate group/outcome/hour; sustained failure sends at most hourly reminders
 No error body, account credential or usage volume is published. Disabling the
 target fences queued sends. Live email configuration was inspected enabled;
 delivery requires a real probe failure or recovery and is verified separately.
+The shared email service explicitly includes `model_group_probe` in its final
+active-generation/BeforeSend fence, after SMTP configuration has loaded.
 
 ## Local verification
 
@@ -104,6 +108,9 @@ delivery requires a real probe failure or recovery and is verified separately.
   plaza and group-resolution regressions, pass. New tests execute actual OpenAI
   API-key/OAuth and Anthropic forwarding against deterministic HTTP transports;
   validate minimal wire payload, completed output/usage and no media submission.
+- Real local SMTP tests verify failure/recovery delivery, hourly deduplication
+  and suppression at the final send fence. The fence test failed before the
+  shared sender fix and passes after it; no production fault is manufactured.
 - Real PostgreSQL integration passes: concurrent claims, same-slot model change,
   idempotent finish, private-group scope, retention and independent user facts.
 - Frontend production build passes; six targeted files / 52 tests pass,

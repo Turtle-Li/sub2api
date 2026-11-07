@@ -177,7 +177,7 @@ func (p *ChannelMonitorV3GroupProber) notify(ctx context.Context, result Channel
 		return
 	}
 	cfg, err := p.ops.GetEmailNotificationConfig(ctx)
-	if err != nil || cfg == nil || !cfg.Alert.Enabled || !shouldSendOpsAlertEmailByMinSeverity(cfg.Alert.MinSeverity, "warning") {
+	if err != nil || cfg == nil || !cfg.Alert.Enabled || !shouldSendOpsAlertEmailByMinSeverity(cfg.Alert.MinSeverity, "P1") {
 		return
 	}
 	if result.Outcome == "success" && !cfg.Alert.IncludeResolvedAlerts {
@@ -199,6 +199,13 @@ func (p *ChannelMonitorV3GroupProber) notify(ctx context.Context, result Channel
 				}
 				if !p.allowed(checkCtx, current) || !channelMonitorV3ProbeTargetEnabled(current, result.GroupID, result.Model) {
 					return fmt.Errorf("probe notifications disabled")
+				}
+				preferences, err := p.ops.GetEmailNotificationConfig(checkCtx)
+				if err != nil {
+					return err
+				}
+				if preferences == nil || !preferences.Alert.Enabled || !shouldSendOpsAlertEmailByMinSeverity(preferences.Alert.MinSeverity, "P1") || result.Outcome == "success" && !preferences.Alert.IncludeResolvedAlerts {
+					return fmt.Errorf("ops notifications disabled")
 				}
 				return nil
 			},
