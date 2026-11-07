@@ -27,4 +27,9 @@ func RegisterModelPlazaRoutes(
 	{
 		plaza.GET("", h.ModelPlaza.Get)
 	}
+	status := v1.Group("/model-status")
+	status.Use(panelRateLimiter.PublicIP())
+	status.Use(gin.HandlerFunc(optionalJWT))
+	status.Use(middleware.BackendModeUserGuard(settingService))
+	status.GET("", h.ModelPlaza.GetStatus)
 }

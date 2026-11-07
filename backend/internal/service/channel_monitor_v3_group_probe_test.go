@@ -139,13 +139,36 @@ func TestChannelMonitorV3GroupProbeMinimalPayloadAndResponseValidation(t *testin
 	}
 }
 
+func TestChannelMonitorV3PlazaSuppressesSmallSamplePercentages(t *testing.T) {
+	repo, _, _ := groupProbeFixture()
+	now := time.Date(2026, 11, 7, 2, 12, 0, 0, time.UTC)
+	finished := now.Add(-time.Minute)
+	repo.through = &finished
+	facts := ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: now.Truncate(5 * time.Minute), Success: 2, Errors: 1}}}
+	repo.slotFacts, repo.totals = facts, facts
+	repo.results = []ChannelMonitorV3GroupProbeResult{{GroupID: 4, Model: "gpt-mini", Slot: now.Truncate(10 * time.Minute), FinishedAt: &finished, Outcome: "success"}}
+	svc := NewChannelMonitorV3Service(repo, nil)
+	svc.now = func() time.Time { return now }
+	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	require.NoError(t, err)
+	require.Nil(t, out[4].RequestSuccessRate, "two successes and one failure are not a reliable percentage")
+	require.Nil(t, out[4].ProbeSuccessRate, "one representative check must not imply 100% availability")
+}
+
 func TestChannelMonitorV3PlazaSeparatesProbeAndRequestRates(t *testing.T) {
 	repo, _, _ := groupProbeFixture()
 	now := time.Date(2026, 11, 7, 2, 12, 0, 0, time.UTC)
 	finished := now.Add(-time.Minute)
 	repo.through = &finished
-	repo.totals = ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Success: 3, Errors: 1}}}
-	repo.results = []ChannelMonitorV3GroupProbeResult{{GroupID: 4, Model: "gpt-mini", Slot: now.Add(-2 * time.Minute), FinishedAt: &finished, Outcome: "success"}, {GroupID: 4, Model: "gpt-mini", Slot: now.Add(-12 * time.Minute), FinishedAt: &finished, Outcome: "failure"}, {GroupID: 9, Model: "private", Slot: now, FinishedAt: &finished, Outcome: "failure"}}
+	repo.slotFacts = ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: now.Truncate(5 * time.Minute).Add(-30 * time.Minute), Success: 15, Errors: 5}}}
+	for i := range 6 {
+		outcome := "failure"
+		if i%2 == 0 {
+			outcome = "success"
+		}
+		repo.results = append(repo.results, ChannelMonitorV3GroupProbeResult{GroupID: 4, Model: "gpt-mini", Slot: now.Truncate(10 * time.Minute).Add(-time.Duration(i) * 10 * time.Minute), FinishedAt: &finished, Outcome: outcome})
+	}
+	repo.results = append(repo.results, ChannelMonitorV3GroupProbeResult{GroupID: 9, Model: "private", Slot: now, FinishedAt: &finished, Outcome: "failure"})
 	svc := NewChannelMonitorV3Service(repo, nil)
 	svc.now = func() time.Time { return now }
 	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
@@ -164,6 +187,50 @@ func TestChannelMonitorV3PlazaSeparatesProbeAndRequestRates(t *testing.T) {
 	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, true)
 	require.NoError(t, err)
 	require.Empty(t, out)
+}
+
+func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testing.T) {
+	repo, _, _ := groupProbeFixture()
+	now := time.Date(2026, 11, 7, 2, 12, 0, 0, time.UTC)
+	through := now.Add(-time.Minute)
+	repo.through = &through
+	first := now.Truncate(5 * time.Minute).Add(-5 * time.Minute)
+	repo.config.IgnoredErrorCategories = []string{"client_cancelled"}
+	repo.slotFacts = ChannelMonitorV3Facts{
+		Metrics: []ChannelMonitorV3Fact{
+			{GroupID: 4, Slot: first, Success: 29, InputTokens: 10, CacheCreationTokens: 10, CacheReadTokens: 80},
+			{GroupID: 4, Slot: first.Add(5 * time.Minute), Errors: 2},
+		},
+		Errors:  []ChannelMonitorV3ErrorFact{{GroupID: 4, Slot: first.Add(5 * time.Minute), Category: "client_cancelled", Errors: 1}},
+		Latency: []ChannelMonitorV3LatencyFact{{GroupID: 4, Slot: first, UpperBound: 3000, Count: 20}, {GroupID: 4, Slot: first, UpperBound: 5000, Count: 9}},
+	}
+	svc := NewChannelMonitorV3Service(repo, nil)
+	svc.now = func() time.Time { return now }
+	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	require.NoError(t, err)
+	got := out[4]
+	require.Equal(t, "ready", got.RequestSampleState)
+	require.InDelta(t, 100.0*29/30, *got.RequestSuccessRate, 0.00001)
+	require.Equal(t, 80.0, *got.CacheReadRate, "cache share includes fresh input and cache creation in its denominator")
+	require.EqualValues(t, 3000, *got.TTFTP50Ms)
+	require.Len(t, got.Cells, 18)
+	require.Equal(t, "none", got.Cells[0].Source)
+	require.Equal(t, "unknown", got.Cells[0].Status)
+	require.Equal(t, 5*time.Minute, repo.slotCalls[0].interval)
+	require.True(t, repo.slotCalls[0].withLatency)
+	repo.config.MinRequests = 50
+	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	require.NoError(t, err)
+	require.Nil(t, out[4].RequestSuccessRate)
+	require.Nil(t, out[4].CacheReadRate)
+	require.Nil(t, out[4].TTFTP50Ms)
+	repo.config.MinRequests = 1
+	stale := now.Add(-11 * time.Minute)
+	repo.through = &stale
+	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	require.NoError(t, err)
+	require.Equal(t, "stale", out[4].RequestSampleState)
+	require.Nil(t, out[4].RequestSuccessRate)
 }
 
 func TestChannelMonitorV3GroupProbeConfigurationBoundaries(t *testing.T) {

@@ -93,6 +93,12 @@ export interface ModelPlazaResponse {
 }
 
 export interface PlazaGroupAvailability {
+	cache_read_rate?: number | null
+	ttft_p50_ms?: number | null
+	request_sample_state?: 'none' | 'insufficient' | 'ready' | 'stale'
+	probe_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled'
+	window_minutes?: number
+	min_requests?: number
   status: 'operational' | 'degraded' | 'down' | 'unknown'
   source: 'requests' | 'probe' | 'none'
   checked_at: string | null

@@ -138,11 +138,14 @@ type ChannelMonitorV3Settings struct {
 
 // Passive facts read from the V2 aggregates. Slot is zero for range totals.
 type ChannelMonitorV3Fact struct {
-	GroupID int64
-	Model   string
-	Slot    time.Time
-	Success int64
-	Errors  int64
+	GroupID             int64
+	Model               string
+	Slot                time.Time
+	Success             int64
+	Errors              int64
+	InputTokens         int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
 }
 
 type ChannelMonitorV3ErrorFact struct {

@@ -5,6 +5,14 @@ availability inside each existing group card. All viewers use their existing
 plaza visibility rules. A link to a separate status page does not satisfy this
 requirement. Existing status pages remain supplementary.
 
+Later owner correction, same day: `/status` and signed-in `/monitor` are a
+dedicated, price-free status dashboard, organized by platform and group cards.
+Keep the compact inline summaries on the homepage and model plaza. The status
+dashboard owns the administrator's scheduled-check editor; owners choose the
+exact models themselves. Do not automatically substitute a different model
+when a selected model fails. The repeatedly failing Kiro target (group 29) was
+paused through the existing admin UI, retaining its model and history.
+
 The owner authorized one inexpensive representative model per enabled group,
 one check every ten minutes and minimal output. Active checks supplement quiet
 groups; they never enter real-request success-rate denominators. Unknown,
@@ -62,8 +70,9 @@ group/ten-minute slot claim even after model changes. A selected-account native
 forwarder may retain its own protocol compatibility handling.
 
 Migration `268_channel_monitor_group_probes.sql` is additive. The global and
-per-group probe switches start disabled. Settings are at
-`/admin/channels/monitor` → V3 → scheduled group checks. A target chooses an
+per-group probe switches start disabled. Scheduled-check configuration is at
+`/monitor` → Manage checks (administrators only); the former settings panel
+links there. A target chooses an
 exact public model name. Initial support is OpenAI/Anthropic text groups.
 The admin runner's private exact-group context prevents Claude client fallback
 from certifying a different group. This is provider readiness, not customer
@@ -83,14 +92,28 @@ The same-origin plaza endpoint returns an optional sanitized availability object
 only after the original viewer/group filter. Current state is unknown after
 15 minutes without observation; passive collection must also be fresh within
 ten minutes. A fresh independent probe still works during stale collection.
-The 24-hour real-request percentage and representative-check percentage are
-separate. The recent strip uses real traffic where available, checks otherwise.
+The 90-minute real-request percentage and representative-check percentage are
+separate. All request metrics and the 18 five-minute cells use the same window.
+Publish request success rate only after at least 20 valid requests (or a higher
+configured minimum); publish check success rate only after six completed
+checks. Ignored outcomes, pending checks and empty slots never enter either
+denominator. The most recent check can still report a current failure before
+there are enough samples for a percentage. Stale request collection hides all
+request metrics. Cache share is cache-read tokens divided by input plus cache
+creation plus cache-read tokens; token counts stay private. TTFT P50 uses the
+existing histogram and requires the same minimum number of latency samples.
+Missing metrics render as an em dash with a sample/freshness explanation.
+The recent strip uses real traffic where available, checks otherwise.
 It is observed history, not a time-based SLA. No-data cells stay gray.
 
-The primary surfaces are static `/` → `#models` and the existing model plaza,
-including signed-in `/monitor`. Vue and static clients refresh every minute
+The surfaces are static `/` → `#models`, the existing model plaza, and dedicated
+cards at `/status` and signed-in `/monitor`. The additive `/api/v1/model-status`
+endpoint uses the original plaza group-visibility boundary and a price-free DTO;
+anonymous publication still requires the explicit opt-in. It discloses neither
+request/token counts nor accounts, upstream errors or custom prices.
+Vue and static clients refresh every minute
 while visible. Failed refresh removes old status while preserving prices.
-Homepage assets are additive under `turtleroute-status-20261107-v1`; the prior
+Homepage assets are additive under `turtleroute-status-20261107-v2`; the prior
 catalog module remains authoritative and untouched.
 
 Failures and recoveries use existing ops email recipients, templates, minimum
@@ -118,6 +141,15 @@ active-generation/BeforeSend fence, after SMTP configuration has loaded.
 - Real owned-Chrome QA passes at homepage widths 1440/768/390/320 and ordinary
   user widths 1440/390 in light/dark themes. Filtering, inline cards and failed
   refresh are checked. Fixture screenshots establish layout, not live uptime.
+
+The later card revision passes 99 targeted frontend tests, 12 static-catalog
+regressions, production frontend and Go builds, scoped Go service/handler/routes
+tests and real PostgreSQL repository integration. Chrome checks cover public,
+ordinary-user and administrator views, desktop/mobile, light/dark, search,
+inline editor save and no horizontal overflow. The deliberately insufficient
+fixture contains non-null percentages to verify defensive client suppression.
+Reference source and tests were rechecked at the fixed newer revision and the
+original `747f77c496e90c9eb250fee78796eb84b434f37d` before this correction.
 
 Rollback: disable representative checks before any older application binary;
 retain additive tables/history and use the canonical blue-green release path.

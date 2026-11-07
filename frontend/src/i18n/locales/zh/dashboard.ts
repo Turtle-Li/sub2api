@@ -664,8 +664,8 @@ export default {
   modelPlaza: {
     availability: {
       operational: '运行正常', degraded: '部分异常', down: '检测异常', unknown: '待确认',
-      requestRate: '24h 请求成功率', probeRate: '24h 检测正常率', waiting: '等待首次检测', noRequests: '暂无请求样本',
-      history: '最近六小时状态，灰色表示没有足够样本', sixHours: '6 小时前', checked: '检测于 {time}', observed: '请求采样于 {time}',
+      requestRate: '近 90 分钟请求成功率', probeRate: '近 90 分钟检测正常率', waiting: '等待检测样本', noRequests: '暂无请求样本',
+      history: '最近 90 分钟状态，灰色表示无数据或样本不足', windowStart: '90 分钟前', checked: '检测于 {time}', observed: '请求采样于 {time}',
       probeEvery: '每 10 分钟检测 · 查看口径', passive: '真实请求统计 · 查看口径', model: '检测模型：',
       scope: '定时检测只验证所选代表模型；请求成功率统计分组内真实请求，排除用户中断、余额不足等。灰色表示没有足够样本。',
       probeOff: '未启用定时检测', probe: '主动检测', requests: '真实请求', loadFailed: '状态暂时读取失败，模型价格仍可查看。',

@@ -10,6 +10,9 @@ type channelMonitorV3Acc struct {
 	success    int64
 	errors     int64
 	ignored    int64
+	input      int64
+	cacheWrite int64
+	cacheRead  int64
 	categories map[string]int64
 	ttft       map[int64]int64
 }
@@ -45,6 +48,9 @@ func channelMonitorV3Accumulate(cfg ChannelMonitorV3Config, component ChannelMon
 		if i := index(f.GroupID, f.Model, f.Slot); i >= 0 {
 			accs[i].success += f.Success
 			accs[i].errors += f.Errors
+			accs[i].input += f.InputTokens
+			accs[i].cacheWrite += f.CacheCreationTokens
+			accs[i].cacheRead += f.CacheReadTokens
 		}
 	}
 	for _, f := range facts.Errors {

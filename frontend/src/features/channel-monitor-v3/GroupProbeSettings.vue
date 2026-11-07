@@ -26,6 +26,7 @@
       <button type="button" class="btn btn-secondary btn-sm" :disabled="draft.groups.length >= 10 || !nextGroup" @click="addGroup">{{ t('channelMonitorV3.probes.add') }}</button>
     </div>
     <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('channelMonitorV3.probes.saveHint') }}</p>
+    <slot name="footer" />
   </section>
 </template>
 

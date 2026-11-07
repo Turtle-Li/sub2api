@@ -1,6 +1,21 @@
 /** Channel Monitor V3 (component status page over passive traffic + admin editor) */
 export default {
   channelMonitorV3: {
+    cards: {
+      title: 'Model status', description: 'Recent request performance and representative checks, grouped by channel.',
+      manage: 'Manage checks', manageHere: 'Manage checks in Model status', publicAccess: 'Publish status for publicly visible groups',
+      search: 'Search groups or check models', refreshIn: 'Refresh in {seconds}s',
+      requestWindow: 'Last {minutes} minutes · real requests', cache: 'Cache read share', success: 'Request success', ttft: 'First token P50',
+      slots: 'Last {count} time slots', checked: 'Checked at {time}', observed: 'Requests at {time}', noRecent: 'No recent data',
+      past: 'PAST', now: 'NOW', waiting: 'Waiting for real requests', insufficient: 'Insufficient samples; metrics need at least {count} valid requests',
+      requestReady: 'Valid requests only; empty slots are excluded', unavailable: 'Request statistics unavailable',
+      probeEvery: 'Representative model · checked every 10m', probeRate: 'Check success', probeOff: 'Scheduled checks disabled',
+      requestSource: 'Real requests', probeSource: 'Representative check', noData: 'No data',
+      loadFailed: 'Status could not be updated. Previous states have been cleared. Refresh to retry.', empty: 'No groups available.', noMatch: 'No matching groups.',
+      rules: 'Statistics and color definitions',
+      rulesDetail: 'The window covers 90 minutes in five-minute slots. Request success includes only valid real requests; cancellations and customer quota errors are excluded, and recovered retries use their final outcome. Request metrics require at least 20 valid requests, or a higher configured minimum. First-token P50 also requires enough latency samples. Cache share is cache-read tokens divided by total input tokens, including cache writes. Representative checks have a separate denominator and need six results before showing a rate. They only describe the selected model. Gray means no data or insufficient samples, never failure.',
+      state: { operational: 'Operational', degraded: 'Degraded', down: 'Check failed', unknown: 'No recent data', insufficient: 'Insufficient samples' },
+    },
     probes: {
       title: 'Scheduled group checks', description: 'Results appear inside each group on the homepage and model plaza.', enabled: 'Enable scheduled checks',
       cost: 'At most one check per group every 10 minutes, or 144 daily. Use an inexpensive text model with minimal output; the monitor adds no retries. Checks and real requests are counted separately.',

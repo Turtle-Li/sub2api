@@ -1,6 +1,6 @@
 <template>
   <ChannelStatusV1View v-if="isV1" />
-  <ModelPlazaView v-else-if="isV3" embedded />
+  <ChannelStatusV3View v-else-if="isV3" />
   <ChannelStatusV2View v-else />
 </template>
 
@@ -10,7 +10,7 @@ import { getChannelMonitorMode, isChannelMonitorV1Mode } from '@/utils/featureFl
 import ChannelStatusV1View from './ChannelStatusV1View.vue'
 import ChannelStatusV2View from './ChannelStatusV2View.vue'
 
-import ModelPlazaView from '@/views/ModelPlazaView.vue'
+import ChannelStatusV3View from './ChannelStatusV3View.vue'
 const isV3 = computed(() => getChannelMonitorMode() === 'v3')
 const isV1 = computed(() => isChannelMonitorV1Mode())
 </script>

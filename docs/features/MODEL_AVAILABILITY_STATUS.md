@@ -3,7 +3,10 @@
 Current owner correction (2026-11-07): read
 [MODEL_AVAILABILITY_GROUPS.md](MODEL_AVAILABILITY_GROUPS.md) before further
 changes. Homepage and signed-in model plaza group cards are the primary
-surface. All viewers use the existing plaza visibility rules. The owner also
+inline surfaces. Dedicated price-free group cards at `/status` and `/monitor`
+and their administrator-only check editor supplement them. Sample thresholds,
+cache share and TTFT rules are in that document. All viewers use the existing
+plaza visibility rules. The owner also
 authorized opt-in checks every ten minutes using an inexpensive representative
 model and minimal output. Synthetic results have their own denominator and
 notification path; they never become user request facts. This supersedes the

@@ -1,6 +1,21 @@
 /** Channel Monitor V3 (component status page over passive traffic + admin editor) */
 export default {
   channelMonitorV3: {
+    cards: {
+      title: '模型状态', description: '按分组查看近期请求表现和代表模型检测。',
+      manage: '管理检测', manageHere: '前往模型状态管理检测', publicAccess: '允许访客查看公开分组状态',
+      search: '搜索分组或检测模型', refreshIn: '{seconds} 秒后刷新',
+      requestWindow: '近 {minutes} 分钟 · 真实请求', cache: '缓存读取占比', success: '请求成功率', ttft: '首 Token P50',
+      slots: '近 {count} 个时间段', checked: '检测于 {time}', observed: '请求采样于 {time}', noRecent: '暂无近期数据',
+      past: '过去', now: '现在', waiting: '等待真实请求', insufficient: '样本不足，至少 {count} 条有效请求后展示统计',
+      requestReady: '仅统计有效请求；无数据时段不计入分母', unavailable: '请求统计暂不可用',
+      probeEvery: '代表模型 · 每 10 分钟检测', probeRate: '检测正常率', probeOff: '未启用定时检测',
+      requestSource: '真实请求', probeSource: '代表模型检测', noData: '无数据',
+      loadFailed: '状态暂时无法更新，已清除旧状态。请点击刷新重试。', empty: '暂无可查看的分组。', noMatch: '没有匹配的分组。',
+      rules: '统计口径与颜色说明',
+      rulesDetail: '统计窗口为近 90 分钟，每格 5 分钟。请求成功率只统计有效真实请求；用户中断、余额不足等不计失败，恢复成功的重试按最终结果统计。少于 20 条有效请求（或管理员设置的更高门槛）不展示请求指标；首 Token P50 还需足够的延迟样本。缓存读取占比为缓存读取 token 占总输入 token 的比例，包含缓存写入。主动检测单独统计，至少 6 次才展示检测正常率，仅证明所选代表模型的结果。灰色表示无数据或样本不足，不代表失败。',
+      state: { operational: '运行正常', degraded: '部分异常', down: '检测异常', unknown: '暂无近期数据', insufficient: '样本不足' },
+    },
     probes: {
       title: '分组主动检测', description: '首页和模型广场直接显示各分组的检测结果。', enabled: '开启定时检测',
       cost: '每组每 10 分钟最多一次，每天最多 144 次。使用低价文本模型和最小输出，检测任务不额外重试。检测与真实请求分别统计。',
