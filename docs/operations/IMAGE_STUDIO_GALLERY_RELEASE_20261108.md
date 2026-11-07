@@ -1,6 +1,6 @@
 # Image Studio gallery release —2026-11-08
 
-Status: local validation complete; final Claude review and production activation pending.
+Status: local and merged validation complete; final Claude review PASS; production activation pending.
 
 ## Scope
 
@@ -14,6 +14,7 @@ Indexing writes480px JPEG covers to the existing private COS store. A cold proce
 - Gemini4 (`gemini-4-argon`, completed response) reviewed three UI sources and synthetic screenshots. Adopted: smaller model trigger/dialog, resolution labels, inset keyboard focus, inline focused desktop search and a stronger mobile creation bar. Existing mobile touch targets are retained.
 - Fixed Claude's release blockers: independent thumbnail/original queues; cancellable offscreen card reads; non-retryable409 failure cooldown versus503 active peer preparation; permit acquisition before cooldown; request-independent shared-backfill deadline;128MiB encoded upscale limit with unchanged40MP/two-decoder bounds; per-item partial failure handling.
 - Also fixed blank JSONL handling, legacy unmarked high-resolution backfill, missing-price units and cover refresh after a job completes.
+- Final independent Claude review of merged `fb95bfcf60b889f1f815b69f368fa5371c5233c0` returned **PASS**, with noP0/P1/P2 findings. Its completed result is `.omo/reviews/gallery-release/claude-final.json`; it inspected the frozen source/callers and actual recorded checks without editing or rerunning broad suites.
 - Migrations are270 (concurrent gallery indexes) and271 (nullable thumbnail lifecycle fields), after main's269 monitor migration. Rollback retains the additive schema and private derivatives.
 
 ## Local evidence
@@ -31,11 +32,23 @@ Local ignored evidence: `.omo/reviews/gallery-release/` and `.omo/evidence/galle
 | UI |1440×900 desktop and390×844 mobile; light/dark; picker keyboard; search focus; failure/recovery; no horizontal overflow |
 | Impeccable detector | Zero findings on the changed UI sources |
 
+Post-merge backend regression and frontend production build also pass. The merge
+changes no Image Studio/batch/thumbnail source from the previously tested feature
+commit `b179045bb`.
+
 No new paid generation is needed for these local checks. Initial source-read tests prove that stored covers on a fresh service instance add zero original opens/bytes. Browser fixtures prove layout and client behavior; they do not establish live COS readiness.
 
 ## Production gates
 
 Before dispatch, verify the owner fork/main revision, healthy Caddy-selected active slot, no overlapping application lifecycle transaction and existing COS runtime configuration. Use only the explicit GitHub Actions blue-green production workflow. Preserve natural draining and its canonical maintenance lock/rollback behavior.
+
+Read-only preflight confirms owner fork/main, healthy Caddy-selected blue revision
+`d65140f7a43c76788003d319b484f1fa5723043e`, no pending transaction and stopped
+green/legacy slots. The existing delivery store is enabled, its endpoint/region/
+bucket/prefix are configured, and its Vault references/agent are present; no
+secret value was printed. Host memory is1906MiB total with1027MiB available at the
+snapshot, covering the bounded thumbnail decoder/source allowance. The stored
+retained-drain override remainsfalse and background mode remainsactivate.
 
 After activation, record the exact image revision/run, migrations/index presence, health and authenticated gallery/thumbnail cache behavior. Verify COS derivative Get/Put/Delete behavior through the existing runtime; do not export machine credentials or browser sessions. Live acceptance and final review results will be appended below.
 
