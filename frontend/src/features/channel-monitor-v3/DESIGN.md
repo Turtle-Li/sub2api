@@ -33,12 +33,14 @@ empty partial slot is collecting. Public configuration is grouped by platform,
 searchable, excludes private/inactive groups and includes domestic providers.
 Each row has a custom display name; request-model fields stay collapsed.
 
-Bounded visual verification used fixture data at desktop and 390px mobile,
-light/dark, ordinary-user and administrator views, plus homepage summaries.
-The deliberately insufficient fixture also contained non-null percentages to
-verify client suppression. Screenshots prove layout, not live availability.
-The required finish review used an available independent read-only code
-reviewer in place of the unavailable named finish-reviewer role. Final
-disposition: **ship**, no material fixes; the two detector warnings were
-cross-selector false positives. Local evidence: `.omo/status-cards-qa.md` and
-`.omo/evidence/status-cards-code-review.md` (not shipped application assets).
+Bounded visual verification used desktop1440 and mobile390/320, light/dark,
+ordinary-user/admin fixtures and real public/admin production views. The
+deliberately insufficient fixture includes non-null66.7% to verify client
+suppression. Live captures verify12public cards and12admin name fields; model
+plaza has no status UI, and homepage `#status` is separate from prices.
+The required finish review used an independent read-only code reviewer in
+place of the unavailable named finish-reviewer role. Final disposition:
+**APPROVE**, after fixing hidden-target preservation. The two detector warnings
+were cross-selector false positives. Local evidence: `.omo/status-module-qa.md`,
+`.omo/evidence/status-module-code-review.md` and live screenshots (not shipped
+application assets). Screenshot layout evidence is distinct from API uptime.

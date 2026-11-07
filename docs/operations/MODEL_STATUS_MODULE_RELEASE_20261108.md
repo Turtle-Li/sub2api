@@ -101,3 +101,24 @@ no availability enrichment in model plaza. Admin UI verifies12editable display
 name fields and domestic rows. Groups6/10 remain enabled and29 disabled; no
 production model selection or display name was changed. Release verification
 used the existing canonical deployment canary; no extra manual paid test.
+
+Receiver source is main commit `e162112235e4d27252852ddcc94ce555ee627cc8`,
+SHA256 `172b12aa10a605e9b2f7e2021d8a6495445cf60bff7eabebaebf485842b45fe4`.
+It was installed atomically under the shared lock after checking the exact
+previous hash, preserving root:root0750, with a root-owned rollback copy in the
+release log directory. The normal digest-bound Caddy receiver then completed
+at2026-11-07 18:08:52UTC, active_slot=legacy, requested template digest
+`8469457ee548ed85c3cb88f0a61359d32ee2902a6ef3919ce87acf2752857257`, final Caddyfile
+SHA256 `2f397a4bc1c9538a321089e1105e97f0894258b3bd167e835ae8a3a891c7e536`.
+Backup/record prefix:
+`/opt/sub2api/backups/Caddyfile.before-caddy-config-release-20261107T180851Z-f3addd923b8a.N6IbHh`.
+
+Retained blue now has the official drain monitor attached to active `sub2api`:
+`sub2api-drain-sub2api-blue-status-module-f3addd92-retained-drain`.
+It keeps existing connections and stops blue only after its normal zero-
+connection and locked traffic/configuration checks. The regular monitor handles
+old green. Root's stored retention option remains false. Final API smoke passes
+after Caddy projection; real live Chrome confirms12cards,12admin display-name
+inputs, model-plaza price/status separation, independent homepage `#status`, and
+no320/390px horizontal overflow. Temporary viewport and task servers/uploads
+were cleaned up. No production model/name configuration was written.
