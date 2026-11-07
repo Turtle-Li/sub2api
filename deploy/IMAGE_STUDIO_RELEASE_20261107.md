@@ -76,3 +76,66 @@ models available by configuration. The save button remained disabled because
 no configuration was edited. This release adds no migration and activates no
 provider. See `docs/features/IMAGE_STUDIO_ADMIN_20261107.md` for ownership and
 rollback details.
+
+## Embedded creation rail and real-data acceptance
+
+The owner selected Kimi's left creation rail/right gallery after rendered Kimi
+and Gemini 4 comparisons; Claude supported that direction. The host now supplies
+the only header and theme. Users select a model directly, and single/batch modes
+share the workspace. The legacy guide/sidebar entry is removed; its URLs redirect
+to the Studio. Administration starts from models and keeps internal group routing
+under advanced settings. Existing source prices and the single ledger remain the
+authority; no production price, account policy or provider activation was changed.
+
+The redesign source `340630184a0b7869d13e01b1fe08054c5e51fa53` was released by
+[run 42393491472](https://github.com/Turtle-Li/sub2api/actions/runs/42393491472).
+Real history exposed parallel image GETs hitting the existing per-user download
+limit, and native successful items use `succeeded`. A narrow host-only correction
+serializes image reads across internal keys and accepts that successful status
+for labels and edit-reference advancement. Four tests reproduced the defects
+before repair; all 78 related tests, build and scoped ESLint then passed.
+Independent code review approved both scopes; the follow-up independently passed
+54 Studio tests. No server limit or provider submission behavior was changed.
+
+Final executable source: `8a51ec443b27959970b8b6afad31286fca827113`.
+[Production run 42395391009](https://github.com/Turtle-Li/sub2api/actions/runs/42395391009)
+completed successfully. Active `sub2api-green` was healthy with zero restarts/OOM,
+image `sha256:bd130069087a6486300089059bcc9a935c6c892d4d050c5aa4f422587b843b1e`,
+with that exact revision. Host Caddy points to `sub2api-green:8080`; public health
+returned OK and the anonymous admin model catalogue returned HTTP 401. The prior
+blue source `340630184` remained healthy while draining; no raw lifecycle command
+or manual traffic switch was issued.
+
+The owner's existing authenticated Chrome session submitted exactly one new
+`gpt-image-2.5-sunburst` task:
+`imgbatch_fffbd53d0fef8a7d59a11ea832a82f63`. Existing key6/account249 routing
+produced one decoded 1254x1254 white-cup/green-leaf image, completed with zero failed
+items. A scoped read-only database audit confirmed one hold and one capture,
+0.2412 existing internal units, and no duplicate ledger entry. No temporary tariff
+or configuration was used and no submission was replayed.
+
+Production UI checks: one h1, no group picker or legacy batch sidebar item, nine
+direct model choices, 62 retained image items, and 11 decoded historical thumbnails
+with zero image-load errors after scrolling. The new output loads as a reference
+in the left edit form with its original model; no extra edit POST was needed.
+The admin page starts without a group picker, opens Muse's saved configuration,
+discloses its shared price source and keeps advanced routing collapsed; save stays
+disabled. `/docs/batch-image` resolves to `/image-studio` in the live browser.
+Historical failed provider tasks remain visible rather than being rewritten.
+
+Local browser acceptance covers 390px phone layouts, the native composer, reduced
+visible height, and light/dark themes. Production desktop acceptance is observed;
+the optional production viewport override remained at 1504px, so no additional
+production-phone or actual iOS-keyboard claim is made. Saved-file download completion
+is also outside this acceptance. Local screenshots, exact scopes and safe task
+receipts are under `.omo/design/image-studio-redesign/` and remain unversioned.
+
+There is no schema or financial migration. Any rollback uses the canonical
+maintenance-locked blue-green release path with a compatible image, retaining
+tasks, generated outputs, billing and configuration. WorkBuddy retains its official
+automatic updates; this redesign neither pins nor patches its gateway.
+
+Concurrent status-module main `f3addd923` was retained without altering these
+image sources. The combined frontend build and all 78 image regressions passed.
+The acceptance-record push waits for that in-flight release to finish so it does
+not invalidate the release's exact-main check.
