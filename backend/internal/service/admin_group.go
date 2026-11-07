@@ -82,7 +82,10 @@ func (s *adminServiceImpl) validateSimpleModeGroupAccess(group *Group) error {
 	return nil
 }
 
-func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error) {
+func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id int64, platform string, availableOnly ...bool) ([]string, error) {
+	if len(availableOnly) > 0 && availableOnly[0] {
+		return s.getGroupStatusModelCandidates(ctx, id)
+	}
 	platform = strings.TrimSpace(platform)
 	if id > 0 {
 		group, err := s.groupRepo.GetByIDLite(ctx, id)
@@ -135,6 +138,52 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 		}
 	}
 	return candidates, nil
+}
+
+// Read-only discovery for status checks. Unlike allowlist editing, this mode
+// must not offer platform defaults that no bound account can serve.
+func (s *adminServiceImpl) getGroupStatusModelCandidates(ctx context.Context, id int64) ([]string, error) {
+	if id <= 0 {
+		return nil, channelMonitorV3Invalid("select an existing public group")
+	}
+	group, err := s.groupRepo.GetByIDLite(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil || group.Status != StatusActive || !channelMonitorV3ProbeGroupSupported(group) {
+		return nil, channelMonitorV3Invalid("group does not support scheduled status checks")
+	}
+	if s.accountRepo == nil {
+		return nil, errors.New("group account catalog unavailable")
+	}
+	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	source := defaultModelsListCandidateIDs(group.Platform)
+	for i := range accounts {
+		for model := range accounts[i].GetModelMapping() {
+			source = append(source, model)
+		}
+	}
+	// Exact allowlist aliases can be admitted by wildcard account mappings.
+	if group.ModelAllowlist.Enabled {
+		source = append(source, group.ModelAllowlist.Models...)
+	}
+	models := []string{}
+	for _, model := range dedupeAndSortModelIDs(source) {
+		if strings.Contains(model, "*") || channelMonitorV3ProbeMediaModel(model) || !group.ModelAllowlist.Allows(model) {
+			continue
+		}
+		for i := range accounts {
+			account := &accounts[i]
+			if account.SupportsGroupPlatformModel(group.Platform, model) && account.IsModelSupported(model) && !channelMonitorV3ProbeMediaModel(account.GetMappedModel(model)) {
+				models = append(models, model)
+				break
+			}
+		}
+	}
+	return models, nil
 }
 
 func (s *adminServiceImpl) ListCompositeRoutes(ctx context.Context, groupID int64) ([]CompositeModelRoute, error) {

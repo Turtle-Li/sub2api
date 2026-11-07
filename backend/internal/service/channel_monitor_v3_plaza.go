@@ -199,9 +199,20 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	return out, nil
 }
 
-// Status discovery has its own public catalog. Viewing service health never
-// grants API-key binding or subscription access, and never publishes private groups.
-func (s *ChannelMonitorV3Service) PublicStatusGroups(ctx context.Context) ([]Group, error) {
+// Selection owns publication independently of the scheduled-check switch.
+// Active public groups are the candidates, never an implicit publication list.
+func (s *ChannelMonitorV3Service) PublicStatusGroups(ctx context.Context, anonymous bool) ([]Group, error) {
+	cfg, err := s.repo.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if anonymous && !cfg.PublicEnabled {
+		return nil, ErrChannelMonitorV3NotFound
+	}
+	selected := make(map[int64]bool, len(cfg.GroupProbe.Groups))
+	for _, target := range cfg.GroupProbe.Groups {
+		selected[target.GroupID] = target.IsListed()
+	}
 	catalog, ok := s.groups.(interface {
 		ListActive(context.Context) ([]Group, error)
 	})
@@ -214,7 +225,7 @@ func (s *ChannelMonitorV3Service) PublicStatusGroups(ctx context.Context) ([]Gro
 	}
 	public := make([]Group, 0, len(groups))
 	for _, g := range groups {
-		if g.Status == StatusActive && !g.IsExclusive {
+		if selected[g.ID] && g.Status == StatusActive && !g.IsExclusive {
 			public = append(public, g)
 		}
 	}

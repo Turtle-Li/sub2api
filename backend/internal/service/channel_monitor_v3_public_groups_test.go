@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func (g monitorPublicGroupsFake) ListActive(context.Context) ([]Group, error) {
 	return out, nil
 }
 
-func TestChannelMonitorV3StatusCatalogIncludesAllPublicPlatformsOnly(t *testing.T) {
+func TestChannelMonitorV3StatusCatalogIncludesSelectedPublicGroupsOnly(t *testing.T) {
 	groups := monitorPublicGroupsFake{monitorV3GroupsFake{
 		1: {ID: 1, Name: "GPT", Platform: PlatformOpenAI, Status: StatusActive},
 		2: {ID: 2, Name: "DeepSeek", Platform: PlatformDeepseek, Status: StatusActive},
@@ -65,10 +66,18 @@ func TestChannelMonitorV3StatusCatalogIncludesAllPublicPlatformsOnly(t *testing.
 		4: {ID: 4, Name: "disabled", Platform: PlatformMiniMax, Status: "disabled"},
 		5: {ID: 5, Name: "Kimi", Platform: PlatformKimi, Status: StatusActive},
 	}}
-	s := NewChannelMonitorV3Service(&monitorV3RepoFake{config: monitorV3Config()}, groups)
-	public, err := s.PublicStatusGroups(context.Background())
+	config := monitorV3Config()
+	config.GroupProbe.Groups = []ChannelMonitorV3GroupProbeTarget{
+		{GroupID: 1, Model: "gpt-mini", Enabled: true},
+		{GroupID: 2, Model: "deepseek-chat", Enabled: false},
+		{GroupID: 3, Model: "kimi", Enabled: true},
+		{GroupID: 4, Model: "minimax", Enabled: true},
+	}
+	s := NewChannelMonitorV3Service(&monitorV3RepoFake{config: config}, groups)
+	public, err := s.PublicStatusGroups(context.Background(), false)
 	require.NoError(t, err)
-	require.Len(t, public, 3)
+	require.Len(t, public, 1, "unselected, paused legacy, private and inactive groups stay hidden")
+	require.Equal(t, int64(1), public[0].ID)
 	for _, group := range public {
 		require.False(t, group.IsExclusive)
 		require.NotEqual(t, "disabled", group.Name)
@@ -81,4 +90,61 @@ func TestChannelMonitorV3StatusCatalogIncludesAllPublicPlatformsOnly(t *testing.
 	require.Equal(t, "DeepSeek 官方", probe.Groups[0].DisplayName)
 	probe.Groups[0].GroupID = 3
 	require.Error(t, s.validateGroupProbes(context.Background(), &probe), "private groups must not receive public status checks")
+}
+
+func TestChannelMonitorV3PublicationIsExplicitIndependentAndEmptySafe(t *testing.T) {
+	listed, hidden := true, false
+	config := monitorV3Config()
+	config.PublicEnabled = true
+	config.GroupProbe = ChannelMonitorV3GroupProbeConfig{Enabled: false, Groups: []ChannelMonitorV3GroupProbeTarget{
+		{GroupID: 2, DisplayName: "Public DeepSeek", Listed: &listed},
+		{GroupID: 5, Model: "retained-model", Listed: &hidden},
+	}}
+	repo := &monitorV3RepoFake{config: config}
+	s := NewChannelMonitorV3Service(repo, monitorPublicGroupsFake{monitorV3GroupsFake{
+		2: {ID: 2, Name: "DeepSeek", Platform: PlatformDeepseek, Status: StatusActive},
+		5: {ID: 5, Name: "Kimi", Platform: PlatformKimi, Status: StatusActive},
+	}})
+	for _, anonymous := range []bool{true, false} {
+		public, err := s.PublicStatusGroups(context.Background(), anonymous)
+		require.NoError(t, err)
+		require.Len(t, public, 1)
+		require.Equal(t, int64(2), public[0].ID)
+	}
+	repo.config.GroupProbe.Groups[0].Listed = &hidden
+	public, err := s.PublicStatusGroups(context.Background(), true)
+	require.NoError(t, err)
+	require.Empty(t, public, "an explicitly empty publication is valid")
+	repo.config.PublicEnabled = false
+	_, err = s.PublicStatusGroups(context.Background(), true)
+	require.ErrorIs(t, err, ErrChannelMonitorV3NotFound, "empty selection must not bypass opt-in")
+	_, err = s.PublicStatusGroups(context.Background(), false)
+	require.NoError(t, err)
+}
+
+type groupProbeJSONConfigRepo struct{ *groupProbeRepoFake }
+
+func (r groupProbeJSONConfigRepo) GetConfig(context.Context) (*ChannelMonitorV3Config, error) {
+	raw, err := json.Marshal(r.config)
+	if err != nil {
+		return nil, err
+	}
+	var config ChannelMonitorV3Config
+	err = json.Unmarshal(raw, &config)
+	return &config, err
+}
+
+func TestChannelMonitorV3ListedProbeReauthorizesDecodedValuesAndHidesWithoutSpending(t *testing.T) {
+	repo, prober, executor := groupProbeFixture()
+	listed := true
+	repo.config.GroupProbe.Groups[0].Listed = &listed
+	prober.repo = groupProbeJSONConfigRepo{repo}
+	now := time.Now().UTC()
+	prober.RunDue(context.Background(), now)
+	require.Equal(t, 1, executor.calls, "decoded boolean pointers differ but authorization values are equal")
+	listed = false
+	prober.RunDue(context.Background(), now.Add(ChannelMonitorV3ProbeInterval))
+	require.Equal(t, 1, executor.calls, "hidden targets must never submit checks even if enabled is stale")
+	s := NewChannelMonitorV3Service(repo, nil)
+	require.Error(t, s.validateGroupProbes(context.Background(), &repo.config.GroupProbe))
 }

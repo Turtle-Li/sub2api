@@ -628,6 +628,7 @@ func (h *GroupHandler) GetGroupModelAllowlistCandidates(c *gin.Context) {
 		c.Request.Context(),
 		groupID,
 		c.Query("platform"),
+		c.Query("available_only") == "true",
 	)
 	if err != nil {
 		response.ErrorFrom(c, err)

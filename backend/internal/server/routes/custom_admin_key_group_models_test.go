@@ -34,7 +34,7 @@ func (*scopedRouteGroupModels) GetGroup(_ context.Context, id int64) (*service.G
 	return &service.Group{ID: id, Name: "模型分组", Platform: platform, RateMultiplier: 9, Description: "不可泄露的分组备注", ModelAllowlist: service.GroupModelAllowlist{Enabled: true, Models: []string{"gpt-test"}}}, nil
 }
 
-func (*scopedRouteGroupModels) GetGroupModelsListCandidates(context.Context, int64, string) ([]string, error) {
+func (*scopedRouteGroupModels) GetGroupModelsListCandidates(context.Context, int64, string, ...bool) ([]string, error) {
 	return []string{"gpt-test", "gpt-default"}, nil
 }
 

@@ -21,6 +21,21 @@ type ChannelMonitorV3GroupProbeTarget struct {
 	Model       string `json:"model"`
 	Enabled     bool   `json:"enabled"`
 	DisplayName string `json:"display_name,omitempty"`
+	Listed      *bool  `json:"listed,omitempty"`
+}
+
+// Legacy checked targets were the owner's selection. Blank/paused legacy rows
+// must not publish the entire catalog when upgrading to explicit publication.
+func (t ChannelMonitorV3GroupProbeTarget) IsListed() bool {
+	if t.Listed != nil {
+		return *t.Listed
+	}
+	return t.Enabled
+}
+
+func (t ChannelMonitorV3GroupProbeTarget) sameCheck(other ChannelMonitorV3GroupProbeTarget) bool {
+	return t.GroupID == other.GroupID && t.Model == other.Model && t.Enabled == other.Enabled &&
+		t.DisplayName == other.DisplayName && t.IsListed() == other.IsListed()
 }
 
 type ChannelMonitorV3GroupProbeResult struct {
@@ -65,7 +80,7 @@ func (s *ChannelMonitorV3Service) validateGroupProbes(ctx context.Context, cfg *
 		seen[target.GroupID] = true
 		if target.Enabled {
 			enabled++
-			if target.Model == "" || enabled > 10 {
+			if !target.IsListed() || target.Model == "" || enabled > 10 {
 				return channelMonitorV3Invalid("at most ten checks may be enabled, each with an exact text model")
 			}
 		}

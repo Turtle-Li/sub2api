@@ -17,9 +17,11 @@ export default {
       state: { operational: '运行正常', degraded: '部分异常', down: '检测异常', unknown: '暂无近期数据', insufficient: '样本不足', observed: '有成功请求', errors_observed: '有失败记录', collecting: '本时段采集中' },
     },
     probes: {
-      title: '分组状态配置', description: '只列出启用中的公开分组。私有或停用分组保留原配置并暂停检测。展示名称只影响状态模块，不更改内部名称、路由或计费。', enabled: '开启定时检测',
+      title: '分组状态配置', description: '只在用户状态页展示下方已添加的分组。移除后隐藏并暂停检测，保留原模型与名称；保存后生效。', enabled: '开启定时检测',
       cost: '每组每 10 分钟最多一次，每天最多 144 次。使用低价文本模型和最小输出，检测任务不额外重试。检测与真实请求分别统计。',
-      group: '分组', model: '请求模型', modelHint: '填写本组可用的低价文本模型', groupEnabled: '定时检测', add: '添加检测分组',
+      group: '分组', model: '请求模型', modelHint: '选择本组可用的文本模型', groupEnabled: '定时检测', add: '添加分组',
+      selectGroup: '搜索并选择公开分组', allAdded: '所有公开分组均已添加', empty: '还未添加分组。选择公开分组并添加，保存后用户才能看到对应状态卡片。',
+      remove: '移除', removeGroup: '移除分组 {group}', modelFor: '{group} 的请求模型', noModels: '本组暂无可用于检测的文本模型，请先检查账号及模型配置。', modelsFailed: '模型列表加载失败，请重试。', modelUnavailable: '原模型已保留，但当前不在本组可用列表中。请检查分组配置或重新选择模型。',
       search: '搜索公开分组', displayName: '展示名称', publicGroup: '公开分组', requestSettings: '检测设置（仅管理员）',
       requestHelp: '此参数仅用于低消耗连通检查；统计仍覆盖全组请求，不会在用户卡片中显示模型名。', passiveOnly: '此平台展示真实请求统计，暂不发起主动检测。',
       saveHint: '更改后点击“保存”。支持 GPT、Claude、DeepSeek、Kimi、GLM、MiniMax 等文本分组；最多同时启用 10 组检测。异常通知沿用现有运维邮件配置。',

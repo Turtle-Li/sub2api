@@ -46,10 +46,11 @@ onMounted(async () => {
     groups.value = allGroups.filter(group => group.status === 'active' && !group.is_exclusive)
     const probe = draft.value.group_probe
     if (probe) {
-      const existing = new Map(probe.groups.map(target => [target.group_id, target]))
       const publicIds = new Set(groups.value.map(group => group.id))
-      const hidden = probe.groups.filter(target => !publicIds.has(target.group_id)).map(target => ({ ...target, enabled: false }))
-      probe.groups = [...groups.value.map(group => existing.get(group.id) ?? { group_id: group.id, model: '', enabled: false }), ...hidden]
+      probe.groups = probe.groups.map(target => ({ ...target,
+        listed: publicIds.has(target.group_id) && (target.listed ?? target.enabled),
+        enabled: publicIds.has(target.group_id) && target.enabled,
+      }))
     }
     original.value = JSON.stringify(draft.value)
   } catch (err: unknown) {

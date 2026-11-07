@@ -22,7 +22,7 @@ copy and em dashes, never fabricated percentages. Failed refresh clears old
 health and preserves group identity.
 
 Public cards use the existing public shell. Signed-in cards use AppLayout;
-all users see active public groups, independent of model-plaza or binding eligibility. Only administrators see
+all users see only added active public groups, independent of model-plaza or binding eligibility. Only administrators see
 Manage checks and its inline editor. Save preserves the complete versioned
 configuration, and model selection always remains an explicit owner action.
 The homepage has its own `#status` card section with the same sample guards,
@@ -31,7 +31,13 @@ The November 8 correction aligns 18 cells to ten-minute checks (180 minutes).
 Sparse observations retain success/error labels without a percentage; a current
 empty partial slot is collecting. Public configuration is grouped by platform,
 searchable, excludes private/inactive groups and includes domestic providers.
-Each row has a custom display name; request-model fields stay collapsed.
+Only added groups have editor rows. A searchable public-group selector and Add
+button precede the list. Each row has a custom display name, a group-scoped
+searchable request-model selector, a separate scheduled-check switch and Remove.
+Remove hides the public card and pauses checks while preserving model/name;
+readding restores those fields with checks disabled. Unchecked legacy rows stay
+hidden. The model selector explains loading, error/retry, empty and unavailable
+retained choices. Native routes and existing Select/tokens remain authoritative.
 
 Bounded visual verification used desktop1440 and mobile390/320, light/dark,
 ordinary-user/admin fixtures and real public/admin production views. The

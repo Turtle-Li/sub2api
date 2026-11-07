@@ -17,9 +17,11 @@ export default {
       state: { operational: 'Operational', degraded: 'Degraded', down: 'Check failed', unknown: 'No recent data', insufficient: 'Insufficient samples', observed: 'Successful request observed', errors_observed: 'Failed request observed', collecting: 'Current slot collecting' },
     },
     probes: {
-      title: 'Group status configuration', description: 'Active public groups only. Private or inactive groups retain their settings with checks paused. Display names affect status views, not internal names, routing or billing.', enabled: 'Enable scheduled checks',
+      title: 'Group status configuration', description: 'Only groups added below appear on user status pages. Removing a group hides it and pauses checks while retaining its model and name. Save to apply.', enabled: 'Enable scheduled checks',
       cost: 'At most one check per group every 10 minutes, or 144 daily. Use an inexpensive text model with minimal output; the monitor adds no retries. Checks and real requests are counted separately.',
-      group: 'Group', model: 'Request model', modelHint: 'An inexpensive text model available in this group', groupEnabled: 'Scheduled check', add: 'Add group',
+      group: 'Group', model: 'Request model', modelHint: 'Choose a text model available to this group', groupEnabled: 'Scheduled check', add: 'Add group',
+      selectGroup: 'Search and select a public group', allAdded: 'All public groups have been added', empty: 'No groups added. Add a public group and save to show its status card to users.',
+      remove: 'Remove', removeGroup: 'Remove group {group}', modelFor: 'Request model for {group}', noModels: 'No text models are available for checks. Review this group’s account and model configuration.', modelsFailed: 'Could not load models. Retry to load them again.', modelUnavailable: 'Your original model is retained but is currently unavailable in this group. Review the group configuration or select another model.',
       search: 'Search public groups', displayName: 'Display name', publicGroup: 'Public group', requestSettings: 'Check settings (administrators only)',
       requestHelp: 'Used only for the low-cost connectivity check. Statistics cover the whole group; model names are not shown on user cards.', passiveOnly: 'Real-request statistics are supported; active checks are unavailable for this platform.',
       saveHint: 'Save after editing. Supports GPT, Claude, DeepSeek, Kimi, GLM, MiniMax and other text groups, with at most ten enabled checks. Existing ops email preferences apply.',

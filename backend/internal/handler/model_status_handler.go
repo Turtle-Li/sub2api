@@ -21,7 +21,7 @@ type modelStatusResponse struct {
 	Groups      []modelStatusGroup `json:"groups"`
 }
 
-// GetStatus publishes only active public groups, independently of price discovery.
+// GetStatus publishes only selected active public groups, independently of prices.
 func (h *ModelPlazaHandler) GetStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	if h.monitorService == nil || h.settingService == nil || !h.settingService.GetChannelMonitorRuntime(c.Request.Context()).V3Active() {
@@ -29,7 +29,7 @@ func (h *ModelPlazaHandler) GetStatus(c *gin.Context) {
 		return
 	}
 	_, authed := middleware.GetAuthSubjectFromContext(c)
-	groups, err := h.monitorService.PublicStatusGroups(c.Request.Context())
+	groups, err := h.monitorService.PublicStatusGroups(c.Request.Context(), !authed)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -41,10 +41,6 @@ func (h *ModelPlazaHandler) GetStatus(c *gin.Context) {
 	statuses, err := h.monitorService.PlazaStatuses(c.Request.Context(), ids, !authed)
 	if err != nil {
 		response.ErrorFrom(c, err)
-		return
-	}
-	if !authed && len(statuses) == 0 {
-		response.NotFound(c, "Model status publication is not enabled")
 		return
 	}
 	c.Writer.Header().Add("Vary", "Accept-Language")

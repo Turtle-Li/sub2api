@@ -6,6 +6,8 @@
   monitor mode V3, read `docs/features/MODEL_AVAILABILITY_STATUS.md` for pinned
   source/test references and local privacy, authorization and statistics rules.
   Anonymous publication is opt-in; no samples or stale data must remain unknown.
+  Publish only explicitly added public groups; the public catalog is the admin
+  candidate list. Preserve removed model/name choices with checks paused.
 - For the independent status module, homepage status section and scheduled checks,
   also read `docs/features/MODEL_AVAILABILITY_GROUPS.md`. Keep synthetic checks
   separate from user traffic and preserve exact group admission and slot claims.

@@ -94,7 +94,7 @@ func (p *ChannelMonitorV3GroupProber) RunDue(ctx context.Context, now time.Time)
 		if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() {
 			return
 		}
-		if !target.Enabled {
+		if !target.Enabled || !target.IsListed() {
 			continue
 		}
 		// Re-read authorization immediately before claiming/sending, including when
@@ -105,7 +105,7 @@ func (p *ChannelMonitorV3GroupProber) RunDue(ctx context.Context, now time.Time)
 		}
 		authorized := false
 		for _, candidate := range latest.GroupProbe.Groups {
-			if candidate == target {
+			if candidate.sameCheck(target) {
 				authorized = true
 				break
 			}

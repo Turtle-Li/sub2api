@@ -13,7 +13,7 @@ exact models themselves. Do not automatically substitute a different model
 when a selected model fails. The repeatedly failing Kiro target (group 29) was
 paused through the existing admin UI, retaining its model and history.
 
-Current owner correction, 2026-11-08, supersedes the surface and publication
+Earlier owner correction, 2026-11-08, superseded the surface and publication
 rules above: `/status` and `/monitor` are the primary standalone status module
 for all users. Administrators configure it inline. The homepage embeds a
 separate `#status` section; neither model plaza nor its pricing cards display
@@ -25,6 +25,27 @@ Hidden private/inactive group settings retain their model and display name;
 saving the editor pauses those checks instead of deleting owner choices.
 Public cards and JSON do not disclose the selected request model. Admin-only
 collapsed request settings retain the exact owner-selected model for checks.
+
+Current owner correction, later November 8: the active public catalog is only
+the administrator's candidate list. Publish **only added groups**, identically
+on the homepage, anonymous `/status` and signed-in `/monitor`. Unselected groups
+are absent even if passive statistics exist. The inline editor adds/removes
+groups with the incumbent searchable Select; it does not render the full catalog
+as checkboxes. New JSON field `listed` owns publication independently of the
+scheduled-check `enabled` flag. Legacy targets without `listed` inherit their
+old `enabled` selection, so unchecked blank/paused rows stay hidden. Removing
+sets `listed=false` and pauses checks while retaining exact model/display name;
+readding restores the fields with checks disabled. A selected group may use only
+passive traffic; empty selected history remains unknown. No selection returns an
+empty dashboard; anonymous opt-in is checked even when the list is empty.
+
+Request models are an admin-only searchable dropdown, loaded per added group
+through `GET /admin/groups/:id/model-allowlist-candidates?available_only=true`.
+This opt-in mode uses bound schedulable accounts, the actual group platform,
+existing model admission/allowlist rules and exact text IDs; it excludes media
+including account-mapped media and wildcard IDs. No accounts returns no models,
+and lookup failure remains an error. Existing unavailable choices are retained
+and explained, never silently substituted. Discovery sends no provider requests.
 
 The owner authorized one inexpensive request model per enabled group,
 one check every ten minutes and minimal output. Active checks supplement quiet
@@ -54,7 +75,7 @@ generation cannot duplicate a paid check. The runtime background gate fences
 standby/draining generations. A failed/unfinished attempt is never retried in
 the same slot. Preserve cancellation as unknown.
 
-The status service computes one bounded batch for the active public catalog.
+The status service computes one bounded batch for selected active public groups.
 Its public DTO contains sanitized state, observation source/time, separate probe
 and real-request percentages and a compact recent strip. Public cards show only
 real-request percentages; probe results inform history/current connectivity.

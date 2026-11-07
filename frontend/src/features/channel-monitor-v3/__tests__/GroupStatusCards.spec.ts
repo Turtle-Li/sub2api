@@ -4,18 +4,24 @@ import { ref } from 'vue'
 import type { ModelStatusGroup } from '@/api/modelStatus'
 
 const mocks = vi.hoisted(() => ({
-  status: vi.fn(), settings: vi.fn(), update: vi.fn(), groups: vi.fn(),
+  status: vi.fn(), settings: vi.fn(), update: vi.fn(), groups: vi.fn(), models: vi.fn(),
   auth: { isAdmin: false },
 }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key, locale: ref('zh-CN') }) }))
 vi.mock('@/api/modelStatus', () => ({ getModelStatus: mocks.status }))
 vi.mock('@/api/channelMonitorV3', () => ({ getSettings: mocks.settings, updateConfig: mocks.update }))
-vi.mock('@/api/admin', () => ({ adminAPI: { groups: { getAll: mocks.groups } } }))
+vi.mock('@/api/admin', () => ({ adminAPI: { groups: { getAll: mocks.groups, getModelAllowlistCandidates: mocks.models } } }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => mocks.auth }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ fetchPublicSettings: vi.fn() }) }))
 import GroupStatusCard from '../GroupStatusCard.vue'
 import GroupStatusDashboard from '../GroupStatusDashboard.vue'
 import GroupStatusControls from '../GroupStatusControls.vue'
+
+const SelectStub = {
+  props: ['modelValue', 'options', 'disabled'], emits: ['update:modelValue'],
+  template: `<select :value="modelValue" :disabled="disabled" @change="$emit('update:modelValue', $event.target.value === '' ? null : (options.find(o => String(o.value) === $event.target.value)?.value))"><option value=""></option><option v-for="o in options" :key="o.value" :value="o.value" :disabled="o.disabled">{{ o.label }}</option></select>`,
+}
+const mountControls = () => mount(GroupStatusControls, { global: { stubs: { Select: SelectStub } } })
 
 const group = (overrides: Record<string, unknown> = {}): ModelStatusGroup => ({
   id: 6, name: 'GPT 按量', platform: 'openai',
@@ -28,6 +34,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.auth.isAdmin = false
   mocks.status.mockResolvedValue({ groups: [group()] })
+  mocks.models.mockReset().mockResolvedValue(['new-owner-model', 'deepseek-chat'])
 })
 describe('status group cards', () => {
   it('shows cache share, request success and actual first-token P50 without prices', () => {
@@ -76,21 +83,22 @@ describe('status group cards', () => {
     wrapper.unmount()
   })
   it('edits and saves the exact owner-selected model in this feature, preserving unrelated settings', async () => {
-    const config = { version: 4, public_enabled: true, min_requests: 1, ignored_error_categories: ['client_cancelled'], footer_note: 'keep', group_probe: { enabled: true, groups: [{ group_id: 6, model: 'old-owner-model', enabled: false }] } }
+    const config = { version: 4, public_enabled: true, min_requests: 1, ignored_error_categories: ['client_cancelled'], footer_note: 'keep', group_probe: { enabled: true, groups: [{ group_id: 6, model: 'old-owner-model', enabled: false, listed: true }] } }
     mocks.settings.mockResolvedValue({ config })
     mocks.groups.mockResolvedValue([{ id: 6, name: 'GPT', platform: 'openai', status: 'active' }])
     mocks.update.mockImplementation(async next => ({ ...next, version: 5 }))
-    const wrapper = mount(GroupStatusControls)
+    const wrapper = mountControls()
     await flushPromises()
     await wrapper.get('#probe-model-6').setValue('new-owner-model')
     await wrapper.get('#status-name-6').setValue('GPT Standard')
     await wrapper.get('[data-testid="status-save-controls"]').trigger('click')
     await flushPromises()
-    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ version: 4, footer_note: 'keep', ignored_error_categories: ['client_cancelled'], group_probe: { enabled: true, groups: [{ group_id: 6, model: 'new-owner-model', enabled: false, display_name: 'GPT Standard' }] } }))
+    expect(mocks.models).toHaveBeenCalledWith(6, undefined, true)
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ version: 4, footer_note: 'keep', ignored_error_categories: ['client_cancelled'], group_probe: { enabled: true, groups: [{ group_id: 6, model: 'new-owner-model', enabled: false, listed: true, display_name: 'GPT Standard' }] } }))
     expect(wrapper.emitted('saved')).toHaveLength(1)
     wrapper.unmount()
   })
-  it('lists public domestic groups with editable names and excludes private or inactive groups', async () => {
+  it('adds only chosen public groups and retains hidden settings without listing the whole catalog', async () => {
     const hidden = [{ group_id: 4, model: 'private-choice', display_name: 'Private alias', enabled: true }, { group_id: 5, model: 'inactive-choice', display_name: 'Inactive alias', enabled: false }]
     mocks.settings.mockResolvedValue({ config: { version: 4, public_enabled: true, group_probe: { enabled: true, groups: hidden } } })
     mocks.groups.mockResolvedValue([
@@ -99,17 +107,62 @@ describe('status group cards', () => {
       { id: 4, name: 'Private', platform: 'openai', status: 'active', is_exclusive: true },
       { id: 5, name: 'Inactive', platform: 'minimax', status: 'inactive', is_exclusive: false },
     ])
-    const wrapper = mount(GroupStatusControls)
+    const wrapper = mountControls()
     await flushPromises()
-    expect(wrapper.findAll('[data-status-group]')).toHaveLength(2)
-    expect(wrapper.get('#status-name-2').exists()).toBe(true)
-    expect(wrapper.get('#status-name-3').exists()).toBe(true)
+    expect(wrapper.findAll('[data-status-group]')).toHaveLength(0)
+    expect(wrapper.get('[data-testid="status-groups-empty"]').exists()).toBe(true)
     expect(wrapper.text()).not.toMatch(/Private|Inactive|Representative|代表/)
     expect(wrapper.find('[data-testid="status-save-controls"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('#status-add-group').setValue('2')
+    await wrapper.get('[data-testid="status-add-group"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-status-group]')).toHaveLength(1)
+    expect(wrapper.find('#status-name-3').exists()).toBe(false)
+    expect(wrapper.get('#status-add-group').find('option[value="2"]').exists()).toBe(false)
     await wrapper.get('#status-name-2').setValue('DeepSeek Public')
     await wrapper.get('[data-testid="status-save-controls"]').trigger('click')
     await flushPromises()
-    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ group_probe: expect.objectContaining({ groups: expect.arrayContaining(hidden.map(target => ({ ...target, enabled: false }))) }) }))
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ group_probe: expect.objectContaining({ groups: expect.arrayContaining([...hidden.map(target => ({ ...target, enabled: false, listed: false })), { group_id: 2, model: '', enabled: false, listed: true, display_name: 'DeepSeek Public' }]) }) }))
+    wrapper.unmount()
+  })
+  it('hides unchecked legacy rows, and removes/readds a group without losing its name or enabling checks', async () => {
+    mocks.settings.mockResolvedValue({ config: { version: 4, public_enabled: true, group_probe: { enabled: true, groups: [
+      { group_id: 6, model: 'new-owner-model', enabled: true, display_name: 'My GPT' },
+      { group_id: 29, model: 'paused-choice', enabled: false },
+    ] } } })
+    mocks.groups.mockResolvedValue([{ id: 6, name: 'GPT', platform: 'openai', status: 'active' }, { id: 29, name: 'Paused', platform: 'anthropic', status: 'active' }])
+    const wrapper = mountControls()
+    await flushPromises()
+    expect(wrapper.findAll('[data-status-group]')).toHaveLength(1)
+    await wrapper.get('[data-status-group="6"] button').trigger('click')
+    expect(wrapper.findAll('[data-status-group]')).toHaveLength(0)
+    await wrapper.get('[data-testid="status-save-controls"]').trigger('click')
+    await flushPromises()
+    expect(mocks.update).toHaveBeenLastCalledWith(expect.objectContaining({ group_probe: expect.objectContaining({ groups: expect.arrayContaining([{ group_id: 6, model: 'new-owner-model', enabled: false, listed: false, display_name: 'My GPT' }]) }) }))
+    await wrapper.get('#status-add-group').setValue('6')
+    await wrapper.get('[data-testid="status-add-group"]').trigger('click')
+    await flushPromises()
+    expect((wrapper.get('#status-name-6').element as HTMLInputElement).value).toBe('My GPT')
+    expect((wrapper.get('#probe-model-6').element as HTMLSelectElement).value).toBe('new-owner-model')
+    expect((wrapper.get('[data-status-group="6"] input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
+    wrapper.unmount()
+  })
+  it('preserves an unavailable model and retries failed group-scoped discovery without falling back', async () => {
+    mocks.settings.mockResolvedValue({ config: { version: 4, group_probe: { enabled: true, groups: [{ group_id: 6, model: 'retained-model', enabled: false, listed: true }] } } })
+    mocks.groups.mockResolvedValue([{ id: 6, name: 'GPT', platform: 'openai', status: 'active' }])
+    mocks.models.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([])
+    const wrapper = mountControls()
+    await flushPromises()
+    expect(wrapper.get('[data-status-group="6"] [role="alert"]').exists()).toBe(true)
+    expect((wrapper.get('#probe-model-6').element as HTMLSelectElement).value).toBe('retained-model')
+    const retry = wrapper.findAll('button').find(button => button.text() === 'common.retry')!
+    await retry.trigger('click')
+    await flushPromises()
+    expect(mocks.models).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('channelMonitorV3.probes.modelUnavailable')
+    expect(wrapper.get('#probe-model-6').findAll('option')).toHaveLength(2)
+    expect(wrapper.get('[data-status-group="6"] input[type="checkbox"]').attributes('disabled')).toBeDefined()
+    expect(mocks.update).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })
