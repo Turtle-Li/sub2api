@@ -83,5 +83,34 @@ acknowledge and retry with that exact commit and digest, rather than relabeling
 it with the later receiver-repair commit. No application rebuild or lifecycle
 change is required for this retry.
 
-Public new-certificate and final health evidence is pending; do not interpret
-this preparation record as successful activation yet.
+## Completed activation
+
+Receiver repair commit: `f9e6ff8560d7382c2068e8da54f7a264871a13f7`.
+Its installed root:root 0750 SHA-256 is
+`d72228977a0f8d9a78d26b3c170c653565954ce925a3ae8ee6b7a0b2adf2d2c9`.
+The previous helper was preserved under the root-only backup directory.
+The complete receiver regression suite and ShellCheck passed for this source.
+
+At 2026-11-07 22:14:41 UTC the new receiver acknowledged and archived the
+already restored transaction after strict provenance, backup, configuration
+and HTTPS checks. At 22:15:20 Caddy obtained the certificate; at 22:15:21 the
+receiver completed the unchanged `d65140f7a` template release. The first three
+TLS probes were temporarily unavailable while issuance completed. Final host
+Caddy SHA-256:
+`4f1d4238206ede6ccc2b664ae488506810fef01c7fb3315866be7bd8218302d6`.
+
+External verification at 22:16 UTC passed the system trust chain and hostname
+for the new Let's Encrypt YE1 certificate, expiring **2027-02-05 21:16:46 UTC**
+(2027-02-06 05:16:46 Asia/Shanghai). Its leaf SHA-256,
+`f2cee77eee945df3b28c78981b155af61b2b21f6d5135641b5ea57d07ea25a0e`,
+matches the managed certificate in the persistent Caddy data volume. Caddy
+logged renewal information and retains the existing `/data` and `/config`
+volumes. The imported API directive is absent.
+
+API health, www health and www homepage returned 200; unauthenticated API
+models returned 401. Application blue remained healthy with zero restarts and
+no OOM; Caddy remained running with zero restarts. Neither Caddy-config nor
+blue-green transaction remains pending. These checks establish certificate
+activation, not repair of the original user's intermittent network failure.
+The independent `api-proxy` alias still returns 525 and the direct default
+remains. No endpoint/CCS feature code or production setting was included.
