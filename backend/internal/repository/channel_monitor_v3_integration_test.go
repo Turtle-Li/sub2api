@@ -61,7 +61,7 @@ func TestChannelMonitorV3RepositoryLayout(t *testing.T) {
 
 	cfg := *original
 	cfg.PublicEnabled = true
-	cfg.GroupProbe = service.ChannelMonitorV3GroupProbeConfig{Enabled: true, Groups: []service.ChannelMonitorV3GroupProbeTarget{{GroupID: group.ID, Model: "gpt-mini", Enabled: true}}}
+	cfg.GroupProbe = service.ChannelMonitorV3GroupProbeConfig{Enabled: true, Groups: []service.ChannelMonitorV3GroupProbeTarget{{GroupID: group.ID, Model: "gpt-mini", Enabled: true, DisplayName: "Public display name"}}}
 	cfg.IntervalMinutes, cfg.FeaturedComponentID, cfg.FooterNote = 3, &featured.ID, "note"
 	cfg.DownErrorRate, cfg.DegradedErrorRate, cfg.IgnoredErrorCategories = 0.3, 0.1, []string{"timeout"}
 	updated, err := repo.UpdateConfig(ctx, cfg, original.Version, 7)

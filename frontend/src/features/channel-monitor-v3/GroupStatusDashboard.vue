@@ -50,7 +50,7 @@ const sections = computed(() => {
   const groups = new Map<string, ModelStatusGroup[]>()
   const term = query.value.trim().toLocaleLowerCase()
   for (const group of data.value?.groups ?? []) {
-    if (term && !`${group.name} ${group.availability?.probe_model ?? ''}`.toLocaleLowerCase().includes(term)) continue
+    if (term && !group.name.toLocaleLowerCase().includes(term)) continue
     const list = groups.get(group.platform) ?? []
     list.push(group)
     groups.set(group.platform, list)

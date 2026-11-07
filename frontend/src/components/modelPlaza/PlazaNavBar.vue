@@ -21,6 +21,7 @@
         </template>
       </div>
 
+      <RouterLink to="/status" class="ml-auto text-sm font-medium text-gray-700 hover:text-primary-600 dark:text-dark-200">{{ t('nav.channelStatus') }}</RouterLink>
       <!-- 右:登录 / 回到后台 -->
       <RouterLink
         v-if="isAuthenticated"
@@ -31,7 +32,7 @@
       </RouterLink>
       <RouterLink
         v-else
-        :to="{ path: '/login', query: { redirect: '/model-plaza' } }"
+        :to="{ path: '/login', query: { redirect: loginRedirect } }"
         class="inline-flex flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-primary-500/25 transition-all duration-200 hover:from-primary-600 hover:to-primary-700 hover:shadow-lg hover:shadow-primary-500/30 active:scale-[0.98] dark:shadow-primary-500/20"
       >
         {{ t('modelPlaza.nav.login') }}
@@ -46,6 +47,8 @@ import { useI18n } from 'vue-i18n'
 import { sanitizeUrl } from '@/utils/url'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+
+withDefaults(defineProps<{ loginRedirect?: string }>(), { loginRedirect: '/model-plaza' })
 
 const { t } = useI18n()
 const appStore = useAppStore()

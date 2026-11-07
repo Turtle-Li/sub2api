@@ -99,14 +99,14 @@ export interface PlazaGroupAvailability {
 	probe_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled'
 	window_minutes?: number
 	min_requests?: number
-  status: 'operational' | 'degraded' | 'down' | 'unknown'
+  status: 'operational' | 'degraded' | 'down' | 'unknown' | 'observed' | 'errors_observed' | 'collecting'
   source: 'requests' | 'probe' | 'none'
   checked_at: string | null
   probe_enabled: boolean
   probe_model?: string
   request_success_rate: number | null
   probe_success_rate: number | null
-  cells: Array<{ start: string; status: 'operational' | 'degraded' | 'down' | 'unknown' | 'insufficient'; source: string }>
+  cells: Array<{ start: string; status: 'operational' | 'degraded' | 'down' | 'unknown' | 'insufficient' | 'observed' | 'errors_observed' | 'collecting'; source: string }>
 }
 
 /** 获取模型广场数据。开关未启用时后端返回 404。 */

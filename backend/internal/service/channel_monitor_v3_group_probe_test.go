@@ -216,7 +216,7 @@ func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testi
 	require.Len(t, got.Cells, 18)
 	require.Equal(t, "none", got.Cells[0].Source)
 	require.Equal(t, "unknown", got.Cells[0].Status)
-	require.Equal(t, 5*time.Minute, repo.slotCalls[0].interval)
+	require.Equal(t, 10*time.Minute, repo.slotCalls[0].interval)
 	require.True(t, repo.slotCalls[0].withLatency)
 	repo.config.MinRequests = 50
 	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)

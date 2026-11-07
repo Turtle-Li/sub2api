@@ -92,6 +92,28 @@ func TestChannelMonitorV3ProbeRejectsMappedMediaBeforeSending(t *testing.T) {
 	require.Equal(t, "unsupported_model", result.Category)
 }
 
+func TestChannelMonitorV3ProbeDomesticTextProvidersUseNativeChatForwarding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct{ platform, model string }{
+		{PlatformDeepseek, "deepseek-chat"}, {PlatformKimi, "kimi-k2.5"}, {PlatformZhipu, "glm-5"}, {PlatformMiniMax, "MiniMax-M2.7"},
+	} {
+		t.Run(tc.platform, func(t *testing.T) {
+			stream := "data: {\"id\":\"chat_probe\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"1\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1,\"total_tokens\":10}}\n\ndata: [DONE]\n\n"
+			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
+			cfg := &config.Config{}
+			cfg.Gateway.MinOutputTokens = 16
+			account := &Account{ID: 2, Platform: tc.platform, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{"api_key": "fixture", "base_url": "https://provider.example.test/v1"}}
+			probe := &channelMonitorV3GatewayProbe{openai: &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}}
+			out := probe.checkAccount(context.Background(), &Group{ID: 6, Platform: tc.platform}, tc.model, account)
+			require.Equal(t, "success", out.Outcome)
+			require.Len(t, upstream.requests, 1, "the monitor may not add a retry")
+			require.Equal(t, tc.model, gjson.GetBytes(upstream.lastBody, "model").String())
+			require.EqualValues(t, 9, out.InputTokens)
+			require.EqualValues(t, 1, out.OutputTokens)
+		})
+	}
+}
+
 func TestChannelMonitorV3ProbeCaptureOverflowFailsClosed(t *testing.T) {
 	w := &channelMonitorV3ProbeWriter{header: make(http.Header)}
 	_, err := w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"1\"},\"finish_reason\":\"stop\"}]}\n\n"))

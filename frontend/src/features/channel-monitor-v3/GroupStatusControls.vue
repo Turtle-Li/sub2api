@@ -43,7 +43,14 @@ onMounted(async () => {
     const [settings, allGroups] = await Promise.all([getSettings(), adminAPI.groups.getAll()])
     if (!mounted) return
     draft.value = { ...settings.config, group_probe: structuredClone(settings.config.group_probe ?? { enabled: false, groups: [] }) }
-    groups.value = allGroups
+    groups.value = allGroups.filter(group => group.status === 'active' && !group.is_exclusive)
+    const probe = draft.value.group_probe
+    if (probe) {
+      const existing = new Map(probe.groups.map(target => [target.group_id, target]))
+      const publicIds = new Set(groups.value.map(group => group.id))
+      const hidden = probe.groups.filter(target => !publicIds.has(target.group_id)).map(target => ({ ...target, enabled: false }))
+      probe.groups = [...groups.value.map(group => existing.get(group.id) ?? { group_id: group.id, model: '', enabled: false }), ...hidden]
+    }
     original.value = JSON.stringify(draft.value)
   } catch (err: unknown) {
     if (mounted) error.value = extractApiErrorMessage(err, t('channelMonitorV3.admin.loadFailed'))

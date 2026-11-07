@@ -163,26 +163,9 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	c.Writer.Header().Add("Vary", "Accept-Language")
 	out := toLocalizedModelPlazaGroups(visible, userRates, c.GetHeader("Accept-Language"))
 	c.Header("Cache-Control", "no-store")
-	statusUnavailable := false
-	if h.monitorService != nil && h.settingService.GetChannelMonitorRuntime(c.Request.Context()).V3Active() {
-		ids := make([]int64, 0, len(out))
-		for _, group := range out {
-			ids = append(ids, group.ID)
-		}
-		statuses, err := h.monitorService.PlazaStatuses(c.Request.Context(), ids, !authed)
-		if err != nil {
-			statusUnavailable = true
-			slog.Warn("model_plaza_status_failed")
-		} else {
-			for i := range out {
-				out[i].Availability = statuses[out[i].ID]
-			}
-		}
-	}
 	response.Success(c, modelPlazaResponse{
-		StatusUnavailable: statusUnavailable,
-		Description:       rt.Description,
-		Groups:            out,
+		Description: rt.Description,
+		Groups:      out,
 	})
 }
 

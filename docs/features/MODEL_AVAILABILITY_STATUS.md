@@ -1,17 +1,17 @@
 # Model availability status
 
-Current owner correction (2026-11-07): read
+Current owner correction (2026-11-08): read
 [MODEL_AVAILABILITY_GROUPS.md](MODEL_AVAILABILITY_GROUPS.md) before further
-changes. Homepage and signed-in model plaza group cards are the primary
-inline surfaces. Dedicated price-free group cards at `/status` and `/monitor`
-and their administrator-only check editor supplement them. Sample thresholds,
-cache share and TTFT rules are in that document. All viewers use the existing
-plaza visibility rules. The owner also
-authorized opt-in checks every ten minutes using an inexpensive representative
-model and minimal output. Synthetic results have their own denominator and
+changes. The dedicated price-free `/status` and `/monitor` module is visible to
+all users, with an administrator-only editor on that module. The homepage has
+an independent `#status` section; model plaza contains prices only. Active public
+groups are shared across viewers, independently of plaza or binding eligibility.
+Sample thresholds, 18 ten-minute cells, custom display names, cache share and
+TTFT rules are in that document. The owner authorized opt-in checks every ten
+minutes using an inexpensive model and minimal output. Synthetic results have their own denominator and
 notification path; they never become user request facts. This supersedes the
 initial passive-only implementation scope and quota guidance below, which
-describe the earlier release. `/status` remains supplementary.
+describe the earlier release.
 
 Implementation contract (2026-11-07). User requested reuse of the researched
 Sub2 status logic and good design, with anonymous public status and logged-in

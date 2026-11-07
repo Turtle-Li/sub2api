@@ -14,15 +14,14 @@ import (
 )
 
 func TestModelStatusProjectionExcludesPricesVolumesAndHiddenGroups(t *testing.T) {
-	all := plazaGroups()
-	all[0].Models = []service.PlazaModel{{Name: "private-price-model"}}
-	statuses := map[int64]*service.ChannelMonitorV3GroupStatus{1: {Status: "unknown", RequestSampleState: "insufficient"}, 2: {Status: "down"}}
-	visible := filterPlazaVisibleGroups(all, nil, false)
+	visible := []service.Group{{ID: 1, Name: "internal-0.25", Platform: "openai"}, {ID: 3, Name: "DeepSeek", Platform: "deepseek"}}
+	statuses := map[int64]*service.ChannelMonitorV3GroupStatus{1: {Status: "unknown", RequestSampleState: "insufficient", DisplayName: "GPT Standard", ProbeModel: "private-check-model"}, 3: {Status: "down"}}
 	out := toModelStatusGroups(visible, statuses, "zh-CN")
 	require.Len(t, out, 2)
 	raw, err := json.Marshal(out)
 	require.NoError(t, err)
-	for _, forbidden := range []string{"private-price-model", "exclusive-a", "rate_multiplier", "pricing", "models", "account_id", "success_requests", "input_tokens"} {
+	require.Equal(t, "GPT Standard", out[0].Name)
+	for _, forbidden := range []string{"internal-0.25", "private-check-model", "probe_model", "exclusive-a", "rate_multiplier", "pricing", "models", "account_id", "success_requests", "input_tokens"} {
 		require.NotContains(t, string(raw), forbidden)
 	}
 	var objects []map[string]json.RawMessage

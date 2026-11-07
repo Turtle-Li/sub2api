@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
+
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -46,7 +48,7 @@ func (p *channelMonitorV3GatewayProbe) Check(ctx context.Context, group *Group, 
 	ctx = context.WithValue(ctx, channelMonitorV3ProbeGroupContextKey{}, group.ID)
 	var selection *AccountSelectionResult
 	var err error
-	if group.Platform == PlatformOpenAI {
+	if domain.UsesOpenAIGateway(group.Platform) {
 		selection, _, err = p.openai.SelectAccountWithSchedulerForCapability(ctx, &group.ID, "", "", model, nil, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions, false, false, true, group.Platform)
 	} else {
 		selection, err = p.gateway.SelectAccountWithLoadAwareness(ctx, &group.ID, "", model, nil, "", 0)
@@ -91,7 +93,7 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("User-Agent", "Sub2API-Availability-Probe")
 	c.Set("api_key", &APIKey{GroupID: &group.ID, Group: group})
-	if group.Platform == PlatformOpenAI {
+	if domain.UsesOpenAIGateway(group.Platform) {
 		c.Request.URL.Path = "/v1/chat/completions"
 		result, forwardErr := p.openai.ForwardAsChatCompletions(ctx, c, account, body, "", model)
 		err = forwardErr
@@ -132,7 +134,7 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 
 func channelMonitorV3ProbeBody(platform, model string) []byte {
 	payload := map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply with 1."}}, "stream": true, "max_tokens": 1}
-	if platform == PlatformOpenAI {
+	if domain.UsesOpenAIGateway(platform) {
 		delete(payload, "max_tokens")
 		payload["max_completion_tokens"] = 16
 		payload["reasoning_effort"] = "none"

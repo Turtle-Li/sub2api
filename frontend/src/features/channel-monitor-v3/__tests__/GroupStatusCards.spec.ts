@@ -38,6 +38,7 @@ describe('status group cards', () => {
     expect(wrapper.findAll('.status-timeline button')).toHaveLength(18)
     expect(wrapper.find('table').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('$')
+    expect(wrapper.text()).not.toContain('owner-selected')
     wrapper.unmount()
   })
   it('does not publish small-sample numerics, including probe percentages', () => {
@@ -50,7 +51,7 @@ describe('status group cards', () => {
   it('never uses a synthetic check as request latency or cache data', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', request_success_rate: null, cache_read_rate: null, ttft_p50_ms: null }) } })
     expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['—', '—', '—'])
-    expect(wrapper.text()).toContain('100.0%')
+    expect(wrapper.text()).not.toContain('100.0%')
     wrapper.unmount()
   })
   it('renders ordinary-user cards with no management controls or admin reads', async () => {
@@ -81,11 +82,34 @@ describe('status group cards', () => {
     mocks.update.mockImplementation(async next => ({ ...next, version: 5 }))
     const wrapper = mount(GroupStatusControls)
     await flushPromises()
-    await wrapper.get('#probe-model-0').setValue('new-owner-model')
+    await wrapper.get('#probe-model-6').setValue('new-owner-model')
+    await wrapper.get('#status-name-6').setValue('GPT Standard')
     await wrapper.get('[data-testid="status-save-controls"]').trigger('click')
     await flushPromises()
-    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ version: 4, footer_note: 'keep', ignored_error_categories: ['client_cancelled'], group_probe: { enabled: true, groups: [{ group_id: 6, model: 'new-owner-model', enabled: false }] } }))
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ version: 4, footer_note: 'keep', ignored_error_categories: ['client_cancelled'], group_probe: { enabled: true, groups: [{ group_id: 6, model: 'new-owner-model', enabled: false, display_name: 'GPT Standard' }] } }))
     expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
+  it('lists public domestic groups with editable names and excludes private or inactive groups', async () => {
+    const hidden = [{ group_id: 4, model: 'private-choice', display_name: 'Private alias', enabled: true }, { group_id: 5, model: 'inactive-choice', display_name: 'Inactive alias', enabled: false }]
+    mocks.settings.mockResolvedValue({ config: { version: 4, public_enabled: true, group_probe: { enabled: true, groups: hidden } } })
+    mocks.groups.mockResolvedValue([
+      { id: 2, name: 'DeepSeek', platform: 'deepseek', status: 'active', is_exclusive: false },
+      { id: 3, name: 'Kimi', platform: 'kimi', status: 'active', is_exclusive: false },
+      { id: 4, name: 'Private', platform: 'openai', status: 'active', is_exclusive: true },
+      { id: 5, name: 'Inactive', platform: 'minimax', status: 'inactive', is_exclusive: false },
+    ])
+    const wrapper = mount(GroupStatusControls)
+    await flushPromises()
+    expect(wrapper.findAll('[data-status-group]')).toHaveLength(2)
+    expect(wrapper.get('#status-name-2').exists()).toBe(true)
+    expect(wrapper.get('#status-name-3').exists()).toBe(true)
+    expect(wrapper.text()).not.toMatch(/Private|Inactive|Representative|代表/)
+    expect(wrapper.find('[data-testid="status-save-controls"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('#status-name-2').setValue('DeepSeek Public')
+    await wrapper.get('[data-testid="status-save-controls"]').trigger('click')
+    await flushPromises()
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ group_probe: expect.objectContaining({ groups: expect.arrayContaining(hidden.map(target => ({ ...target, enabled: false }))) }) }))
     wrapper.unmount()
   })
 })

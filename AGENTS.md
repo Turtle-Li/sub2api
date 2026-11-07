@@ -6,7 +6,7 @@
   monitor mode V3, read `docs/features/MODEL_AVAILABILITY_STATUS.md` for pinned
   source/test references and local privacy, authorization and statistics rules.
   Anonymous publication is opt-in; no samples or stale data must remain unknown.
-- For inline homepage/plaza group status and scheduled representative checks,
+- For the independent status module, homepage status section and scheduled checks,
   also read `docs/features/MODEL_AVAILABILITY_GROUPS.md`. Keep synthetic checks
   separate from user traffic and preserve exact group admission and slot claims.
 

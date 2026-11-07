@@ -8,7 +8,7 @@
       <span class="status-badge" :data-state="status?.status ?? 'unknown'">{{ stateLabel }}</span>
     </header>
 
-    <p class="mt-6 text-xs text-gray-500 dark:text-dark-300">{{ t('channelMonitorV3.cards.requestWindow', { minutes: status?.window_minutes ?? 90 }) }}</p>
+    <p class="mt-6 text-xs text-gray-500 dark:text-dark-300">{{ t('channelMonitorV3.cards.requestWindow', { minutes: status?.window_minutes ?? 180 }) }}</p>
     <dl class="mt-4 grid grid-cols-3 gap-3">
       <div v-for="metric in metrics" :key="metric.key" class="min-w-0">
         <dt class="text-[11px] leading-5 text-gray-500 dark:text-dark-300">{{ t(`channelMonitorV3.cards.${metric.key}`) }}</dt>
@@ -30,8 +30,7 @@
 
     <footer class="mt-4 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-dark-600 dark:text-dark-300">
       <template v-if="status?.probe_enabled">
-        <div class="flex flex-wrap items-center justify-between gap-2"><span>{{ t('channelMonitorV3.cards.probeEvery') }}</span><span v-if="status.probe_success_rate !== null && status.probe_sample_state === 'ready'">{{ t('channelMonitorV3.cards.probeRate') }} <strong class="font-mono font-medium">{{ percent(status.probe_success_rate) }}</strong></span></div>
-        <code class="mt-1 block break-all text-[11px] text-gray-600 dark:text-dark-200">{{ status.probe_model }}</code>
+        <span>{{ t('channelMonitorV3.cards.probeEvery') }}</span>
       </template>
       <span v-else>{{ t('channelMonitorV3.cards.probeOff') }}</span>
     </footer>
@@ -72,11 +71,15 @@ const cellLabel = (cell: PlazaGroupAvailability['cells'][number]) => `${Number.i
 .status-platform { @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-700 dark:bg-dark-600 dark:text-dark-100; }
 .status-badge { @apply inline-flex shrink-0 items-center rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600 dark:bg-dark-600 dark:text-dark-200; }
 .status-badge[data-state="operational"] { @apply bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300; }
+.status-badge[data-state="observed"] { @apply bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300; }
+.status-badge[data-state="errors_observed"] { @apply bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300; }
 .status-badge[data-state="degraded"] { @apply bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300; }
 .status-badge[data-state="down"] { @apply bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300; }
 .status-timeline { display: grid; grid-template-columns: repeat(18, minmax(0, 1fr)); gap: 4px; }
 .status-timeline > button { @apply h-3 min-w-0 rounded-[3px] bg-gray-200 outline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:bg-dark-500; }
 .status-timeline > button[data-state="operational"] { @apply bg-emerald-500 dark:bg-emerald-400; }
+.status-timeline > button[data-state="observed"] { @apply bg-emerald-500 dark:bg-emerald-400; }
+.status-timeline > button[data-state="errors_observed"] { @apply bg-amber-500; }
 .status-timeline > button[data-state="degraded"] { @apply bg-amber-500; }
 .status-timeline > button[data-state="down"] { @apply bg-red-500 dark:bg-red-400; }
 </style>

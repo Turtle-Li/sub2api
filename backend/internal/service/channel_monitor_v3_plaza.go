@@ -2,15 +2,17 @@ package service
 
 import (
 	"context"
+	"errors"
+	"sort"
 	"time"
 )
 
 const (
-	ChannelMonitorV3GroupWindowMinutes = 90
+	ChannelMonitorV3GroupWindowMinutes = 180
 	ChannelMonitorV3GroupMinRequests   = 20
 	ChannelMonitorV3GroupMinProbes     = 6
 	channelMonitorV3GroupCells         = 18
-	channelMonitorV3GroupInterval      = 5 * time.Minute
+	channelMonitorV3GroupInterval      = ChannelMonitorV3ProbeInterval
 )
 
 type ChannelMonitorV3GroupCell struct {
@@ -20,13 +22,14 @@ type ChannelMonitorV3GroupCell struct {
 }
 
 // Published metrics contain no traffic volumes. Real requests and inexpensive
-// representative checks always retain independent denominators.
+// scheduled checks always retain independent denominators.
 type ChannelMonitorV3GroupStatus struct {
 	Status             string                      `json:"status"`
 	Source             string                      `json:"source"`
 	CheckedAt          *time.Time                  `json:"checked_at"`
 	ProbeEnabled       bool                        `json:"probe_enabled"`
-	ProbeModel         string                      `json:"probe_model,omitempty"`
+	ProbeModel         string                      `json:"-"`
+	DisplayName        string                      `json:"-"`
 	RequestSuccessRate *float64                    `json:"request_success_rate"`
 	ProbeSuccessRate   *float64                    `json:"probe_success_rate"`
 	CacheReadRate      *float64                    `json:"cache_read_rate"`
@@ -39,7 +42,7 @@ type ChannelMonitorV3GroupStatus struct {
 }
 
 // PlazaStatuses accepts only IDs that the caller has already authorized for
-// model-plaza publication. It never discovers groups or expands viewer scope.
+// public status publication. It never discovers groups or expands viewer scope.
 func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []int64, anonymous bool) (map[int64]*ChannelMonitorV3GroupStatus, error) {
 	out := map[int64]*ChannelMonitorV3GroupStatus{}
 	if len(groupIDs) == 0 {
@@ -83,7 +86,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	for _, id := range groupIDs {
 		target := targets[id]
 		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model,
-			RequestSampleState: "none", ProbeSampleState: "none", WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
+			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
 		component := ChannelMonitorV3Component{GroupID: id}
 		total := channelMonitorV3Accumulate(*cfg, component, facts, time.Time{}, 0)[0]
 		if total.counted() > 0 {
@@ -108,10 +111,17 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			}
 		}
 		cells := channelMonitorV3Cells(*cfg, component, facts, first, channelMonitorV3GroupCells, interval, false)
+		observations := channelMonitorV3Accumulate(*cfg, component, facts, first, channelMonitorV3GroupCells, interval)
 		for i := range item.Cells {
 			item.Cells[i] = ChannelMonitorV3GroupCell{Start: first.Add(time.Duration(i) * interval), Status: ChannelMonitorV3StatusUnknown, Source: "none"}
 			if cells[i] != nil {
 				item.Cells[i].Status, item.Cells[i].Source = cells[i].Status, "requests"
+				if cells[i].Status == ChannelMonitorV3StatusInsufficient {
+					item.Cells[i].Status = "observed"
+					if observations[i].errors > 0 {
+						item.Cells[i].Status = "errors_observed"
+					}
+				}
 			}
 		}
 		var successes, count int
@@ -181,7 +191,38 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 				}
 			}
 		}
+		if item.Cells[len(item.Cells)-1].Source == "none" {
+			item.Cells[len(item.Cells)-1].Status = "collecting"
+		}
 		out[id] = item
 	}
 	return out, nil
+}
+
+// Status discovery has its own public catalog. Viewing service health never
+// grants API-key binding or subscription access, and never publishes private groups.
+func (s *ChannelMonitorV3Service) PublicStatusGroups(ctx context.Context) ([]Group, error) {
+	catalog, ok := s.groups.(interface {
+		ListActive(context.Context) ([]Group, error)
+	})
+	if !ok {
+		return nil, errors.New("status group catalog unavailable")
+	}
+	groups, err := catalog.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	public := make([]Group, 0, len(groups))
+	for _, g := range groups {
+		if g.Status == StatusActive && !g.IsExclusive {
+			public = append(public, g)
+		}
+	}
+	sort.SliceStable(public, func(i, j int) bool {
+		if public[i].Platform != public[j].Platform {
+			return public[i].Platform < public[j].Platform
+		}
+		return public[i].Name < public[j].Name
+	})
+	return public, nil
 }

@@ -51,7 +51,6 @@
       </p>
     </header>
 
-    <PlazaGroupStatus v-if="group.availability" :status="group.availability" />
 
     <!-- 模型价格表:整行(含 hover 底色/分区底色)顶到卡片边缘,左右留白由表格首列/末列的 padding 提供 -->
     <div>
@@ -83,7 +82,6 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import PlazaModelPricingTable from './PlazaModelPricingTable.vue'
-import PlazaGroupStatus from './PlazaGroupStatus.vue'
 import type { ModelPlazaGroup } from '@/api/modelPlaza'
 import type { GroupPlatform, SubscriptionType } from '@/types'
 import { platformBorderStrongClass } from '@/utils/platformColors'

@@ -21,40 +21,21 @@ type modelStatusResponse struct {
 	Groups      []modelStatusGroup `json:"groups"`
 }
 
-// GetStatus uses the original plaza visibility boundary and a price-free DTO.
+// GetStatus publishes only active public groups, independently of price discovery.
 func (h *ModelPlazaHandler) GetStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	if h.monitorService == nil || h.settingService == nil || !h.settingService.GetChannelMonitorRuntime(c.Request.Context()).V3Active() {
 		response.NotFound(c, "Model status is not enabled")
 		return
 	}
-	rt := h.settingService.GetModelPlazaRuntime(c.Request.Context())
-	if !rt.Enabled {
-		response.NotFound(c, "Model plaza is not enabled")
-		return
-	}
-	subject, authed := middleware.GetAuthSubjectFromContext(c)
-	if rt.RequireAuth && !authed {
-		response.Unauthorized(c, "Authentication required")
-		return
-	}
-	groups, err := h.plazaService.ListGroups(c.Request.Context())
+	_, authed := middleware.GetAuthSubjectFromContext(c)
+	groups, err := h.monitorService.PublicStatusGroups(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	var allowed map[int64]struct{}
-	var restricted bool
-	if authed {
-		allowed, restricted, err = h.apiKeyService.GetUserGroupVisibility(c.Request.Context(), subject.UserID)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-	}
-	visible := filterPlazaVisibleGroups(groups, allowed, restricted)
-	ids := make([]int64, 0, len(visible))
-	for _, group := range visible {
+	ids := make([]int64, 0, len(groups))
+	for _, group := range groups {
 		ids = append(ids, group.ID)
 	}
 	statuses, err := h.monitorService.PlazaStatuses(c.Request.Context(), ids, !authed)
@@ -67,13 +48,16 @@ func (h *ModelPlazaHandler) GetStatus(c *gin.Context) {
 		return
 	}
 	c.Writer.Header().Add("Vary", "Accept-Language")
-	response.Success(c, modelStatusResponse{GeneratedAt: time.Now().UTC(), Groups: toModelStatusGroups(visible, statuses, c.GetHeader("Accept-Language"))})
+	response.Success(c, modelStatusResponse{GeneratedAt: time.Now().UTC(), Groups: toModelStatusGroups(groups, statuses, c.GetHeader("Accept-Language"))})
 }
 
-func toModelStatusGroups(groups []service.PlazaGroup, statuses map[int64]*service.ChannelMonitorV3GroupStatus, language string) []modelStatusGroup {
+func toModelStatusGroups(groups []service.Group, statuses map[int64]*service.ChannelMonitorV3GroupStatus, language string) []modelStatusGroup {
 	out := make([]modelStatusGroup, 0, len(groups))
 	for _, group := range groups {
 		name, _ := group.I18n.Localize(language, group.Name, group.Description)
+		if status := statuses[group.ID]; status != nil && status.DisplayName != "" {
+			name = status.DisplayName
+		}
 		out = append(out, modelStatusGroup{ID: group.ID, Name: name, Platform: group.Platform, Availability: statuses[group.ID]})
 	}
 	return out

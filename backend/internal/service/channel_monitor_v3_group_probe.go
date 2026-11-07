@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
 const ChannelMonitorV3ProbeInterval = 10 * time.Minute
@@ -14,9 +17,10 @@ type ChannelMonitorV3GroupProbeConfig struct {
 }
 
 type ChannelMonitorV3GroupProbeTarget struct {
-	GroupID int64  `json:"group_id"`
-	Model   string `json:"model"`
-	Enabled bool   `json:"enabled"`
+	GroupID     int64  `json:"group_id"`
+	Model       string `json:"model"`
+	Enabled     bool   `json:"enabled"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type ChannelMonitorV3GroupProbeResult struct {
@@ -46,17 +50,25 @@ func (s *ChannelMonitorV3Service) validateGroupProbes(ctx context.Context, cfg *
 	if cfg.Groups == nil {
 		cfg.Groups = []ChannelMonitorV3GroupProbeTarget{}
 	}
-	if len(cfg.Groups) > 10 {
-		return channelMonitorV3Invalid("at most ten probe groups may be configured")
+	if len(cfg.Groups) > 1000 {
+		return channelMonitorV3Invalid("too many status groups")
 	}
 	seen := map[int64]bool{}
+	enabled := 0
 	for i := range cfg.Groups {
 		target := &cfg.Groups[i]
 		target.Model = strings.TrimSpace(target.Model)
-		if target.GroupID <= 0 || target.Model == "" || len(target.Model) > 200 || seen[target.GroupID] {
-			return channelMonitorV3Invalid("each probe requires a unique group and an exact text model")
+		target.DisplayName = strings.TrimSpace(target.DisplayName)
+		if target.GroupID <= 0 || len(target.Model) > 200 || seen[target.GroupID] || utf8.RuneCountInString(target.DisplayName) > 100 {
+			return channelMonitorV3Invalid("status groups must be unique and display names at most 100 characters")
 		}
 		seen[target.GroupID] = true
+		if target.Enabled {
+			enabled++
+			if target.Model == "" || enabled > 10 {
+				return channelMonitorV3Invalid("at most ten checks may be enabled, each with an exact text model")
+			}
+		}
 		if !cfg.Enabled || !target.Enabled {
 			continue
 		}
@@ -75,7 +87,10 @@ func (s *ChannelMonitorV3Service) validateGroupProbes(ctx context.Context, cfg *
 }
 
 func channelMonitorV3ProbeGroupSupported(group *Group) bool {
-	return group != nil && (group.Platform == PlatformOpenAI || group.Platform == PlatformAnthropic)
+	if group == nil || group.IsExclusive {
+		return false
+	}
+	return group.Platform == PlatformOpenAI || group.Platform == PlatformAnthropic || domain.IsCNProviderPlatform(group.Platform)
 }
 
 func channelMonitorV3ProbeMediaModel(model string) bool {
