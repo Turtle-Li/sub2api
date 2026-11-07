@@ -108,11 +108,30 @@ The fixed upstream reference is `ranxi2001/sub2api` at
 is `backend/internal/service/channel_monitor_v3_probe.go` (claim / runProbe /
 verdict), its `channel_monitor_v3_probe_test.go`, the corresponding repository
 probe methods and migrations 264/273. Local source attribution is retained.
-Local differences: no Pelican, cognitive challenge, account failover, or
+Local differences: no Pelican, cognitive challenge, or
 synthetic rows in customer usage; at most ten enabled checks and 1000 configured
 display-name rows; one unique
 group/ten-minute slot claim even after model changes. A selected-account native
 forwarder may retain its own protocol compatibility handling.
+
+Owner correction on2026-11-08: one claimed check may make at most three
+selected-account attempts, stopping at the first success. The normal scheduler
+and account concurrency admission run for every attempt. Only three completed
+failures publish a failed check. Configuration withdrawal, execution fencing,
+shutdown, or failure to persist progress stops further spending and leaves the
+check unknown. Each attempt retains the45-second deadline; retries wait250ms.
+The runner remains serial, so persistent timeouts can delay later groups and
+freshness then becomes unknown. It never reclaims an unfinished slot to catch up.
+
+Migration269adds private attempt/missing-usage counters and a status-history
+visibility flag. Progress writes retain cumulative tokens before any retry;
+the account/latency in the final receipt describe the final attempt. Clearing
+display history preserves the unique paid claim and private consumption totals.
+Old writers can finish during natural drain; their attempt counter stays NULL,
+while new claims explicitly start at0. The report treats only NULL legacy
+completions as one attempt; an unexecuted new cancellation stays0. Rollback retains
+the additive columns and receipts, and disables probes if restoring an older
+verdict would republish Kimi's false outage.
 
 Migration `268_channel_monitor_group_probes.sql` is additive. The global and
 per-group probe switches start disabled. Scheduled-check configuration is at
@@ -128,8 +147,9 @@ Claude requests use `max_tokens: 1`; OpenAI requests use
 `max_completion_tokens: 16` and `reasoning_effort: none`. Existing protocol
 conversion floors still apply, and native Codex OAuth strips unsupported output
 limits. Do not promise a strict one-token upper bound for that protocol. A tiny
-prompt, inexpensive selected model, 45-second deadline and a single claimed
-attempt bound the trial; actual input/output tokens are retained privately.
+prompt, inexpensive selected model,45-second attempt deadline and at most three
+attempts per claimed check bound the trial; actual input/output tokens from all
+attempts are retained privately.
 The existing HTTP stream-drain helpers preserve the private probe execution
 deadline/cancellation; ordinary clients still retain their normal usage drain.
 
@@ -139,6 +159,14 @@ ordinary, cache-creation and cache-read buckets. Historical receipts are not
 rewritten. The operator-only24h consumption report is
 `deploy/model-status-probe-consumption.sql`; missing upstream usage remains
 unknown rather than proven zero. It never reads customer usage or bills users.
+
+For Chat Completions, nonempty reasoning followed by the explicit `length`
+terminal also proves connectivity: the monitor intentionally exhausts a tiny
+output budget before some reasoning models emit visible text. Empty streams,
+reasoning without this terminal, and any provider error still fail. This is
+connectivity evidence, not an answer-quality test. The observed WorkBuddy Kimi
+contract, fixed source, numeric diagnostic and correction are recorded in
+`docs/operations/MODEL_STATUS_RETRY_CORRECTION_20261108.md`.
 
 The independent same-origin status endpoint returns only sanitized public groups.
 The plaza endpoint no longer enriches pricing with availability. Current state is unknown after

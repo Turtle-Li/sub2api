@@ -2,7 +2,7 @@ package service
 
 // Scheduling/claim separation adapted from ranxi2001/sub2api at
 // 5f0b6321a50153a738aef3fbade57c969dbe710c (LGPL-3.0).
-// Local difference: a tiny single attempt, without Pelican or customer usage.
+// Local difference: tiny, bounded retries without Pelican or customer usage.
 import (
 	"context"
 	"database/sql"
@@ -97,24 +97,7 @@ func (p *ChannelMonitorV3GroupProber) RunDue(ctx context.Context, now time.Time)
 		if !target.Enabled || !target.IsListed() {
 			continue
 		}
-		// Re-read authorization immediately before claiming/sending, including when
-		// an administrator changed a model while another group was being checked.
-		latest, err := p.repo.GetConfig(ctx)
-		if err != nil || !p.allowed(ctx, latest) {
-			return
-		}
-		authorized := false
-		for _, candidate := range latest.GroupProbe.Groups {
-			if candidate.sameCheck(target) {
-				authorized = true
-				break
-			}
-		}
-		if !authorized {
-			continue
-		}
-		group, err := p.groups.GetByID(ctx, target.GroupID)
-		if err != nil || group == nil || group.Status != StatusActive || !channelMonitorV3ProbeGroupSupported(group) || !group.ModelAllowlist.Allows(target.Model) || channelMonitorV3ProbeMediaModel(target.Model) {
+		if p.authorizedGroup(ctx, target) == nil {
 			continue
 		}
 		id, err := p.probes.ClaimGroupProbe(ctx, target, slot)
@@ -125,14 +108,7 @@ func (p *ChannelMonitorV3GroupProber) RunDue(ctx context.Context, now time.Time)
 		if id == 0 {
 			continue
 		}
-		runCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		result := p.executor.Check(runCtx, group, target.Model)
-		if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() {
-			result.Outcome = "cancelled"
-			result.Category = ""
-		}
-		cancel()
-		result.ID, result.GroupID, result.Model, result.Slot = id, target.GroupID, target.Model, slot
+		result := p.checkWithRetries(ctx, id, target, slot)
 		finished := time.Now().UTC()
 		result.FinishedAt = &finished
 		saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -150,6 +126,80 @@ func (p *ChannelMonitorV3GroupProber) RunDue(ctx context.Context, now time.Time)
 	if err := p.probes.PruneGroupProbes(ctx, now.Add(-31*24*time.Hour)); err != nil {
 		slog.Warn("group_probe_prune_failed")
 	}
+}
+
+// Only the claim owner retries; progress is durable before another paid attempt.
+// Operator withdrawal or loss of the execution fence leaves the slot unknown.
+func (p *ChannelMonitorV3GroupProber) checkWithRetries(ctx context.Context, id int64, target ChannelMonitorV3GroupProbeTarget, slot time.Time) ChannelMonitorV3GroupProbeResult {
+	result := ChannelMonitorV3GroupProbeResult{ID: id, GroupID: target.GroupID, Model: target.Model, Slot: slot, Outcome: "cancelled"}
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				result.Outcome, result.Category = "cancelled", ""
+				return result
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+		group := p.authorizedGroup(ctx, target)
+		if group == nil {
+			result.Outcome, result.Category = "cancelled", ""
+			return result
+		}
+		runCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		receipt := p.executor.Check(runCtx, group, target.Model)
+		cancel()
+		result.AttemptCount++
+		result.InputTokens += receipt.InputTokens
+		result.OutputTokens += receipt.OutputTokens
+		if receipt.InputTokens == 0 && receipt.OutputTokens == 0 {
+			result.MissingUsageAttempts++
+		}
+		result.Outcome, result.Category = receipt.Outcome, receipt.Category
+		result.LatencyMs, result.AccountID = receipt.LatencyMs, receipt.AccountID
+		saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := p.probes.RecordGroupProbeAttempt(saveCtx, result)
+		saveCancel()
+		if err != nil {
+			slog.Error("group_probe_progress_failed", "group_id", target.GroupID)
+			result.Outcome, result.Category = "cancelled", ""
+			return result
+		}
+		if p.authorizedGroup(ctx, target) == nil {
+			result.Outcome, result.Category = "cancelled", ""
+			return result
+		}
+		switch receipt.Outcome {
+		case "success":
+			return result
+		case "failure":
+			// Publish a failure only after all three attempts fail.
+		default:
+			result.Outcome, result.Category = "cancelled", ""
+			return result
+		}
+	}
+	return result
+}
+
+func (p *ChannelMonitorV3GroupProber) authorizedGroup(ctx context.Context, target ChannelMonitorV3GroupProbeTarget) *Group {
+	if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() {
+		return nil
+	}
+	cfg, err := p.repo.GetConfig(ctx)
+	if err != nil || !p.allowed(ctx, cfg) {
+		return nil
+	}
+	for _, current := range cfg.GroupProbe.Groups {
+		if !current.sameCheck(target) {
+			continue
+		}
+		group, err := p.groups.GetByID(ctx, target.GroupID)
+		if err == nil && group != nil && group.Status == StatusActive && channelMonitorV3ProbeGroupSupported(group) && group.ModelAllowlist.Allows(target.Model) && !channelMonitorV3ProbeMediaModel(target.Model) {
+			return group
+		}
+	}
+	return nil
 }
 
 func (p *ChannelMonitorV3GroupProber) allowed(ctx context.Context, cfg *ChannelMonitorV3Config) bool {
@@ -184,7 +234,7 @@ func (p *ChannelMonitorV3GroupProber) notify(ctx context.Context, result Channel
 		return
 	}
 	p.emailLimiter.SetLimit(cfg.Alert.RateLimitPerHour)
-	summary := fmt.Sprintf("Group %d · %s · %s · representative model check; real-user success rates are separate", result.GroupID, result.Model, result.Outcome)
+	summary := fmt.Sprintf("Group %d · %s · %s · scheduled connectivity check (%d attempts); real-user success rates are separate", result.GroupID, result.Model, result.Outcome, result.AttemptCount)
 	for _, recipient := range cfg.Alert.Recipients {
 		if recipient == "" || !p.emailLimiter.Allow(time.Now().UTC()) {
 			continue
