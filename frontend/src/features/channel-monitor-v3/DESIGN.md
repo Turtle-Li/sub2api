@@ -62,3 +62,11 @@ add/select/name/save/remove/readd. Live origin, homepage and status module
 publish exactly2selected groups; the admin editor has2rows and group-scoped
 model choices. Live390px has no overflow. No production settings were saved.
 Evidence and canonical release: `docs/operations/MODEL_STATUS_SELECTION_RELEASE_20261108.md`.
+
+The later fluid-layout refinement passed102frontend/14static tests, scoped Go
+tests/builds and independent Standards/Spec APPROVE. Real local1440/980/390px
+verification covers six singleton platforms, mixed multi-group platforms and
+search reflow; live1440/390px confirms six owner-selected cards and the separate
+homepage. Both incumbent dark fixtures and light production were inspected.
+No overflow was observed. The24h probe-use follow-up and exact source/static
+digests are in `docs/operations/MODEL_STATUS_LAYOUT_TRIAL_20261108.md`.
