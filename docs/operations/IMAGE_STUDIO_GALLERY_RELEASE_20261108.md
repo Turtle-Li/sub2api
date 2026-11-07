@@ -1,6 +1,6 @@
 # Image Studio gallery release —2026-11-08
 
-Status: reviewed feature deployed successfully; live acceptance passes. A separately reviewed cover-refresh follow-up is awaiting its canonical release.
+Status: Claude review PASS, Gemini4 refinement complete, merged to main and deployed; final authenticated acceptance passes.
 
 ## Scope
 
@@ -50,7 +50,11 @@ secret value was printed. Host memory is1906MiB total with1027MiB available at t
 snapshot, covering the bounded thumbnail decoder/source allowance. The stored
 retained-drain override remainsfalse and background mode remainsactivate.
 
-After activation, record the exact image revision/run, migrations/index presence, health and authenticated gallery/thumbnail cache behavior. Verify COS derivative Get/Put/Delete behavior through the existing runtime; do not export machine credentials or browser sessions. Live acceptance and final review results will be appended below.
+After activation, record the exact image revision/run, startup migration gate,
+health and authenticated gallery/thumbnail behavior. Exercise private COS cover
+delivery through the existing runtime and retain regression evidence for
+destructive cleanup boundaries; do not export machine credentials or browser
+sessions. Actual observations and their limits are recorded below.
 
 ## First activation and acceptance
 
@@ -60,7 +64,7 @@ Caddy selects healthy `sub2api-blue` at that exact OCI revision, with zero
 restarts/OOM events and no pending release transaction. Green and legacy slots
 are stopped. Public API health and the www studio route both return HTTP200.
 
-Authenticated Chrome acceptance shows15 historical items:14 decoded covers with
+Authenticated Chrome acceptance shows15 rendered historical cards:14 decoded covers with
 longest edge480px and one existing failed generation. The platform picker shows
 OpenAI/Google Vertex groups and configured resolution-sensitive prices. No new
 generation, original download, cookie/token export or destructive cleanup probe
@@ -79,6 +83,31 @@ Studio callers, terminal polling identity, cancellation and object-URL cleanup.
 Evidence: `.omo/reviews/gallery-release/claude-refresh.json` and
 `thumbnail-refresh-before.log` / `frontend-refresh.log`. This small follow-up
 requires a second canonical image release; its activation is recorded below.
+
+## Final activation
+
+The follow-up [production workflow](https://github.com/Turtle-Li/sub2api/actions/runs/42425003712)
+completed successfully for `5f2fceba80a32dae72bec2ccdebe19d74577e0b3`.
+Read-only inspection confirms Caddy selects healthy `sub2api-green` at that exact
+OCI revision. There are zero restarts/OOM events, zero migration-error log lines
+and no pending release transaction. Blue and legacy slots are stopped; stored
+background mode isactivate and the retained-drain override remainsfalse.
+Public API health and the www studio route both return HTTP200.
+
+After the process replacement, authenticated Chrome again renders15 historical
+cards with14 decoded covers, all with longest edge480px. There are zero page
+alerts and no horizontal overflow. Prices/platform selection and server search
+were also exercised during acceptance. Browser reload and the prior private COS
+backfill establish working persisted cover delivery across the release; the
+zero-original-read guarantee on fresh service/cache eviction is additionally
+covered by source-read-count regressions. No browser network-cache hit rate or
+direct SQL index-presence query is claimed.
+
+Final local visual evidence is `.omo/evidence/gallery-release/QA.md`, including
+`live-final-gallery.jpg` and `live-model-prices.jpg`. Real gallery screenshots
+remain local. The local fixture/dev processes were stopped after acceptance.
+Subsequent completion-record commits contain documentation only; the running
+application revision remains the exact image SHA above.
 
 ## Bounded residuals
 
