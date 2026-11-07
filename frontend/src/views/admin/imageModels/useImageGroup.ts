@@ -5,7 +5,7 @@ import type { AdminGroup } from '@/types'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { createImageDraft, imageDraftPatch, type ImageGroupDraft } from './imageGroupDraft'
 
-export function useImageGroup() {
+export function useImageGroup({ autoSelect = true }: { autoSelect?: boolean } = {}) {
   const groups = ref<AdminGroup[]>([])
   const group = ref<AdminGroup | null>(null)
   const draft = ref<ImageGroupDraft | null>(null)
@@ -50,7 +50,7 @@ export function useImageGroup() {
     try {
       groups.value = await groupsAPI.getAllIncludingInactive()
       const first = imageGroups.value[0]
-      if (first) return await select(first.id)
+      if (autoSelect && first) return await select(first.id)
       loading.value = false
     } catch (cause) {
       error.value = extractApiErrorMessage(cause)

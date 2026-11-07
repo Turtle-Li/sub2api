@@ -12,7 +12,7 @@ export default {
     "previousPage": "Previous page",
     "nextPage": "Next page",
     "title": "Image management",
-    "description": "Manage image access, prices and upstream accounts by group using existing permissions and billing.",
+    "description": "Manage image models, prices and upstream accounts using existing permissions and billing.",
     "openStudio": "Open Image Studio",
     "selectGroup": "Select group",
     "inactive": "Inactive",

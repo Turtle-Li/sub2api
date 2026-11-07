@@ -12,6 +12,8 @@ vi.mock('../api', async importOriginal => {
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
 vi.stubGlobal('IntersectionObserver', undefined)
+HTMLDialogElement.prototype.close = vi.fn()
+HTMLDialogElement.prototype.showModal = vi.fn()
 URL.createObjectURL = vi.fn(() => 'blob:fixture')
 URL.revokeObjectURL = vi.fn()
 let unmount = () => {}
@@ -48,6 +50,8 @@ it('submits the second edit with the completed first output and its source metad
  }
  await typePrompt('first modification')
  await act(async () => button('生成修改图').click())
+ expect(host.querySelector('[role="alert"]')?.textContent).toBeUndefined()
+ expect(client.submit).toHaveBeenCalledOnce()
  await vi.waitFor(() => expect(host.querySelector('.studio-references img')?.getAttribute('src')).toBe('data:image/png;base64,bmV3LW91dHB1dA=='))
  await typePrompt('second modification')
  await act(async () => button('生成修改图').click())

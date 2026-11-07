@@ -12,7 +12,7 @@ export default {
     "previousPage": "上一页",
     "nextPage": "下一页",
     "title": "生图管理",
-    "description": "按分组配置生图开放范围、价格和上游账号，沿用现有权限与计费。",
+    "description": "管理各平台生图模型、价格和上游账号，沿用现有权限与计费。",
     "openStudio": "打开生图工作台",
     "selectGroup": "选择分组",
     "inactive": "已停用",

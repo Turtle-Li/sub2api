@@ -1,7 +1,9 @@
 # Image Studio session API
 
 The Studio uses the existing panel JWT in `Authorization: Bearer <session token>`.
-The browser selects an owned API key by ID and sends `X-API-Key-ID: <positive integer>`.
+The host adapter automatically selects an eligible owned API key by ID for the
+chosen provider/model and sends `X-API-Key-ID: <positive integer>`. The user-facing
+workspace has no group/key picker; the wire-level ownership boundary is unchanged.
 No API key credential is returned by this directory, copied into an authorization header,
 or sent through an internal HTTP request. JWT middleware remains responsible for expiry,
 revocation, active user and session binding; selected-key admission subsequently reuses
@@ -54,7 +56,7 @@ this does not add the separate realtime-task read exemption. The raw URL is neve
 
 ## Scope and verification
 
-This is a thin façade; no schema, provider, queue, wallet, settlement or frontend changes.
+This is a thin server façade; no schema, provider, queue, wallet or settlement changes.
 Existing security auditing is retained by registering the same BatchImageHandler instance.
 The original `/v1` routes are unchanged. Read-by-ID now loads AllowedGroups so exclusive
 key groups receive the same permission data as credential-based authentication.
@@ -64,3 +66,6 @@ Tests use local repositories/fakes, with no external provider calls. Route tests
 owned reads and reach the original Submit service's batch group gate; existing service
 unit tests separately exercise successful provider enqueue and single reserve behavior.
 This is not a claim of real-provider or browser acceptance.
+
+The current frontend model directory/history adapter and its scoped browser
+acceptance are documented separately in `IMAGE_STUDIO_REDESIGN_20261108.md`.

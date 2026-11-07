@@ -2,35 +2,41 @@ import React from 'react'
 // InputBar rendering adapted from 88lin 5523a592 lines 1815–2050, MIT.
 import type { BatchImageModel, BatchImageModelCapabilities } from '@/api/batchImage'
 import { CloseIcon } from './icons'
+import { modelIdentity } from '../../workspaceAPI'
 interface Props {
  readonly capabilities?: BatchImageModelCapabilities; readonly imageSize: string; readonly aspectRatio: string;
  readonly setImageSize: (size: string) => void; readonly setAspectRatio: (ratio: string) => void; readonly referenceError: string;
  refs: string[]; removeRef: (index: number) => void; prompt: string; setPrompt: (text: string) => void;
  editing: boolean; upload: (files: FileList | null) => void; models: BatchImageModel[];
  model: string; setModel: (model: string) => void; busy: boolean; submit: () => void;
+ batchMode: boolean; setBatchMode: (batch: boolean) => void;
 }
-export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, model, setModel, busy, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError }: Props) {
+export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, model, setModel, busy, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError, batchMode, setBatchMode }: Props) {
+ const count = batchMode && !editing ? prompt.split(/\n\s*---\s*\n/).filter(text => text.trim()).length : prompt.trim() ? 1 : 0
  return <section data-input-bar className="studio-input">
-  <div className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
-   <div className="studio-references">{refs.map((src, index) => <button key={index} onClick={() => removeRef(index)} aria-label={`移除参考图 ${index + 1}`}><img src={src} alt={`参考图 ${index + 1}`} /><span>移除</span></button>)}</div>
-   <div className="relative grid">
-    <textarea data-prompt-input aria-label="画面描述" className="col-start-1 row-start-1 min-h-[42px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 pl-4 pr-10 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30" placeholder={editing ? '描述你想怎样修改这张图…' : '描述想要的画面。批量提示词用单独一行 --- 分隔。'} value={prompt} onChange={event => setPrompt(event.target.value)} />
+  <div className="studio-input-fields">
+   <label className="studio-field"><span>图片模型</span><select aria-label="图片模型" value={model} disabled={busy} onChange={event => setModel(event.target.value)}>{!models.length && <option value="">暂无可用生图模型</option>}{models.map(item => <option key={modelIdentity(item)} value={modelIdentity(item)}>{item.id}</option>)}</select></label>
+   {!models.length && <p className="studio-muted">管理员配置可用模型后，即可在这里开始创作。</p>}
+   {!editing && <div className="studio-tabs studio-mode" aria-label="创作模式"><button disabled={busy} aria-pressed={!batchMode} onClick={() => setBatchMode(false)}>单张创作</button><button disabled={busy} aria-pressed={batchMode} onClick={() => setBatchMode(true)}>批量创作</button></div>}
+   <div className="studio-prompt-heading"><label htmlFor="studio-prompt">{editing ? '修改描述' : '画面描述'}</label><span className="studio-muted">{prompt.length} 字</span></div>
+   <div className="studio-prompt-field">
+    <textarea id="studio-prompt" data-prompt-input aria-label="画面描述" placeholder={editing ? '描述你想怎样修改这张图…' : batchMode ? '每段描述生成一张图片，用单独一行 --- 分隔。' : '描述画面主体、风格、构图和光线…'} value={prompt} onChange={event => setPrompt(event.target.value)} />
     {prompt.length > 0 && <button type="button" className="studio-clear absolute right-3 top-3" onClick={() => setPrompt('')} aria-label="清空文本"><CloseIcon className="w-3.5 h-3.5" /></button>}
    </div>
-   <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
-    <select aria-label="图片模型" value={model} onChange={event => setModel(event.target.value)}>{!models.length && <option value="">此分组没有可用生图模型</option>}{models.map(item => <option key={`${item.provider}:${item.id}`} value={item.id}>{item.id}</option>)}</select>
-    {capabilities && <div className="flex items-center gap-2 flex-wrap">
-     {capabilities.image_sizes.length > 0 && <label className="studio-muted">尺寸 <select aria-label="图片尺寸" className="studio-parameter" value={imageSize} onChange={event => setImageSize(event.target.value)}>{capabilities.image_sizes.map(size => <option key={size} value={size}>{size}</option>)}</select></label>}
-     {capabilities.aspect_ratios.length > 0 && <label className="studio-muted">比例 <select aria-label="图片比例" className="studio-parameter" value={aspectRatio} onChange={event => setAspectRatio(event.target.value)}>{capabilities.aspect_ratios.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}</select></label>}
-    </div>}
-    <div className="flex gap-2 flex-shrink-0">
-     <label className="studio-upload" aria-label="添加参考图"><svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeWidth="2" d="M12 5v14M5 12h14" /></svg><input aria-label="添加参考图" type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={event => { upload(event.target.files); event.target.value = '' }} /></label>
-     <button className="studio-submit p-2.5 rounded-xl" aria-label={editing ? '生成修改图' : '开始生成'} disabled={busy || !model || !prompt.trim() || Boolean(referenceError)} onClick={submit}>{busy ? '提交中…' : <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>}</button>
-    </div>
-   </div>
+   {batchMode && !editing && <p className="studio-muted">用单独一行 --- 分隔提示词，每段生成一张，共 {count} 张。</p>}
+   <div className="studio-prompt-heading"><span>参考图 <span className="studio-muted">可选</span></span><span className="studio-muted">{refs.length}{capabilities ? ` / ${capabilities.max_reference_images}` : ''}</span></div>
+   <div className="studio-references">{refs.map((src, index) => <button key={index} onClick={() => removeRef(index)} aria-label={`移除参考图 ${index + 1}`}><img src={src} alt={`参考图 ${index + 1}`} /><span>移除</span></button>)}</div>
+   <label className="studio-upload"><svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeWidth="1.6" d="M12 5v14M5 12h14" /></svg><span>添加参考图<small>PNG、JPG、WebP · 每张不超过 8 MB</small></span><input aria-label="添加参考图" type="file" multiple accept="image/png,image/jpeg,image/webp" disabled={capabilities?.max_reference_images === 0} onChange={event => { upload(event.target.files); event.target.value = '' }} /></label>
+   {capabilities && <div className="studio-parameters">
+    {capabilities.aspect_ratios.length > 0 && <label className="studio-field"><span>画面比例</span><select aria-label="图片比例" value={aspectRatio} onChange={event => setAspectRatio(event.target.value)}>{capabilities.aspect_ratios.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}</select></label>}
+    {capabilities.image_sizes.length > 0 && <label className="studio-field"><span>分辨率</span><select aria-label="图片尺寸" value={imageSize} onChange={event => setImageSize(event.target.value)}>{capabilities.image_sizes.map(size => <option key={size} value={size}>{size}</option>)}</select></label>}
+   </div>}
    {referenceError && <p role="alert" className="studio-error">{referenceError}</p>}
-   {capabilities && <p className="studio-muted">最多 {capabilities.max_reference_images} 张参考图。尺寸与比例为生成目标，实际尺寸以下载图片为准。</p>}
-   <p className="studio-muted mt-2">每条提示词生成一张，按所选分组计费。</p>
+   {capabilities && <p className="studio-muted">尺寸与比例为生成目标，实际尺寸以下载图片为准。</p>}
   </div>
+  <div className="studio-submit-area">
+   <p className="studio-muted">每条提示词生成一张 · 按模型配置计费</p>
+   <button className="studio-submit" aria-label={editing ? '生成修改图' : '开始生成'} disabled={busy || !model || !prompt.trim() || Boolean(referenceError) || count === 0} onClick={submit}>{busy ? '正在提交…' : editing ? '生成修改图' : `开始生成${count > 1 ? ` · ${count} 张` : ''}`}<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></button>
+   </div>
  </section>
 }

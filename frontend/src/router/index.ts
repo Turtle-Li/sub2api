@@ -252,13 +252,11 @@ const routes: RouteRecordRaw[] = [
     path: '/batch-image',
     name: 'BatchImageGuide',
     alias: '/docs/batch-image',
-    component: () => import('@/views/user/BatchImageGuideView.vue'),
+    redirect: { name: 'ImageStudio' },
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
-      title: 'Batch Image Guide',
-      titleKey: 'batchImageGuide.title',
-      descriptionKey: 'batchImageGuide.description'
+      title: '生图工作台'
     }
   },
   {

@@ -1,9 +1,21 @@
 # Image Studio administration
 
-The admin route `/admin/image-models` collects the existing group image settings,
-shared model allowlist and bound-account controls. It uses the normal Vue admin
-shell/components; the user gallery remains the pinned source adoption documented
-in `frontend/src/features/image-studio/UPSTREAM.md`.
+The admin route `/admin/image-models` now begins with a deduplicated model directory.
+Selecting a model opens its existing group image settings, shared allowlist and
+bound-account controls; internal group switching is in a collapsed advanced
+section. It uses the normal Vue admin shell/components. The November 8 redesign
+is documented in `IMAGE_STUDIO_REDESIGN_20261108.md`; source adoption remains in
+`frontend/src/features/image-studio/UPSTREAM.md`.
+
+Only groups with image or batch-image access configured enter this directory.
+Catalogue reads are bounded to three in parallel. A configuration-ready binding
+is preferred, then a batch-enabled binding, with group ID as the stable tie-break.
+Rows show the selected binding's existing USD source-price configuration for the
+model's supported resolution tiers, before existing multipliers; they are not a
+new global quote. Zero remains a real configured price. The configuration panel
+identifies the source group and shared price scope. Separate model prices can
+continue to use separate image groups. No default account, rate, allowlist or
+provider is changed when this page is shipped.
 
 ## Configuration ownership
 

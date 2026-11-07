@@ -228,7 +228,7 @@
               v-if="canUseBatchImage"
               type="button"
               class="group flex items-center gap-3 rounded-lg bg-gray-50 p-3 text-left transition-colors hover:bg-sky-50 dark:bg-dark-800/50 dark:hover:bg-sky-900/20"
-              @click="router.push('/batch-image')"
+              @click="router.push('/image-studio')"
             >
               <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400">
                 <Icon name="sparkles" size="md" :stroke-width="2" />

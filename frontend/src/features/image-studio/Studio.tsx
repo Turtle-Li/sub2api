@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
-import { listKeys, readImage, studioAPI, taskDisplay, taskPending, taskRoot, type StudioKey, type StudioTask, type ItemContinuation } from './api'
+import { listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type ItemContinuation } from './api'
+import { modelIdentity, workspaceAPI } from './workspaceAPI'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from './upstream/hooks/usePreventBackgroundScroll'
 import TaskCard from './upstream/components/TaskCard'
@@ -12,7 +13,7 @@ import { dismissAllTooltips } from './upstream/lib/tooltipDismiss'
 import { useEditContinuation } from './useEditContinuation'
 import './studio.css'
 
-type API = ReturnType<typeof studioAPI>
+type API = ReturnType<typeof workspaceAPI>
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : '请求失败，请刷新后重试' }
 function ImageAsset({ task, api, index = 0 }: { task: StudioTask; api: API; index?: number }) {
   const [src, setSrc] = useState('')
@@ -60,21 +61,32 @@ function DetailModal({ task, api, close, edit, cancel }: { task: StudioTask; api
 
 export function Studio({ userId }: { readonly userId: number }) {
   useGlobalClickSuppression()
-  const [keys, setKeys] = useState<StudioKey[]>([])
-  const [key, setKey] = useState(0)
+  const [keys, setKeys] = useState<number[] | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     const controller = new AbortController()
-    listKeys(controller.signal).then(items => { if (!controller.signal.aborted) { setKeys(items); setKey(items.find(item => item.status === 'active' && !item.expired && !item.quota_exhausted)?.id || 0) } }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
+    listKeys(controller.signal).then(items => { if (!controller.signal.aborted) setKeys(items.filter(item => item.status === 'active' && !item.expired && !item.quota_exhausted).map(item => item.id)) }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
     return () => controller.abort()
   }, [userId])
-  return <div className="image-studio dark"><header className="studio-header"><div><h1>生图工作台</h1><p className="studio-muted">画廊与连续改图</p></div><label>使用分组<select value={key} onChange={event => setKey(Number(event.target.value))}><option value={0}>请选择</option>{keys.map(item => <option key={item.id} value={item.id} disabled={item.status !== 'active' || item.expired || item.quota_exhausted}>{item.group_name || '未分组'} · {item.name}</option>)}</select></label><a href="/batch-image">批量任务管理</a></header>
-    {error && <p role="alert">{error}</p>}{key ? <Workspace key={`${userId}:${key}`} selectedKey={key} /> : <div className="studio-empty">选择可用分组开始生图。没有可用分组时，请先在密钥管理中检查权限。</div>}
+  return <div className="image-studio">
+    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.join(',')}`} keys={keys} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : '暂无可用的生图权限，请联系管理员开通。'}</div>}
   </div>
 }
 
-function Workspace({ selectedKey }: { readonly selectedKey: number }) {
-  const [api] = useState(() => { const controller = new AbortController(); return { client: studioAPI(selectedKey, controller.signal), controller } })
+function Workspace({ keys }: { readonly keys: readonly number[] }) {
+  const [api] = useState(() => { const controller = new AbortController(); return { client: workspaceAPI(keys, controller.signal), controller } })
+  const composer = useRef<HTMLDialogElement>(null)
+  const [mobile, setMobile] = useState(() => Boolean(window.matchMedia?.('(max-width: 760px)').matches))
+  const [batchMode, setBatchMode] = useState(false)
+  const [filter, setFilter] = useState('all')
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    const query = window.matchMedia?.('(max-width: 760px)')
+    if (!query) return
+    const update = () => { composer.current?.close(); setMobile(query.matches) }
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
   const [tasks, setTasks] = useState<StudioTask[]>([])
   const readVersion = useRef(0)
   const tasksRef = useRef<StudioTask[]>([])
@@ -87,7 +99,7 @@ function Workspace({ selectedKey }: { readonly selectedKey: number }) {
   const [refs, setRefs] = useState<string[]>([])
   const [imageSize, setImageSize] = useState('')
   const [aspectRatio, setAspectRatio] = useState('')
-  const capabilities = models.find(item => item.id === model)?.capabilities
+  const capabilities = models.find(item => modelIdentity(item) === model)?.capabilities
   const selectedSize = capabilities?.image_sizes.includes(imageSize) ? imageSize : capabilities?.image_sizes.includes(capabilities.default_image_size) ? capabilities.default_image_size : capabilities?.image_sizes[0]
   const selectedAspect = capabilities?.aspect_ratios.includes(aspectRatio) ? aspectRatio : capabilities?.aspect_ratios.includes(capabilities.default_aspect_ratio) ? capabilities.default_aspect_ratio : capabilities?.aspect_ratios[0]
   useEffect(() => { setImageSize(selectedSize || ''); setAspectRatio(selectedAspect || '') }, [selectedSize, selectedAspect])
@@ -112,6 +124,7 @@ function Workspace({ selectedKey }: { readonly selectedKey: number }) {
     async function load() {
       const version = readVersion.current
       try {
+        api.client.refreshDirectory()
         const [catalog, first] = await Promise.all([api.client.models(), api.client.tasks()])
         let cursor = first.nextCursor
         const rows = [...first.tasks]
@@ -120,7 +133,7 @@ function Workspace({ selectedKey }: { readonly selectedKey: number }) {
           const next = await api.client.tasks(cursor); rows.push(...next.tasks); continuations.push(...next.itemContinuations); cursor = next.nextCursor
         }
         if (!active || version !== readVersion.current) return
-        setModels(catalog); setModel(previous => catalog.some(item => item.id === previous) ? previous : catalog[0]?.id || ''); setTasks(rows); setItemContinuations(continuations); setNextCursor(cursor); setError('')
+        setModels(catalog); setModel(previous => catalog.some(item => modelIdentity(item) === previous) ? previous : catalog[0] ? modelIdentity(catalog[0]) : ''); setTasks(rows); setItemContinuations(continuations); setNextCursor(cursor); setError(api.client.warnings().join(' '))
       }
       catch (error) { if (active) setError(errorMessage(error)) }
       finally { if (active) setLoading(false) }
@@ -172,7 +185,24 @@ function Workspace({ selectedKey }: { readonly selectedKey: number }) {
   }
   async function edit(task: StudioTask, index = 0) {
     const selection = continuation.beginSelection()
-    try { const data = await readImage(await api.client.image(task, index)); if (!continuation.isCurrent(selection)) return; setRefs([data]); setParent(task); setPrompt(''); setDetail(null) } catch (error) { setError(errorMessage(error)) }
+    try {
+      const data = await readImage(await api.client.image(task, index))
+      const sourceModel = models.find(item => item.id === task.job.model && item.provider === task.job.provider)
+      const linked = sourceModel ? await api.client.canContinue(task, sourceModel) : false
+      if (!continuation.isCurrent(selection)) return
+      setRefs([data]); setParent(linked ? task : null); setPrompt(''); setBatchMode(false); setDetail(null)
+      if (sourceModel) setModel(modelIdentity(sourceModel))
+      setNotice(linked ? '' : '原模型暂不可用，已保留参考图，可选择模型创建新作品。')
+      if (window.matchMedia?.('(max-width: 760px)').matches) composer.current?.showModal()
+    } catch (error) { setError(errorMessage(error)) }
+  }
+  async function changeModel(value: string) {
+    const selection = continuation.beginSelection()
+    setModel(value)
+    const selected = models.find(item => modelIdentity(item) === value)
+    if (parent && selected && !await api.client.canContinue(parent, selected) && continuation.isCurrent(selection)) {
+      setParent(null); setNotice('已切换模型并保留参考图。本次将创建新作品。')
+    }
   }
   async function upload(files: FileList | null) {
     if (!files?.length) return
@@ -181,10 +211,10 @@ function Workspace({ selectedKey }: { readonly selectedKey: number }) {
     try { const picked = Array.from(files); if (picked.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024)) throw new Error('请选择 8 MB 以内的 PNG、JPEG 或 WebP 图片'); const images = await Promise.all(picked.map(readImage)); if (continuation.isCurrent(selection)) setRefs(previous => [...previous, ...images]) } catch (error) { setError(errorMessage(error)) }
   }
   async function submit() {
-    const selected = models.find(item => item.id === model)
+    const selected = models.find(item => modelIdentity(item) === model)
     if (!selected || !prompt.trim() || busy || referenceError) return
-    const prompts = parent ? [prompt.trim()] : prompt.split(/\n\s*---\s*\n/).map(value => value.trim()).filter(Boolean)
-    const body: BatchImageSubmitRequest = { model, ...(selectedSize ? { image_size: selectedSize } : {}), ...(selectedAspect ? { aspect_ratio: selectedAspect } : {}), ...(capabilities?.response_mime_types[0] ? { response_mime_type: capabilities.response_mime_types[0] } : {}), provider: selected.provider, parent_batch_id: parent ? taskRoot(parent) : undefined, items: prompts.map((text, i) => ({ custom_id: `image-${i + 1}`, prompt: text, output_count: 1, reference_images: refs.map(data => ({ mime_type: data.slice(5, data.indexOf(';')), data: data.slice(data.indexOf(',') + 1) })) })), metadata: parent ? { source_batch_id: parent.job.id, source_item_id: parent.item.custom_id } : {} }
+    const prompts = parent || !batchMode ? [prompt.trim()] : prompt.split(/\n\s*---\s*\n/).map(value => value.trim()).filter(Boolean)
+    const body: BatchImageSubmitRequest = { model: selected.id, ...(selectedSize ? { image_size: selectedSize } : {}), ...(selectedAspect ? { aspect_ratio: selectedAspect } : {}), ...(capabilities?.response_mime_types[0] ? { response_mime_type: capabilities.response_mime_types[0] } : {}), provider: selected.provider, parent_batch_id: parent ? taskRoot(parent) : undefined, items: prompts.map((text, i) => ({ custom_id: `image-${i + 1}`, prompt: text, output_count: 1, reference_images: refs.map(data => ({ mime_type: data.slice(5, data.indexOf(';')), data: data.slice(data.indexOf(',') + 1) })) })), metadata: parent ? { source_batch_id: parent.job.id, source_item_id: parent.item.custom_id } : {} }
     const serialized = JSON.stringify(body)
     if (attempt.current?.body !== serialized) attempt.current = { body: serialized, key: crypto.randomUUID() }
     const selection = continuation.beginSelection()
@@ -195,21 +225,32 @@ function Workspace({ selectedKey }: { readonly selectedKey: number }) {
       if (parent) continuation.expectOutput(submitted.id, selection)
       attempt.current = null
       setPrompt(current => current === prompt ? '' : current)
+      if (mobile) composer.current?.close()
+      setNotice(`已提交 ${submitted.item_count || prompts.length} 张图片任务，生成结果会自动更新。`)
       setRefresh(value => value + 1)
     }
     catch (error) { if (!api.controller.signal.aborted) setError(`${errorMessage(error)}。请求结果未确认时，保持内容重试会复用同一提交编号。`) }
     finally { if (!api.controller.signal.aborted) setBusy(false) }
   }
   const selectedDetail = detail ? tasks.find(task => task.id === detail.id) || detail : null
-  const visible = tasks.filter(task => (!parent || taskRoot(task) === taskRoot(parent)) && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase()))
-  return <><div className="studio-toolbar"><button aria-pressed={!parent} onClick={() => { continuation.beginSelection(); setParent(null) }}>画廊</button><span>{parent ? '连续改图' : `${tasks.length} 个图片任务`}</span><input aria-label="搜索图片任务" placeholder="搜索提示词或模型" value={search} onChange={event => setSearch(event.target.value)} /><button onClick={() => setRefresh(value => value + 1)}>刷新</button></div>
+  const visible = tasks.filter(task => (!parent || taskRoot(task) === taskRoot(parent)) && (filter === 'all' || filter === 'pending' && taskPending(task) || filter === 'completed' && task.item.image_count > 0 || filter === 'failed' && taskDisplay(task).status === 'failed') && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase()))
+  return <div className="studio-workspace">
+    <dialog ref={composer} open={!mobile} className="studio-composer" aria-label="创作设置">
+      <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
+      {parent && <p className="studio-edit-source studio-muted">基于当前参考图续改 · {parent.job.model}</p>}
+      {mobile && error && <p className="studio-error" role="alert">{error}</p>}
+      <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} model={model} setModel={value => void changeModel(value)} busy={busy} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
+    </dialog>
+    <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-muted">{tasks.length} 个图片任务</span></div><div className="studio-toolbar-actions">{parent && <button onClick={() => { continuation.beginSelection(); setParent(null) }}>返回画廊</button>}<button disabled={loading} onClick={() => setRefresh(value => value + 1)}>刷新</button></div></div>
+    <div className="studio-gallery-filters"><div className="studio-tabs" aria-label="筛选任务">{[['all', '全部'], ['pending', '生成中'], ['completed', '已完成'], ['failed', '失败']].map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div><input aria-label="搜索图片任务" placeholder="搜索提示词或模型" value={search} onChange={event => setSearch(event.target.value)} /></div>
+    {notice && <p className="studio-notice" role="status">{notice}</p>}
     {error && <div className="studio-error" role="alert">{error}</div>}
-    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length ? <div className="studio-empty"><h2>{search ? '没有匹配的任务' : '从一个想法开始'}</h2><p>写下画面描述，或上传参考图。生成结果会保存在这里。</p></div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} />}
+    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length ? <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2><p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p></div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} />}
 
     {itemContinuations.map(continuation => <button key={continuation.job.id} disabled={loading} onClick={() => void loadItems(continuation)}>加载批次 {continuation.job.id} 的更多图片任务</button>)}
     {nextCursor && <button disabled={loading} onClick={() => void loadMore()}>加载更早的批次</button>}
-    <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} model={model} setModel={value => { continuation.beginSelection(); setModel(value) }} busy={busy} submit={() => void submit()} />
-
+    </section>
+    <button className="studio-mobile-create" onClick={() => { composer.current?.showModal(); composer.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus() }}><span>{parent ? '继续修改这张图' : '描述想要的画面…'}</span><strong>展开 ↑</strong></button>
     {selectedDetail && <DetailModal task={selectedDetail} api={api.client} cancel={cancel} close={() => setDetail(null)} edit={index => void edit(selectedDetail, index)} />}
-  </>
+  </div>
 }

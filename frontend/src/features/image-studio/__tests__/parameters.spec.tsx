@@ -23,7 +23,7 @@ function element<T extends Element>(host: HTMLElement, selector: string): T {
  return found
 }
 async function change(host: HTMLElement, name: string, value: string) {
- await act(async () => { const select = element<HTMLSelectElement>(host, `select[aria-label="${name}"]`); select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })) })
+ await act(async () => { const select = element<HTMLSelectElement>(host, `select[aria-label="${name}"]`); select.value = name === '图片模型' ? `fixture:${value}` : value; select.dispatchEvent(new Event('change', { bubbles: true })) })
 }
 async function prompt(host: HTMLElement) {
  await act(async () => {
@@ -51,7 +51,7 @@ async function mount(models = [seedream, muse, legacy]) {
  const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
  await act(async () => root.render(<Studio userId={1} />))
  await prompt(host)
- return { host, client, submit }
+ return { host, root, client, submit }
 }
 const generate = (host: HTMLElement) => element<HTMLButtonElement>(host, 'button[aria-label="开始生成"]')
 it('uses Seedream server defaults, applies changed size/aspect and retains retry identity only for the same body', async () => {
@@ -104,17 +104,19 @@ it('uses the first valid capability entry if a server default is not in its opti
  await act(async () => generate(host).click())
  expect(submit.mock.calls[0]?.[0]).toMatchObject({ image_size: 'large', aspect_ratio: '3:2' })
 })
-it('isolates parameter state and pending file reads when the selected key unmounts', async () => {
- const { host } = await mount()
+it('isolates parameter state and pending file reads when the authenticated user changes', async () => {
+ const { host, root } = await mount()
  await change(host, '图片尺寸', '4K')
  let finish: (data: string) => void = () => {}
  vi.mocked(readImage).mockReturnValue(new Promise(resolve => { finish = resolve }))
  await upload(host, 1)
  const oldSignal = vi.mocked(studioAPI).mock.calls[0]?.[1]
- await act(async () => { const select = element<HTMLSelectElement>(host, '.studio-header select'); select.value = '43'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+ await act(async () => root.render(<Studio userId={2} />))
  await act(async () => finish('data:image/png;base64,b2xk'))
  expect(oldSignal?.aborted).toBe(true)
  expect(element<HTMLSelectElement>(host, 'select[aria-label="图片尺寸"]').value).toBe('2K')
  expect(host.querySelectorAll('.studio-references img')).toHaveLength(0)
  expect(element<HTMLTextAreaElement>(host, 'textarea').value).toBe('')
+ expect(host.querySelector('.studio-header')).toBeNull()
+ expect(host.textContent).not.toContain('使用分组')
 })

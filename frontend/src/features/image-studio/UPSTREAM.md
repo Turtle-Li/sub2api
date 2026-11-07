@@ -2,9 +2,12 @@
 
 Source: https://github.com/88lin/gpt-image-studio at
 `5523a592af054bfe4cbee76c2ef8d866ce5cd81e` (MIT, copyright 2026 88lin).
-License is retained at `upstream/LICENSE`. Selected visual contract is the original
-`docs/images/example_pc_1.jpg`: dark three-column gallery, horizontal image/text
-cards and a floating compact composer. Continuous editing is secondary.
+License is retained at `upstream/LICENSE`. The initial visual reference was
+`docs/images/example_pc_1.jpg`. The owner superseded its dark standalone shell
+and floating composer on November 7–8: the current visual contract is the Kimi
+left creation rail and right gallery, integrated into Sub2's light/dark theme.
+Gemini 4 supplied a comparison and Claude reviewed the selected Kimi design.
+Their suggestions do not replace the pinned execution and ownership contracts.
 
 ## Executed source and adaptation map
 
@@ -21,12 +24,12 @@ The exact retained line ranges and both SHA256 hashes are recorded in
 | `components/Lightbox.tsx:13–25, 325–918` | Original ref-based transform state, clamp, wheel anchoring, mouse drag, double click, pinch, pan, horizontal swipe thresholds, tap suppression, image-change reset, timers/listener cleanup, image/navigation/action rendering. Props replace global local-image store. |
 | `hooks/useCloseOnEscape.ts`, `hooks/usePreventBackgroundScroll.ts` | Verbatim nested overlay Escape ownership and reference-counted scroll lock. |
 | `components/ViewportTooltip.tsx`, `lib/tooltipDismiss.ts` | Original viewport-clamped portal tooltip and overlay dismissal bus; desktop titlebar offset is zero on web. |
-| `components/InputBar.tsx:1815–2050` | Original composer surface and prompt field tokens, clear-text control, action-row layout and submit SVG; controlled textarea replaces local-store contenteditable mentions. |
+| `components/InputBar.tsx:1815–2050` | Original clear-text control and submit SVG; the controlled prompt/actions adapter is now arranged in the selected creation rail. The upstream contenteditable store and floating geometry are intentionally excluded. |
 | `components/icons.tsx`, `lib/clickSuppression.ts` | Original icons and delayed touch-click suppression. |
 
 Host additions: native detail dialog, focus containment/restoration and labeled
 navigation, authenticated blob retrieval/revocation, server-owned task/status
-projection, per-item errors, owned-key selection, capability model catalogue,
+projection, per-item errors, automatic owned-key routing, capability model catalogue,
 12-job pages, explicit 100-item continuations, bounded pending-item refresh and
 stable ambiguous-submit identity. Subsequent edits use the selected output image
 and persisted root batch ID. Prompt previews are never replayed as complete prompts.
@@ -78,13 +81,12 @@ Regression evidence: `.omo/evidence/image-studio/terminal-status/README.md`.
 
 ## Server-owned generation parameters
 
-InputBar's compact size/aspect controls are a host adapter inside the adopted
-composer, retaining its palette, prompt field and action row. The optional
+InputBar's size/aspect controls are a host adapter inside the creation rail. The optional
 `BatchImageModel.capabilities` contract is exactly `image_sizes`, `aspect_ratios`,
 `default_image_size`, `default_aspect_ratio`, `max_reference_images`, and
 `response_mime_types`; no frontend provider/model capability table exists.
 Valid selections survive model updates; invalid selections use the advertised
-default when valid, otherwise the first advertised option. A key change remounts
+default when valid, otherwise the first advertised option. A user change remounts
 the workspace and clears selections/references. The first advertised response MIME
 is used only when present. Models without capabilities omit all three parameters.
 Reference overflow blocks uploads and submission, while existing images remain
@@ -93,18 +95,28 @@ is authoritative. Serialized parameters participate in the existing stable
 idempotency body identity. Capability fixtures and regression evidence live at
 `.omo/evidence/image-studio/model-parameters/`.
 
-## Host design tokens
+## Current host design and routing
 
-`studio.css` is the scoped host theme: semantic surface/text/border roles, shared
-spacing/type/radius scales and named gallery/composer/dialog geometry. It consumes
-these tokens in the adapter rules; upstream Tailwind utilities retain their own
-shared scale. Parameter selects use `studio-parameter` and the shared minimum-width
-token. Superseded pre-adoption gallery rules and duplicate composer overrides were
-removed; original source components and gallery breakpoints remain unchanged.
-CSS media-query thresholds remain literal because native custom properties cannot
-be used in media conditions. The InputBar adoption entry records the current host
-adapter snapshot, including server capability controls, rather than the earlier
-pre-capability snapshot.
+`studio.css` provides scoped semantic light/dark surfaces, text, border and teal
+accent tokens and named rail/card geometry. It retains upstream Tailwind scales
+and measured virtualization. The host adapter changes card geometry to image
+above metadata, with a fixed measured height; the underlying task states, lazy
+image loading, actions, viewer and gesture implementations remain adopted code.
+The existing AppLayout supplies the only page header. Desktop uses a 320px rail;
+phone uses the same controlled form in a native modal with a sticky submit action.
+Literal CSS breakpoints remain necessary; they cannot use custom properties.
 
-At the phone breakpoint, the empty-state top space uses the page spacing token
-(24px) so its helper remains above the taller capability-enabled composer.
+`workspaceAPI.ts` aggregates capability catalogues with at most three concurrent
+directory reads. It deduplicates exact provider/model identities and exposes no
+key/group selector. Routing uses the first eligible owned key in stable ID order,
+or the original task key for a continuation. Histories retain independent key
+cursors and authenticated asset/cancel ownership. An uncertain submission stays
+bound to its original key and idempotency ID even after catalogue refresh. There
+is no automatic POST replay, failover, hidden credential or second task authority.
+If a model change requires another key, the reference remains but a new work is
+explicitly started because persisted roots are key-owned. Single/batch modes are
+explicit; only batch mode splits prompts on a standalone `---` line.
+
+The old guide component and navigation entry are removed. `/batch-image` and
+`/docs/batch-image` redirect to `/image-studio`; the backend batch API is retained.
+Current redesign and acceptance: `docs/features/IMAGE_STUDIO_REDESIGN_20261108.md`.

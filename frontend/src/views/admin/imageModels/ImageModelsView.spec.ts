@@ -12,6 +12,7 @@ vi.mock('@/components/layout/AppLayout.vue', () => ({ default: { template: '<mai
 vi.mock('./ImageGroupSettings.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./ImageGroupModels.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./ImageGroupAccounts.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('./ImageModelDirectory.vue', () => ({ default: { template: '<div />' } }))
 
 beforeEach(() => vi.restoreAllMocks())
 
@@ -20,10 +21,10 @@ describe('image management group selection', () => {
     const select = vi.fn()
     const state = {
       groups: ref([]), imageGroups: ref([
-        { id: 40, name: 'Image', platform: 'openai', status: 'active' },
-        { id: 41, name: 'Gemini', platform: 'gemini', status: 'active' },
+        { id: 40, name: 'Image', platform: 'openai', status: 'active', allow_image_generation: true },
+        { id: 41, name: 'Gemini', platform: 'gemini', status: 'active', allow_image_generation: true },
       ]),
-      group: ref(null), draft: ref(null), catalogue: ref(null), selectedId: ref(40),
+      group: ref({ id: 40, name: 'Image', platform: 'openai' }), draft: ref({}), catalogue: ref({ candidates: [], models: [] }), selectedId: ref(40),
       loading: ref(false), saving: ref(false), error: ref(''), saved: ref(false), dirty: ref(true),
       select, save: vi.fn(), loadGroups: vi.fn(), refreshCatalogue: vi.fn(),
     }
