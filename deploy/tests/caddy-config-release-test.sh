@@ -87,12 +87,12 @@ with open(sys.argv[1], "r", encoding="utf-8") as source:
 startup_path = "/etc/caddy/Caddyfile"
 source_identity = sys.argv[2]
 rollback_patterns = (
-    re.compile(r"/tmp/sub2api-release-rollback-sub2api-(?:blue|green)\.Caddyfile"),
+    re.compile(r"/tmp/sub2api-release-rollback-sub2api(?:-(?:blue|green))?\.Caddyfile"),
     re.compile(r"/tmp/sub2api-caddy-config-rollback-[0-9a-f]{40}-[0-9]+\.Caddyfile"),
 )
 if source_identity.startswith("active:"):
     active_slot = source_identity.removeprefix("active:")
-    if active_slot not in {"blue", "green"}:
+    if active_slot not in {"blue", "green", "legacy"}:
         raise SystemExit(1)
 else:
     active_slot = None
@@ -102,7 +102,7 @@ def generated(path):
         return path == source_identity
     if path in {
         startup_path,
-        "/tmp/sub2api-release-sub2api-{}.Caddyfile".format(active_slot),
+        "/tmp/sub2api-release-{}.Caddyfile".format("sub2api" if active_slot == "legacy" else "sub2api-" + active_slot),
     }:
         return True
     return any(pattern.fullmatch(path) for pattern in rollback_patterns)
@@ -178,6 +178,8 @@ PY
 
 write_caddyfile() {
   local destination="$1" slot="$2" max_size="$3" threshold="$4"
+  local container="sub2api-${slot}"
+  [ "$slot" != legacy ] || container=sub2api
 
   cat >"$destination" <<EOF
 {
@@ -185,7 +187,7 @@ write_caddyfile() {
 }
 
 (sub2_proxy) {
-  reverse_proxy sub2api-${slot}:8080
+  reverse_proxy ${container}:8080
 }
 
 api.turtleligpt.com {
@@ -266,7 +268,9 @@ reset_fixture() {
   write_caddyfile "$HOST_CADDY" "$slot" "$max_size" "$threshold"
   cp "$HOST_CADDY" "$STARTUP_CADDY"
   chmod 0600 "$STARTUP_CADDY"
-  "$FAKE_JSON" "$HOST_CADDY" "/tmp/sub2api-release-sub2api-${slot}.Caddyfile" >"$ACTIVE_JSON"
+  local container="sub2api-${slot}"
+  [ "$slot" != legacy ] || container=sub2api
+  "$FAKE_JSON" "$HOST_CADDY" "/tmp/sub2api-release-${container}.Caddyfile" >"$ACTIVE_JSON"
 }
 
 run_receiver() {
@@ -384,7 +388,7 @@ case "${1:-}" in
   inspect)
     target="${2:-}"
     case "$target" in
-      sub2api-caddy|sub2api-blue|sub2api-green) ;;
+      sub2api-caddy|sub2api-blue|sub2api-green|sub2api) ;;
       *) exit 2 ;;
     esac
     if [ "${3:-}" = --format ]; then
@@ -393,7 +397,7 @@ case "${1:-}" in
         '{{.State.Pid}}') printf '4242\n' ;;
         '{{range .Config.Env}}{{println .}}{{end}}')
           case "$target" in
-            sub2api-blue|sub2api-green)
+            sub2api-blue|sub2api-green|sub2api)
               if [ -e "$FAKE_BAD_ACTIVE_ENV" ]; then
                 printf '%s\n' 'SERVER_MAX_REQUEST_BODY_SIZE=134217728' 'GATEWAY_MAX_BODY_SIZE=100000000' 'GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=134217728'
               elif [ -e "$FAKE_BAD_ACTIVE_WS_ENV" ]; then
@@ -407,7 +411,7 @@ case "${1:-}" in
           ;;
         '{{index .Config.Labels "org.opencontainers.image.revision"}}')
           case "$target" in
-            sub2api-blue|sub2api-green)
+            sub2api-blue|sub2api-green|sub2api)
               if [ -e "$FAKE_BAD_ACTIVE_REVISION" ]; then
                 printf '%s\n' 'ffffffffffffffffffffffffffffffffffffffff'
               else
@@ -660,6 +664,37 @@ PY
   [ ! -e "$TRANSACTION_PATH" ] && [ ! -L "$TRANSACTION_PATH" ] \
     || fail "unreviewed hide path created a transaction: ${unreviewed_hide}"
 done
+
+# Retained old connections can make the legacy third slot the active target.
+reset_fixture legacy 100MB 100000000
+before_inode="$(file_inode "$HOST_CADDY")"
+if ! run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/legacy-success.log"; then
+  tail -n 10 "${TEST_ROOT}/legacy-success.log" >&2 || true
+  fail 'receiver did not complete the legacy-slot release'
+fi
+assert_equal "$(file_inode "$HOST_CADDY")" "$before_inode" 'legacy release host inode'
+cmp -s "$HOST_CADDY" "$STARTUP_CADDY" || fail 'legacy host/startup mismatch'
+assert_contains "$HOST_CADDY" 'sub2api:8080'
+assert_not_contains "$HOST_CADDY" 'sub2api-blue:8080'
+assert_not_contains "$HOST_CADDY" 'sub2api-green:8080'
+assert_contains "$ACTIVE_JSON" 'sub2api:8080'
+assert_json_body_contract "$ACTIVE_JSON"
+assert_contains "${TEST_ROOT}/legacy-success.log" 'active_slot=legacy'
+"$FAKE_JSON" "$HOST_CADDY" /dev/stdin >"${TEST_ROOT}/legacy-host-after.json"
+assert_equal "$(json_sha "${TEST_ROOT}/legacy-host-after.json" /dev/stdin)" "$(json_sha "$ACTIVE_JSON" active:legacy)" 'legacy host/active normalized JSON'
+[ ! -e "$TRANSACTION_PATH" ] || fail 'legacy release retained a transaction'
+
+# Legacy support must not accept a mixed active upstream set.
+reset_fixture legacy 128MiB 134217728
+perl -0pi -e 's/reverse_proxy sub2api:8080/reverse_proxy sub2api:8080 sub2api-blue:8080/' "$HOST_CADDY"
+cp "$HOST_CADDY" "$STARTUP_CADDY"
+"$FAKE_JSON" "$HOST_CADDY" /tmp/sub2api-release-sub2api.Caddyfile >"$ACTIVE_JSON"
+before_sha="$(file_sha "$HOST_CADDY")"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/legacy-mixed.log"; then
+  fail 'receiver accepted mixed legacy/blue upstreams'
+fi
+assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'mixed legacy upstream rejection preserves host'
+[ ! -e "$TRANSACTION_PATH" ] || fail 'mixed legacy upstream rejection created a transaction'
 
 # The active green slot must be projected into the blue-only template, and a
 # successful release must preserve the host bind inode while all views converge.

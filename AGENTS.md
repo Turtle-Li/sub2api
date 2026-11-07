@@ -369,6 +369,12 @@
   keep an old color draining across a later release. Resolve the active color
   from Caddy and select only an absent or stopped target; never assume a fixed
   two-name toggle or stop a running drain container to free a name.
+- For an already-authorized release overlapping an older drain, the owner
+  explicitly requires retaining old connections (2026-11-08). Verify each
+  retained generation's read-only standby fence and an available third slot,
+  then use the documented one-process retained-drain option. Keep the stored
+  default fail-closed and refresh retained monitors to the new active slot;
+  do not ask the owner to interrupt old connections for this routine flow.
 - Attachment Gateway releases must keep the feature disabled by default. Any
   canary enablement must be scoped to explicitly approved API-key, user, or
   group IDs; `allow_unscoped` stays `false` and Caddy limits are a separate

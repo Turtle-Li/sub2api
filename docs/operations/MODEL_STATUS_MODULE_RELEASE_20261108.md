@@ -57,5 +57,47 @@ with immutable `turtleroute-status-20261108-v3` assets, digest checks and atomic
 HTML replacement. Restore the helper's exact prior HTML backup under the same
 lock if necessary; do not clear caches or overwrite the live Caddyfile.
 
-Exact runtime source, workflow, static hashes and live smoke evidence are
-recorded after the canonical deployment completes.
+## Released runtime and static evidence
+
+Application source: `f3addd923b8af8610a7cbbd405b9512300e1882c`. GitHub run
+`42396611435` built and validated its linux/amd64 image and transport archive
+`sha256:b59aa0ce482fb8dc3cb6579c21a4883771d3f8f939c8bcff923419283716a1b5`.
+Its initial switch was rejected before mutation because inactive blue retained
+long connections. The owner explicitly required preserving those connections.
+Both host and in-container generation files proved blue standby through exact
+read-only mounts; green was healthy/active. Independent operations review was GO.
+The existing canonical `--prebuilt` coordinator resumed that same verified image
+with the documented retention option scoped to one process, without a rebuild
+or persistent configuration override. It selected the absent legacy `sub2api`
+slot, preserved old connections and completed at2026-11-07 17:54:07UTC. Healthy
+active image is `sub2api:auto-20261107-094041-f3addd92`; audits were0app5xx,
+0appfatal and0Caddy5xx. Logs: `/var/log/sub2api-release/status-module-f3addd92-retained-drain`.
+The original GitHub run remains failed at its initial guard; do not report it
+as a successful workflow. The successful canonical recovery is recorded above.
+
+The follow-up digest-bound Caddy receiver exposed an existing deployment bug:
+it accepted only blue/green even though the coordinator supports legacy as a
+third slot. It failed before mutation. This follow-up fixes explicit legacy
+mapping in detection, projection, exact generated-path normalization and runtime
+container checks. A legacy projection test failed before the fix; the full
+receiver suite then passed, including mixed legacy/blue rejection. A separate
+independent review approved the receiver fix and locked hash-verified installation.
+The blue-only template,128MiB HTTP/WS limits, OCI revision, protected bind inode,
+three-view consistency, maintenance lock and rollback checks remain strict.
+
+Homepage publication succeeded under the shared maintenance lock with API180min
+gate, immutable assets and atomic HTML replacement. Evidence directory:
+`/var/log/sub2api-release/model-groups-20261107.GMEbns`.
+
+| Artifact | SHA256 |
+| --- | --- |
+| HTML | `c2027456c4e99c495db8e2c3936c12e651f909b768640701f2d44120826b022e` |
+| Module | `33da744cfff78291efef3b39cc704bae2343ef59c1097350349716df9a24db73` |
+| CSS | `3eb06d27a42fb2efedcb9ebcc58e96b91446175c5e1a9b9324460ba988478178` |
+
+Live origin smoke passes:12public groups across8platforms,18cells at10minutes,
+180min, no selected-model field, no-store, insufficient metrics suppressed and
+no availability enrichment in model plaza. Admin UI verifies12editable display
+name fields and domestic rows. Groups6/10 remain enabled and29 disabled; no
+production model selection or display name was changed. Release verification
+used the existing canonical deployment canary; no extra manual paid test.

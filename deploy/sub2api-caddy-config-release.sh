@@ -384,6 +384,8 @@ if set(dials) == {"sub2api-blue:8080"}:
     print("blue")
 elif set(dials) == {"sub2api-green:8080"}:
     print("green")
+elif set(dials) == {"sub2api:8080"}:
+    print("legacy")
 else:
     raise SystemExit(1)
 '
@@ -453,12 +455,12 @@ if type(config) is not dict:
 startup_path = sys.argv[1]
 source_identity = sys.argv[2]
 rollback_patterns = (
-    re.compile(r"/tmp/sub2api-release-rollback-sub2api-(?:blue|green)\.Caddyfile"),
+    re.compile(r"/tmp/sub2api-release-rollback-sub2api(?:-(?:blue|green))?\.Caddyfile"),
     re.compile(r"/tmp/sub2api-caddy-config-rollback-[0-9a-f]{40}-[0-9]+\.Caddyfile"),
 )
 if source_identity.startswith("active:"):
     active_slot = source_identity.removeprefix("active:")
-    if active_slot not in {"blue", "green"}:
+    if active_slot not in {"blue", "green", "legacy"}:
         raise SystemExit(1)
 else:
     active_slot = None
@@ -468,7 +470,7 @@ def is_generated_source(path):
         return path == source_identity
     if path in {
         startup_path,
-        "/tmp/sub2api-release-sub2api-{}.Caddyfile".format(active_slot),
+        "/tmp/sub2api-release-{}.Caddyfile".format("sub2api" if active_slot == "legacy" else "sub2api-" + active_slot),
     }:
         return True
     return any(pattern.fullmatch(path) for pattern in rollback_patterns)
@@ -518,7 +520,7 @@ if template_mode == "template":
     if not upstreams or set(upstreams) != {"sub2api-blue:8080"} or "sub2api-green" in text:
         raise SystemExit(1)
 else:
-    expected = "sub2api-{}:8080".format(expected_slot)
+    expected = "sub2api:8080" if expected_slot == "legacy" else "sub2api-{}:8080".format(expected_slot)
     if not upstreams or set(upstreams) != {expected}:
         raise SystemExit(1)
 
@@ -547,7 +549,7 @@ import sys
 source_path, candidate_path, slot = sys.argv[1:]
 source = open(source_path, "rb").read()
 expected = b"sub2api-blue:8080"
-replacement = ("sub2api-{}:8080".format(slot)).encode("ascii")
+replacement = ("sub2api:8080" if slot == "legacy" else "sub2api-{}:8080".format(slot)).encode("ascii")
 if expected not in source or b"sub2api-green" in source:
     raise SystemExit(1)
 with open(candidate_path, "wb") as destination:
@@ -557,6 +559,7 @@ PY
 
 check_active_runtime_contract() {
   local active_container="sub2api-${BEFORE_SLOT}" active_revision
+  [ "$BEFORE_SLOT" != legacy ] || active_container=sub2api
 
   docker inspect "$active_container" --format '{{range .Config.Env}}{{println .}}{{end}}' \
     | python3 -c '
@@ -588,9 +591,9 @@ assert_current_views() {
   host_json="$(adapt_host_config)" || die 'could not adapt host Caddyfile'
   startup_json="$(adapt_startup_config)" || die 'could not adapt Caddy startup configuration'
   active_json="$(read_active_config)" || die 'could not read active Caddy Admin configuration'
-  host_slot="$(caddy_json_slot "$host_json")" || die 'host Caddyfile does not uniquely select blue or green'
-  startup_slot="$(caddy_json_slot "$startup_json")" || die 'startup Caddyfile does not uniquely select blue or green'
-  active_slot="$(caddy_json_slot "$active_json")" || die 'active Caddy configuration does not uniquely select blue or green'
+  host_slot="$(caddy_json_slot "$host_json")" || die 'host Caddyfile does not uniquely select blue, green or legacy'
+  startup_slot="$(caddy_json_slot "$startup_json")" || die 'startup Caddyfile does not uniquely select blue, green or legacy'
+  active_slot="$(caddy_json_slot "$active_json")" || die 'active Caddy configuration does not uniquely select blue, green or legacy'
   [ "$host_slot" = "$startup_slot" ] && [ "$host_slot" = "$active_slot" ] \
     || die 'host, startup, and active Caddy views do not select the same slot'
   host_config="$(caddy_json_sha "$host_json" /dev/stdin)" || die 'host Caddy JSON is invalid'

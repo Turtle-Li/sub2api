@@ -232,6 +232,18 @@ override for deployments where background queues are disabled or the operator
 has separately fenced their consumers; it should not be enabled on normal
 Sub2API production hosts.
 
+For already-authorized sequential releases, the owner explicitly requires old
+connections to drain naturally (2026-11-08). If an inactive generation remains,
+verify its exact generation-state environment/bind mount, read-only mount and
+`standby` contents both on host and inside the container. With a free third
+slot, use the existing retained-drain option for that one coordinator process;
+do not persistently change the root configuration default. The normal
+maintenance lock, candidate/rollback gates and background ownership handoff
+remain required. Reattach monitors for any older retained generation to the
+new active slot, because its previous active-slot expectation is now obsolete.
+The digest-bound Caddy receiver supports blue, green and legacy `sub2api`;
+mixed/unknown upstream sets remain rejected and its input stays blue-only.
+
 On a dual-node rollback or canary origin that must continue serving requests
 without consuming shared background work, set
 `SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby` for the audited release
