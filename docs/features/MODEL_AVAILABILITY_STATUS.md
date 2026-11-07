@@ -1,5 +1,15 @@
 # Model availability status
 
+Current owner correction (2026-11-07): read
+[MODEL_AVAILABILITY_GROUPS.md](MODEL_AVAILABILITY_GROUPS.md) before further
+changes. Homepage and signed-in model plaza group cards are the primary
+surface. All viewers use the existing plaza visibility rules. The owner also
+authorized opt-in checks every ten minutes using an inexpensive representative
+model and minimal output. Synthetic results have their own denominator and
+notification path; they never become user request facts. This supersedes the
+initial passive-only implementation scope and quota guidance below, which
+describe the earlier release. `/status` remains supplementary.
+
 Implementation contract (2026-11-07). User requested reuse of the researched
 Sub2 status logic and good design, with anonymous public status and logged-in
 group-scoped views. Preserve the incumbent UI if adequate; a broad redesign is
@@ -33,7 +43,8 @@ rates or silently begin spending. No samples or stale collection means unknown.
 Existing V1/V2 selection remains unchanged until an administrator chooses V3.
 V3 keeps passive aggregation running. Internal probes do not prove public ingress.
 
-Implementation scope decision: do not add an active-probe adapter in this change.
+Initial implementation scope decision (superseded by the group integration above):
+do not add an active-probe adapter in the initial change.
 The existing V1 checker tests direct provider endpoints and the reference V3
 uses unavailable Pelican group scheduling; neither is an equivalent drop-in
 probe of the current authenticated group path. Passive statistics, unknown for
@@ -83,7 +94,7 @@ never overwrite already applied upstream numbers. No automatic enablement.
 
 ## Quota and publication controls
 
-V3 never calls a model. Adding, hiding or refreshing a component only reads
+The initial V3 release never called a model. Adding, hiding or refreshing a component only reads
 passively aggregated real requests. Its `enabled` switch controls display;
 `visibility` independently selects group-authorized or public viewing. The
 optional exact requested-model filter limits statistics to that model. An empty
@@ -113,7 +124,7 @@ task starts from freshly fetched `fork/main` at
 
 - Public page: `/status`; anonymous GET
   `/api/v1/public/channel-monitor-v3/status` and `/incidents`.
-  Find it under 模型状态 next to 控制台 in the static www homepage header.
+  The static homepage header's 模型状态 now scrolls to inline group cards.
   The homepage is published separately from the application image.
 - Signed-in page: existing `/monitor`, selected when monitor mode is V3;
   GET `/api/v1/channel-monitor-v3/status` and `/incidents`.

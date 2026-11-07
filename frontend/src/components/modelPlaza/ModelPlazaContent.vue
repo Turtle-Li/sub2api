@@ -33,6 +33,7 @@
       {{ t('modelPlaza.loadFailed') }}
     </div>
     <template v-else>
+      <p v-if="response?.status_unavailable" role="status" class="text-sm text-amber-700 dark:text-amber-400">{{ t('modelPlaza.availability.loadFailed') }}</p>
       <!-- 筛选区:平台 → 分组 → 倍率 -->
       <PlazaFilterBar
         :platforms="platforms"

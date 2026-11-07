@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import PlazaNavBar from '@/components/modelPlaza/PlazaNavBar.vue'
@@ -26,23 +26,40 @@ import { useAuthStore } from '@/stores/auth'
 const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const props = defineProps<{ embedded?: boolean }>()
 
 // embedded=1 但未登录(如转发的链接)自动降级为独立形态。
-const isEmbedded = computed(() => route.query.embedded === '1' && authStore.isAuthenticated)
+const isEmbedded = computed(() => (props.embedded || route.query.embedded === '1') && authStore.isAuthenticated)
 
 const data = ref<ModelPlazaResponse | null>(null)
 const loading = ref(true)
 const loadFailed = ref(false)
 
-onMounted(async () => {
-  // 独立形态导航条需要站点名/Logo;有 __APP_CONFIG__ 注入时同步命中缓存。
-  void appStore.fetchPublicSettings()
+let timer: ReturnType<typeof setInterval> | undefined
+const controller = new AbortController()
+let refreshing = false
+async function refresh() {
+  if (refreshing || document.hidden) return
+  refreshing = true
   try {
-    data.value = await getModelPlaza()
+    data.value = await getModelPlaza({ signal: controller.signal })
+    loadFailed.value = false
   } catch {
-    loadFailed.value = true
+    if (controller.signal.aborted) return
+    if (!data.value) loadFailed.value = true
+    else data.value = { ...data.value, status_unavailable: true, groups: data.value.groups.map(group => ({ ...group, availability: undefined })) }
   } finally {
     loading.value = false
+    refreshing = false
   }
+}
+function onVisible() { if (!document.hidden) void refresh() }
+onMounted(() => {
+  // 独立形态导航条需要站点名/Logo;有 __APP_CONFIG__ 注入时同步命中缓存。
+  void appStore.fetchPublicSettings()
+  void refresh()
+  timer = setInterval(() => { void refresh() }, 60_000)
+  document.addEventListener('visibilitychange', onVisible)
 })
+onUnmounted(() => { clearInterval(timer); controller.abort(); document.removeEventListener('visibilitychange', onVisible) })
 </script>

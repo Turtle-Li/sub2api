@@ -657,6 +657,14 @@ export default {
 
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
+    availability: {
+      operational: 'Operational', degraded: 'Degraded', down: 'Check failed', unknown: 'Unconfirmed',
+      requestRate: '24h request success', probeRate: '24h check success', waiting: 'Awaiting first check', noRequests: 'No request samples',
+      history: 'Last six hours; gray means insufficient samples', sixHours: '6 hours ago', checked: 'Checked at {time}', observed: 'Requests observed at {time}',
+      probeEvery: 'Checked every 10 min · Details', passive: 'Real request statistics · Details', model: 'Check model:',
+      scope: 'Checks cover the selected representative model. Request success rates cover real group traffic, excluding user cancellations and insufficient balance. Gray means insufficient samples.',
+      probeOff: 'Scheduled checks disabled', probe: 'Scheduled check', requests: 'Real requests', loadFailed: 'Status is temporarily unavailable. Model prices remain available.',
+    },
     title: 'Model Plaza',
     description: 'Browse available models and pricing by group',
     loading: 'Loading...',

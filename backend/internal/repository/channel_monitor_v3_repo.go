@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -18,14 +19,21 @@ func NewChannelMonitorV3Repository(db *sql.DB) service.ChannelMonitorV3Repositor
 
 const channelMonitorV3ConfigColumns = `version, interval_minutes, cells, availability_range, down_error_rate::float8,
 	degraded_error_rate::float8, degraded_ttft_ms, min_requests, ignored_error_categories,
-	featured_component_id, footer_note, updated_at, updated_by, public_enabled`
+	featured_component_id, footer_note, updated_at, updated_by, public_enabled, group_probe`
 
 func scanChannelMonitorV3Config(row interface{ Scan(...any) error }) (*service.ChannelMonitorV3Config, error) {
 	var cfg service.ChannelMonitorV3Config
+	var probe []byte
 	if err := row.Scan(&cfg.Version, &cfg.IntervalMinutes, &cfg.Cells, &cfg.AvailabilityRange, &cfg.DownErrorRate,
 		&cfg.DegradedErrorRate, &cfg.DegradedTTFTMs, &cfg.MinRequests, pq.Array(&cfg.IgnoredErrorCategories),
-		&cfg.FeaturedComponentID, &cfg.FooterNote, &cfg.UpdatedAt, &cfg.UpdatedBy, &cfg.PublicEnabled); err != nil {
+		&cfg.FeaturedComponentID, &cfg.FooterNote, &cfg.UpdatedAt, &cfg.UpdatedBy, &cfg.PublicEnabled, &probe); err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal(probe, &cfg.GroupProbe); err != nil {
+		return nil, fmt.Errorf("decode group probes: %w", err)
+	}
+	if cfg.GroupProbe.Groups == nil {
+		cfg.GroupProbe.Groups = []service.ChannelMonitorV3GroupProbeTarget{}
 	}
 	if cfg.IgnoredErrorCategories == nil {
 		cfg.IgnoredErrorCategories = []string{}
@@ -43,6 +51,10 @@ func (r *channelMonitorV3Repository) GetConfig(ctx context.Context) (*service.Ch
 }
 
 func (r *channelMonitorV3Repository) UpdateConfig(ctx context.Context, cfg service.ChannelMonitorV3Config, expectedVersion int, updatedBy int64) (*service.ChannelMonitorV3Config, error) {
+	probe, err := json.Marshal(cfg.GroupProbe)
+	if err != nil {
+		return nil, err
+	}
 	ignored := cfg.IgnoredErrorCategories
 	if ignored == nil {
 		ignored = []string{}
@@ -52,12 +64,12 @@ func (r *channelMonitorV3Repository) UpdateConfig(ctx context.Context, cfg servi
 		SET version = version + 1, interval_minutes = $1, cells = $2, availability_range = $3,
 		    down_error_rate = $4, degraded_error_rate = $5, degraded_ttft_ms = $6, min_requests = $7,
 		    ignored_error_categories = $8, featured_component_id = $9, footer_note = $10,
-		    updated_by = $11, updated_at = NOW(), public_enabled = $13
+	    updated_by = $11, updated_at = NOW(), public_enabled = $13, group_probe = $14::jsonb
 		WHERE id = 1 AND version = $12
 		RETURNING `+channelMonitorV3ConfigColumns,
 		cfg.IntervalMinutes, cfg.Cells, cfg.AvailabilityRange, cfg.DownErrorRate, cfg.DegradedErrorRate,
 		cfg.DegradedTTFTMs, cfg.MinRequests, pq.Array(ignored), cfg.FeaturedComponentID, cfg.FooterNote,
-		updatedBy, expectedVersion, cfg.PublicEnabled))
+		updatedBy, expectedVersion, cfg.PublicEnabled, probe))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

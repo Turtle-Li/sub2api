@@ -73,6 +73,24 @@ beforeEach(() => {
 })
 
 describe('V3 settings panel', () => {
+  it('saves explicit group/model probe switches without changing passive rules', async () => {
+    mocks.updateConfig.mockImplementation(async (config) => ({ ...config, version: 4 }))
+    const wrapper = mount(V3SettingsPanel, { global: { stubs } })
+    await flushPromises()
+    const probes = wrapper.get('[data-testid="group-probe-settings"]')
+    expect(probes.get('input[type="checkbox"]').element).toHaveProperty('checked', false)
+    await probes.get('button').trigger('click')
+    await probes.get('#probe-model-0').setValue('gpt-5.4-mini')
+    await probes.findAll('input[type="checkbox"]')[0].setValue(true)
+    await probes.findAll('input[type="checkbox"]')[1].setValue(true)
+    await wrapper.get('[data-testid="monitor-v3-save-config"]').trigger('click')
+    await flushPromises()
+    expect(mocks.updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      version: 3, min_requests: 1, ignored_error_categories: ['client_cancelled'],
+      group_probe: { enabled: true, groups: [{ group_id: 41, model: 'gpt-5.4-mini', enabled: true }] },
+    }))
+  })
+
   it('lists categories with their components and the uncategorized featured one', async () => {
     const wrapper = mount(V3SettingsPanel, { global: { stubs } })
     await flushPromises()

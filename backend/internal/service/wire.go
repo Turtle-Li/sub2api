@@ -1102,6 +1102,7 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorQuotaFetcher,
 	ProvideChannelMonitorV2Service,
 	ProvideChannelMonitorV3Service,
+	ProvideChannelMonitorV3GroupProber,
 	ProvideChannelMonitorV2Aggregator,
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
@@ -1265,6 +1266,13 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 	}
 	aggregator.Start()
 	return aggregator
+}
+
+func ProvideChannelMonitorV3GroupProber(repo ChannelMonitorV3Repository, groups GroupRepository, settings *SettingService,
+	gateway *GatewayService, openai *OpenAIGatewayService, concurrency *ConcurrencyService, db *sql.DB, ops *OpsService, email *NotificationEmailService) *ChannelMonitorV3GroupProber {
+	prober := NewChannelMonitorV3GroupProber(repo, groups, settings, gateway, openai, concurrency, db, ops, email)
+	prober.Start()
+	return prober
 }
 
 // ProvideClaudeResetCreditService wires the Claude reset query and, with the

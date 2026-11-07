@@ -13,6 +13,7 @@
     <p v-else-if="loadError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-200">{{ loadError }}</p>
 
     <template v-else-if="settings && draft">
+      <GroupProbeSettings v-if="draft.group_probe" v-model="draft.group_probe" :groups="groups" />
       <div class="grid gap-5 xl:grid-cols-[minmax(340px,0.38fr)_minmax(0,0.62fr)]">
         <!-- Page-wide settings -->
         <div class="card min-w-0 !rounded-2xl" data-testid="monitor-v3-config">
@@ -285,6 +286,7 @@ import { platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 import ComponentEditorDialog from './ComponentEditorDialog.vue'
 import IncidentsDialog from './IncidentsDialog.vue'
 import StatusPage from './StatusPage.vue'
+import GroupProbeSettings from './GroupProbeSettings.vue'
 import { formatMonitorV3Full, formatMonitorV3Multiplier } from './monitorV3'
 
 /** Facts older than this mean the passive aggregation is not keeping up. */
@@ -359,7 +361,7 @@ async function load() {
   try {
     const next = await getSettings()
     settings.value = next
-    draft.value = { ...next.config, ignored_error_categories: [...next.config.ignored_error_categories] }
+    draft.value = { ...next.config, group_probe: structuredClone(next.config.group_probe ?? { enabled: false, groups: [] }), ignored_error_categories: [...next.config.ignored_error_categories] }
     original.value = JSON.stringify(draft.value)
     loadError.value = ''
   } catch (err: unknown) {

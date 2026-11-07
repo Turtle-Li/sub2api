@@ -1,6 +1,12 @@
 /** Channel Monitor V3 (component status page over passive traffic + admin editor) */
 export default {
   channelMonitorV3: {
+    probes: {
+      title: '分组主动检测', description: '首页和模型广场直接显示各分组的检测结果。', enabled: '开启定时检测',
+      cost: '每组每 10 分钟最多一次，每天最多 144 次。使用低价文本模型和最小输出，检测任务不额外重试。检测与真实请求分别统计。',
+      group: '分组', model: '代表模型', modelHint: '填写该分组支持的低价文本模型', groupEnabled: '检测此组', add: '添加检测分组',
+      saveHint: '更改后点击页面的“保存”。目前支持 GPT / Claude 分组；异常通知遵循现有运维邮件通知配置。',
+    },
     status: {
       operational: '正常',
       degraded: '性能下降',
@@ -131,7 +137,7 @@ export default {
     admin: {
       publicEnabled: '允许访客免登录查看公开状态页',
       publicHint: '开启后，任何访客无需登录即可访问 /status，仅展示标记为公开的组件；分组可见组件仍受权限限制。',
-      modeDescription: 'V3 组件状态页，根据真实请求统计展示模型状态。',
+      modeDescription: '在模型广场分组内展示真实请求状态，可单独开启低成本定时检测。',
       tab: 'V3 组件监控',
       siteMode: '本站用户看到的是',
       siteModeHint: '切换后立即生效，同一时间只运行一种监控。',
@@ -155,7 +161,7 @@ export default {
       modeBanner: '本站当前是「{mode}」，用户还看不到 V3 页面。注意：这个模式下不统计真实请求，下面的预览不会有新数据。配置好后在页面顶部切换到「V3 组件监控」即可。',
       modeBannerV2: '本站当前是「{mode}」，用户还看不到 V3 页面。V3 和 V2 用的是同一份真实请求统计，所以下面的预览已经有数据；配置好后在页面顶部切换到「V3 组件监控」即可。',
       pageSettings: '页面设置',
-      pageSettingsHint: '状态完全来自本站用户的真实请求，不会额外发请求。所有组件用同一套时段划分，每一格在时间上对齐。',
+      pageSettingsHint: '真实请求与主动检测分别统计。首页和模型广场在每个分组中展示状态；下方保留详细历史页面的配置。',
       noFacts: '还没有统计数据：在 V2 或 V3 模式下，系统每分钟汇总一次真实请求。',
       staleFacts: '统计已经超过 10 分钟没有更新',
       interval: '每格时长',

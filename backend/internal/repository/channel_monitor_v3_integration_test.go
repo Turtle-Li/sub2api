@@ -61,12 +61,14 @@ func TestChannelMonitorV3RepositoryLayout(t *testing.T) {
 
 	cfg := *original
 	cfg.PublicEnabled = true
+	cfg.GroupProbe = service.ChannelMonitorV3GroupProbeConfig{Enabled: true, Groups: []service.ChannelMonitorV3GroupProbeTarget{{GroupID: group.ID, Model: "gpt-mini", Enabled: true}}}
 	cfg.IntervalMinutes, cfg.FeaturedComponentID, cfg.FooterNote = 3, &featured.ID, "note"
 	cfg.DownErrorRate, cfg.DegradedErrorRate, cfg.IgnoredErrorCategories = 0.3, 0.1, []string{"timeout"}
 	updated, err := repo.UpdateConfig(ctx, cfg, original.Version, 7)
 	require.NoError(t, err)
 	require.Equal(t, original.Version+1, updated.Version)
 	require.True(t, updated.PublicEnabled)
+	require.Equal(t, cfg.GroupProbe, updated.GroupProbe)
 	require.Equal(t, featured.ID, *updated.FeaturedComponentID)
 	require.InDelta(t, 0.3, updated.DownErrorRate, 1e-9)
 	require.Equal(t, []string{"timeout"}, updated.IgnoredErrorCategories)

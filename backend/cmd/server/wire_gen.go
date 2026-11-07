@@ -354,7 +354,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentWebhookHandler := handler.NewPaymentWebhookHandler(paymentService, registry)
 	availableChannelHandler := handler.NewAvailableChannelHandler(channelService, apiKeyService, settingService)
 	modelPlazaService := service.NewModelPlazaService(channelRepository, groupRepository, pricingService, billingService, modelPricingResolver)
-	modelPlazaHandler := handler.NewModelPlazaHandler(modelPlazaService, apiKeyService, settingService)
+	modelPlazaHandler := handler.NewModelPlazaHandler(modelPlazaService, apiKeyService, settingService, channelMonitorV3Service)
 	imageTaskStore := repository.NewImageTaskStore(redisClient)
 	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService)
 	asyncImageHandler := handler.NewAsyncImageHandler(imageTaskService, openAIGatewayHandler)
@@ -409,8 +409,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorQuotaFetcher := service.NewChannelMonitorQuotaFetcher(accountUsageService, cnProviderQuotaService, cnProviderBalanceService, accountRepository, configConfig)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService, channelMonitorQuotaFetcher, leaderLockCache, db)
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService)
+	channelMonitorV3GroupProber := service.ProvideChannelMonitorV3GroupProber(channelMonitorV3Repository, groupRepository, settingService, gatewayService, openAIGatewayService, concurrencyService, db, opsService, notificationEmailService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, subscriptionCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, codexGatewayHunterService, claudeCodeVersionSyncService, proxyExpiryService, proxyTimezoneBackfillService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, modelTraceService, backupService, paymentOrderExpiryService, paymentMonthlyResetCardDeliveryService, paymentRefundReconciliationService, invoiceNotificationService, shopNotificationService, feishuPaymentIncidentService, paidFallbackOpsService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, subscriptionCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, codexGatewayHunterService, claudeCodeVersionSyncService, proxyExpiryService, proxyTimezoneBackfillService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, modelTraceService, backupService, paymentOrderExpiryService, paymentMonthlyResetCardDeliveryService, paymentRefundReconciliationService, invoiceNotificationService, shopNotificationService, feishuPaymentIncidentService, paidFallbackOpsService, channelMonitorRunner, channelMonitorV2Aggregator, channelMonitorV3GroupProber, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		Health:        healthService,
@@ -501,6 +502,7 @@ func provideCleanup(
 	paidFallbackOps *service.PaidFallbackOpsService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
+	channelMonitorV3GroupProber *service.ChannelMonitorV3GroupProber,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
@@ -801,6 +803,12 @@ func provideCleanup(
 			{"ChannelMonitorV2Aggregator", func() error {
 				if channelMonitorV2Aggregator != nil {
 					channelMonitorV2Aggregator.Stop()
+				}
+				return nil
+			}},
+			{"ChannelMonitorV3GroupProber", func() error {
+				if channelMonitorV3GroupProber != nil {
+					channelMonitorV3GroupProber.Stop()
 				}
 				return nil
 			}},

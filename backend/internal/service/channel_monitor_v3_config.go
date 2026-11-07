@@ -99,6 +99,9 @@ func (s *ChannelMonitorV3Service) UpdateConfig(ctx context.Context, input Channe
 	if err := normalizeChannelMonitorV3Config(&input); err != nil {
 		return nil, err
 	}
+	if err := s.validateGroupProbes(ctx, &input.GroupProbe); err != nil {
+		return nil, err
+	}
 	if input.FeaturedComponentID != nil {
 		component, err := s.repo.GetComponent(ctx, *input.FeaturedComponentID)
 		if err != nil {

@@ -1,6 +1,12 @@
 /** Channel Monitor V3 (component status page over passive traffic + admin editor) */
 export default {
   channelMonitorV3: {
+    probes: {
+      title: 'Scheduled group checks', description: 'Results appear inside each group on the homepage and model plaza.', enabled: 'Enable scheduled checks',
+      cost: 'At most one check per group every 10 minutes, or 144 daily. Use an inexpensive text model with minimal output; the monitor adds no retries. Checks and real requests are counted separately.',
+      group: 'Group', model: 'Representative model', modelHint: 'An inexpensive text model supported by this group', groupEnabled: 'Check this group', add: 'Add group',
+      saveHint: 'Use “Save” after editing. GPT / Claude groups are supported. Failure notifications follow the existing ops email preferences.',
+    },
     status: {
       operational: 'Operational',
       degraded: 'Degraded',
@@ -131,7 +137,7 @@ export default {
     admin: {
       publicEnabled: 'Allow visitors to view the public status page without signing in',
       publicHint: 'Enables anonymous access to /status. Only components marked public are shown; group-only components remain restricted.',
-      modeDescription: 'V3 component status page based on real request statistics.',
+      modeDescription: 'Request status inside model plaza groups, with optional inexpensive scheduled checks.',
       tab: 'V3 components',
       siteMode: 'Users of this site see',
       siteModeHint: 'Takes effect immediately; only one monitor runs at a time.',
@@ -155,7 +161,7 @@ export default {
       modeBanner: 'This site currently uses "{mode}", so users do not see the V3 page. Real traffic is not counted in this mode, so the preview below gets no new data. Switch to "V3 components" at the top of the page when you are ready.',
       modeBannerV2: 'This site currently uses "{mode}", so users do not see the V3 page. V3 reads the same real-traffic statistics as V2, so the preview below already has data; switch to "V3 components" at the top of the page when you are ready.',
       pageSettings: 'Page settings',
-      pageSettingsHint: 'Status comes entirely from real requests on this site; no extra requests are sent. All components share one slot grid, so every cell lines up in time.',
+      pageSettingsHint: 'Real requests and active checks are counted separately. The homepage and model plaza show status inside each group; detailed history settings remain below.',
       noFacts: 'No statistics yet: in V2 or V3 mode real requests are summarized every minute.',
       staleFacts: 'statistics have not updated for over 10 minutes',
       interval: 'Slot length',

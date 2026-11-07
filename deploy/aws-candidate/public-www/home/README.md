@@ -8,7 +8,16 @@ mirror that layout. Committing this snapshot does not publish it.
 The hero uses a responsive starfield and occasional meteors. The platform
 ticker and model plaza follow it. The plaza reads the same-origin public
 `/api/v1/model-plaza` endpoint and keeps quotes attached to their source
-group. The public group labels and featured model ordering are covered by:
+group.
+
+Inline group availability is enhanced by the additive
+`../help/turtleroute-status-20261107-v1/` module. It observes the existing catalog
+renderer and obtains fresh status from the same endpoint; it never treats the
+catalog snapshot as live availability. The header's model-status link scrolls
+to `#models`. See `docs/features/MODEL_AVAILABILITY_GROUPS.md` for visibility,
+separate request/check statistics and scheduled-check controls.
+
+The public group labels and featured model ordering are covered by:
 
 ```sh
 node --test deploy/aws-candidate/public-www/home/catalog-pricing.test.mjs

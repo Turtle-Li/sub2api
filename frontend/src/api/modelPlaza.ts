@@ -56,6 +56,7 @@ export interface PlazaModel {
 }
 
 export interface ModelPlazaGroup {
+  availability?: PlazaGroupAvailability
   id: number
   name: string
   description: string
@@ -85,9 +86,21 @@ export interface ModelPlazaGroup {
 }
 
 export interface ModelPlazaResponse {
+  status_unavailable?: boolean
   /** 管理员配置的全局价格说明（Markdown）。 */
   description: string
   groups: ModelPlazaGroup[]
+}
+
+export interface PlazaGroupAvailability {
+  status: 'operational' | 'degraded' | 'down' | 'unknown'
+  source: 'requests' | 'probe' | 'none'
+  checked_at: string | null
+  probe_enabled: boolean
+  probe_model?: string
+  request_success_rate: number | null
+  probe_success_rate: number | null
+  cells: Array<{ start: string; status: 'operational' | 'degraded' | 'down' | 'unknown' | 'insufficient'; source: string }>
 }
 
 /** 获取模型广场数据。开关未启用时后端返回 404。 */

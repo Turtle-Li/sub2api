@@ -10,7 +10,8 @@ import (
 // Channel monitor V3 is an admin-curated status page over the same passive
 // facts V2 aggregates from real user requests. Components map groups to rows;
 // every bar is cut into the same time slots, so columns line up across bars.
-// V3 sends no requests of its own.
+// Optional operator-owned representative probes are separately configured and
+// stored; they never enter these real-request facts or customer usage records.
 
 const (
 	ChannelMonitorV3StatusOperational = "operational"
@@ -56,11 +57,12 @@ func channelMonitorV3Invalid(format string, args ...any) error {
 }
 
 type ChannelMonitorV3Config struct {
-	PublicEnabled     bool   `json:"public_enabled"`
-	Version           int    `json:"version"`
-	IntervalMinutes   int    `json:"interval_minutes"`
-	Cells             int    `json:"cells"`
-	AvailabilityRange string `json:"availability_range"`
+	GroupProbe        ChannelMonitorV3GroupProbeConfig `json:"group_probe"`
+	PublicEnabled     bool                             `json:"public_enabled"`
+	Version           int                              `json:"version"`
+	IntervalMinutes   int                              `json:"interval_minutes"`
+	Cells             int                              `json:"cells"`
+	AvailabilityRange string                           `json:"availability_range"`
 	// A slot is down at DownErrorRate, degraded at DegradedErrorRate or when
 	// its first-token P50 is above DegradedTTFTMs.
 	DownErrorRate     float64 `json:"down_error_rate"`

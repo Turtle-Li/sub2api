@@ -98,6 +98,7 @@ export interface MonitorV3IncidentPage {
 }
 
 export interface MonitorV3Config {
+  group_probe?: MonitorV3GroupProbeConfig
   public_enabled: boolean
   version: number
   interval_minutes: number
@@ -111,6 +112,11 @@ export interface MonitorV3Config {
   featured_component_id: number | null
   footer_note: string
   updated_at: string
+}
+
+export interface MonitorV3GroupProbeConfig {
+  enabled: boolean
+  groups: Array<{ group_id: number; model: string; enabled: boolean }>
 }
 
 export interface MonitorV3Category {

@@ -134,6 +134,7 @@ func provideCleanup(
 	paidFallbackOps *service.PaidFallbackOpsService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
+	channelMonitorV3GroupProber *service.ChannelMonitorV3GroupProber,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
@@ -435,6 +436,12 @@ func provideCleanup(
 			{"ChannelMonitorV2Aggregator", func() error {
 				if channelMonitorV2Aggregator != nil {
 					channelMonitorV2Aggregator.Stop()
+				}
+				return nil
+			}},
+			{"ChannelMonitorV3GroupProber", func() error {
+				if channelMonitorV3GroupProber != nil {
+					channelMonitorV3GroupProber.Stop()
 				}
 				return nil
 			}},
