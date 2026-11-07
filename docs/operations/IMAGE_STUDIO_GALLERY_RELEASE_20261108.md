@@ -1,6 +1,6 @@
 # Image Studio gallery release —2026-11-08
 
-Status: local and merged validation complete; final Claude review PASS; production activation pending.
+Status: reviewed feature deployed successfully; live acceptance passes. A separately reviewed cover-refresh follow-up is awaiting its canonical release.
 
 ## Scope
 
@@ -51,6 +51,34 @@ snapshot, covering the bounded thumbnail decoder/source allowance. The stored
 retained-drain override remainsfalse and background mode remainsactivate.
 
 After activation, record the exact image revision/run, migrations/index presence, health and authenticated gallery/thumbnail cache behavior. Verify COS derivative Get/Put/Delete behavior through the existing runtime; do not export machine credentials or browser sessions. Live acceptance and final review results will be appended below.
+
+## First activation and acceptance
+
+The canonical [production workflow](https://github.com/Turtle-Li/sub2api/actions/runs/42423545016)
+completed successfully for `b6e6582d9c5f252140d192e70487986bd8c5a9a3`.
+Caddy selects healthy `sub2api-blue` at that exact OCI revision, with zero
+restarts/OOM events and no pending release transaction. Green and legacy slots
+are stopped. Public API health and the www studio route both return HTTP200.
+
+Authenticated Chrome acceptance shows15 historical items:14 decoded covers with
+longest edge480px and one existing failed generation. The platform picker shows
+OpenAI/Google Vertex groups and configured resolution-sensitive prices. No new
+generation, original download, cookie/token export or destructive cleanup probe
+was performed. Historical cover delivery exercises the existing private COS
+backfill Put/Get path; Delete/lifecycle remains covered by regressions rather
+than deleting an owner's output. Startup logs have no migration failures, but do
+not print270/271 filenames; this is not a direct SQL index-presence observation.
+
+Acceptance also found that a failed cover was not retried by the toolbar refresh
+when its task ID/count/status stayed unchanged. A mounted regression first failed
+with one call instead of two. The follow-up keys the effect to refreshed record
+identity and clears the revoked URL state; unchanged records do not trigger new
+reads. All10 studio test files/63 cases, changed-source lint and production build
+pass. A further independent Claude Opus5.5 review returned **PASS**, checking the
+Studio callers, terminal polling identity, cancellation and object-URL cleanup.
+Evidence: `.omo/reviews/gallery-release/claude-refresh.json` and
+`thumbnail-refresh-before.log` / `frontend-refresh.log`. This small follow-up
+requires a second canonical image release; its activation is recorded below.
 
 ## Bounded residuals
 

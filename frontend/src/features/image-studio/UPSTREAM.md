@@ -144,7 +144,9 @@ joined item/job records per key/page; root/status/search filters run on the serv
 No task state moves to browser storage. Originals retain their download queue;
 thumbnail reads use an independent queue and each card cancels when offscreen.
 Server-side historical backfills retain the per-user download permit. A completed
-job transition reloads its cover. DOM rendering remains measured and virtualized.
+job transition and explicit metadata refresh reload its cover, including a previous
+temporary failure; unchanged records do not repeat reads. DOM rendering remains
+measured and virtualized.
 
 The persistent-variant contract is also mapped to pinned VSO
 `service/ImageVariantStorageService.java` and

@@ -58,9 +58,10 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
    const controller = new AbortController()
    let active = true; let url = ''
    setImageError('')
+   setThumbSrc('')
    api.thumbnail(record, controller.signal).then(blob => { if (active) { url = URL.createObjectURL(blob); setThumbSrc(url) } }).catch(error => { if (active) setImageError(error instanceof Error ? error.message : '图片加载失败') })
    return () => { active = false; controller.abort(); if (url) URL.revokeObjectURL(url) }
- }, [nearViewport, record.id, record.item.image_count, record.job.status, api])
+ }, [nearViewport, record, api])
  return <div className="relative rounded-xl">
    <div ref={cardRef} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
       <div className="flex h-40">
