@@ -4,7 +4,7 @@ import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageSubmitRe
 export interface StudioKey { readonly id: number; readonly name: string; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean }
 export interface ItemContinuation { readonly job: BatchImageJob; readonly cursor: number }
 export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem }
-const itemStatuses: Readonly<Record<string, string>> = { pending: '排队中', queued: '排队中', running: '生成中', processing: '生成中', success: '已完成', completed: '已完成', failed: '失败', cancelled: '已取消', output_deleted: '图片已删除' }
+const itemStatuses: Readonly<Record<string, string>> = { pending: '排队中', queued: '排队中', running: '生成中', processing: '生成中', succeeded: '已完成', success: '已完成', completed: '已完成', failed: '失败', cancelled: '已取消', output_deleted: '图片已删除' }
 export const itemStatusLabel = (status: string): string => itemStatuses[status] || status
 export function taskDisplay(task: StudioTask) {
   const unfinished = ['pending', 'queued', 'running', 'processing', 'result_available'].includes(task.item.status)

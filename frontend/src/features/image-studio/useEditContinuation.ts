@@ -32,7 +32,7 @@ export function useEditContinuation(options: Options) {
     if (!pending || pending.version !== version.current || options.signal.aborted) return
     const outputs = options.tasks.filter(task => task.job.id === pending.jobId)
     if (!outputs.length || outputs.some(taskPending)) return
-    const output = outputs.find(task => task.job.status === 'completed' && !task.job.fail_count && ['success', 'completed'].includes(task.item.status) && task.item.image_count > 0)
+    const output = outputs.find(task => task.job.status === 'completed' && !task.job.fail_count && ['succeeded', 'success', 'completed'].includes(task.item.status) && task.item.image_count > 0)
     if (!output || outputs.some(task => task.item.status === 'failed')) { setPending(null); return }
     let active = true
     void callbacks.current.load(output).then(image => {

@@ -40,6 +40,15 @@ A continuation stays on its original key; changing to an incompatible route keep
 the reference and explicitly starts a new work. A user/session change aborts old
 reads. No provider credential is sent to or stored in the frontend.
 
+Live acceptance exposed the existing per-user image-download concurrency limit:
+parallel thumbnails from multiple keys returned HTTP 429. The host workspace now
+serializes thumbnail/detail/edit reads together, retaining original-key ownership,
+continuing after a failed asset and refusing queued work after abort. It neither
+raises the server limit nor repeats generation. The canonical public item status
+is `succeeded` (`BatchImageItemToPublic`); status labels and edit-reference advance
+accept it alongside the older aliases. Regressions first reproduced four failures
+with the real contract before the host-only correction.
+
 Same-body uncertain submissions retain their idempotency identity and original
 route. There is no automatic POST replay or cross-provider/key failover. Task and
 settlement facts still belong to the server; failure does not imply a refund.

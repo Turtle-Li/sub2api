@@ -18,7 +18,7 @@ URL.createObjectURL = vi.fn(() => 'blob:fixture')
 URL.revokeObjectURL = vi.fn()
 let unmount = () => {}
 afterEach(() => { unmount(); vi.clearAllMocks() })
-const original = { id: 'root-0/one', job: { id: 'root-0', status: 'completed', model: 'fixture-image', provider: 'fixture', created_at: 1, fail_count: 0 }, item: { custom_id: 'one', status: 'success', image_count: 1, prompt_preview: 'original' } } as StudioTask
+const original = { id: 'root-0/one', job: { id: 'root-0', status: 'completed', model: 'fixture-image', provider: 'fixture', created_at: 1, fail_count: 0 }, item: { custom_id: 'one', status: 'succeeded', image_count: 1, prompt_preview: 'original' } } as StudioTask
 const output = { id: 'edit-1/one', job: { ...original.job, id: 'edit-1', parent_batch_id: 'root-0', created_at: 2 }, item: { ...original.item, prompt_preview: 'first modification' } } as StudioTask
 it('submits the second edit with the completed first output and its source metadata', async () => {
  let submitted = false

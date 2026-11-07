@@ -5,6 +5,9 @@ import { taskDisplay, taskPending, type StudioTask, type studioAPI } from '../ap
 import TaskCard from '../upstream/components/TaskCard'
 const record = (jobStatus: StudioTask['job']['status'], itemStatus: string): StudioTask => ({ id: 'job/one', job: { id: 'job', status: jobStatus, model: 'fixture', error: { code: 'BATCH_FAILED', message: 'provider unavailable' } }, item: { custom_id: 'one', status: itemStatus, image_count: 0 } } as StudioTask)
 describe('terminal batch / unfinished item display projection', () => {
+ it.each(['succeeded', 'success', 'completed'])('labels the successful item status %s in Chinese', status => {
+   expect(taskDisplay(record('completed', status)).label).toBe('已完成')
+ })
  it.each([['cancelled', '已取消'], ['failed', '任务失败'], ['output_deleted', '结果已清理']] as const)('projects %s without mutating pending server items or retaining a spinner', (status, label) => {
    const task = record(status, 'pending')
    const html = renderToStaticMarkup(<TaskCard record={task} api={{} as ReturnType<typeof studioAPI>} onOpen={vi.fn()} onEditOutputs={vi.fn()} />)

@@ -10,6 +10,7 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
   const clients = new Map([...new Set(keys)].sort((a, b) => a - b).map(key => [key, studioAPI(key, signal)]))
   const owners = new Map<string, number>()
   const attempts = new Map<string, number>()
+  let imageQueue: Promise<void> = Promise.resolve()
   let directory: Promise<{ key: number; models: BatchImageModel[] }[]> | undefined
   let warnings: string[] = []
   async function discover() {
@@ -98,7 +99,12 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
       attempts.delete(idempotencyKey)
       return job
     },
-    async image(task: StudioTask, index = 0) { return owned(task.job).image(task, index) },
+    image(task: StudioTask, index = 0) {
+      // Download admission is shared by user, including reads from different keys.
+      const request = imageQueue.then(() => { signal.throwIfAborted(); return owned(task.job).image(task, index) })
+      imageQueue = request.then(() => undefined, () => undefined)
+      return request
+    },
     async cancel(task: StudioTask) { return owned(task.job).cancel(task) },
   }
 }
