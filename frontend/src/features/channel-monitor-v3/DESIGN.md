@@ -14,8 +14,12 @@ state together with text. Request success, cache share and first-token P50 are
 the primary figures; exact check models belong only to the admin group editor. Prices
 and multipliers belong to the model plaza, not this dashboard.
 
-The grid is one column on phones, two at medium widths and three on wide
-screens. Search and visible refresh feedback precede platform sections.
+The grid fits the available container width with a minimum card width of22rem
+(or the full width on narrower containers). Platforms with one group share
+columns in one grid; a platform with multiple groups spans the row and uses
+the same fluid grid inside. Filtering recomputes these spans. A lone card
+fills its available row instead of reserving empty columns. Search and visible
+refresh feedback precede platform sections.
 Timeline buttons expose a textual source/status/time explanation on hover,
 focus and tap. No samples, insufficient samples and stale metrics have explicit
 copy and em dashes, never fabricated percentages. Failed refresh clears old

@@ -17,9 +17,9 @@ flock -w 20 8 || { echo 'Production maintenance is busy' >&2; exit 1; }
 
 caddy=sub2api-candidate-caddy
 home=/data/sub2-web/home
-version=turtleroute-status-20261108-v3
+version=turtleroute-status-20261108-v4
 assets=/data/sub2-web/help/$version
-backup="$home/index.before-status-module-20261108.html"
+backup="$home/index.before-status-layout-20261108.html"
 [[ $(docker inspect --format '{{.State.Status}}' "$caddy") == running ]]
 read_remote_sha() { docker exec "$caddy" sha256sum "$1" | awk '{print $1}'; }
 read_origin_sha() {

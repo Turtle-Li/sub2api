@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statusMetrics } from '../help/turtleroute-status-20261108-v3/group-availability.mjs';
+import { statusMetrics } from '../help/turtleroute-status-20261108-v4/group-availability.mjs';
 test('status module hides stale or insufficient request metrics even if old values are present', () => {
   for (const state of ['none', 'insufficient', 'stale']) assert.deepEqual(statusMetrics({ request_sample_state: state, request_success_rate: 66.7, cache_read_rate: 90, ttft_p50_ms: 2000 }), ['—', '—', '—']);
 });
