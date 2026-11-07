@@ -11,6 +11,7 @@ umask 077
 usage() {
   cat >&2 <<'EOF'
 Usage: sub2api-caddy-config-release.sh COMMIT CONFIG_DIGEST < Caddyfile
+       sub2api-caddy-config-release.sh --acknowledge-rollback COMMIT CONFIG_DIGEST < Caddyfile
 
 COMMIT         Full 40-character lowercase Git commit.
 CONFIG_DIGEST  sha256:<64 lowercase hexadecimal characters> for stdin.
@@ -27,6 +28,11 @@ die() {
   exit 1
 }
 
+MODE=release
+if [ "${1:-}" = --acknowledge-rollback ]; then
+  MODE=acknowledge-rollback
+  shift
+fi
 [ "$#" -eq 2 ] || usage
 COMMIT="$1"
 REQUESTED_DIGEST="$2"
@@ -255,7 +261,7 @@ if [ "$TEST_MODE" = 1 ]; then
   test_path_is_bounded SUB2API_MAINTENANCE_LOCK_FILE "$MAINTENANCE_LOCK_FILE"
 fi
 
-for command_name in awk chmod cp curl date docker flock id mkdir mktemp mv nsenter python3 rm sha256sum stat; do
+for command_name in awk chmod cp curl date docker flock id mkdir mktemp mv nsenter python3 rm sha256sum sleep stat; do
   require_cmd "$command_name"
 done
 
@@ -628,8 +634,95 @@ verify_converged_views() {
   [ "$host_config" = "$expected_config" ] \
     && [ "$startup_config" = "$expected_config" ] \
     && [ "$active_config" = "$expected_config" ] || return 1
-  curl --fail --silent --show-error --noproxy '*' --connect-timeout 5 --max-time 20 \
-    --location --max-redirs 0 --resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL" >/dev/null
+  wait_for_public_health
+}
+
+wait_for_public_health() {
+  local attempt
+
+  # A successful reload starts first-time ACME issuance asynchronously. Keep
+  # strict TLS/HTTP checks, but allow at most 20*4 + 19*2 = 118 seconds.
+  for ((attempt = 1; attempt <= 20; attempt++)); do
+    if curl --fail --silent --show-error --noproxy '*' --connect-timeout 3 --max-time 4 \
+      --location --max-redirs 0 --resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL" >/dev/null; then
+      return 0
+    fi
+    [ "$attempt" -eq 20 ] || sleep 2
+  done
+  return 1
+}
+
+acknowledge_rolled_back_transaction() {
+  local fields key value recorded_before_sha="" recorded_after_sha="" recorded_slot=""
+  local recorded_backup="" recorded_candidate="" archive
+
+  validate_root_owned_readonly_file 'Caddy configuration transaction' "$TRANSACTION_PATH"
+  [ "$(file_metadata "$TRANSACTION_PATH" | awk -F: '{print $3}')" = 600 ] \
+    || die 'Caddy configuration transaction must be mode 0600'
+  fields="$(python3 - "$TRANSACTION_PATH" "$COMMIT" "$REQUESTED_DIGEST" "$CADDYFILE" "$BACKUP_DIR" <<'PY'
+import pathlib
+import re
+import sys
+
+path, commit, digest, caddyfile, backup_dir = sys.argv[1:]
+payload = pathlib.Path(path).read_bytes()
+if len(payload) > 8192 or b"\x00" in payload:
+    raise SystemExit(1)
+fields = {}
+for line in payload.decode("utf-8").splitlines():
+    key, separator, value = line.partition("=")
+    if not separator or key in fields:
+        raise SystemExit(1)
+    fields[key] = value
+if set(fields) != {"VERSION", "CADDYFILE", "BACKUP_PATH", "CANDIDATE_PATH",
+                   "BEFORE_SHA", "AFTER_SHA", "COMMIT", "REQUESTED_DIGEST",
+                   "ACTIVE_SLOT", "PHASE"}:
+    raise SystemExit(1)
+if (fields["VERSION"] != "1" or fields["COMMIT"] != commit
+        or fields["REQUESTED_DIGEST"] != digest or fields["CADDYFILE"] != caddyfile
+        or fields["ACTIVE_SLOT"] not in {"blue", "green", "legacy"}
+        or fields["PHASE"] not in {"prepared", "reload-attempted"}):
+    raise SystemExit(1)
+for key in ("BEFORE_SHA", "AFTER_SHA"):
+    if not re.fullmatch(r"[0-9a-f]{64}", fields[key]):
+        raise SystemExit(1)
+for key, kind in (("BACKUP_PATH", "before"), ("CANDIDATE_PATH", "candidate")):
+    artifact = pathlib.Path(fields[key])
+    pattern = r"Caddyfile\." + kind + r"-caddy-config-release-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.[A-Za-z0-9]+"
+    if str(artifact.parent) != backup_dir or not re.fullmatch(pattern, artifact.name):
+        raise SystemExit(1)
+for key in ("BEFORE_SHA", "AFTER_SHA", "ACTIVE_SLOT", "BACKUP_PATH", "CANDIDATE_PATH"):
+    print(key + "=" + fields[key])
+PY
+)" || die 'Caddy rollback transaction does not match the exact commit, digest and protected paths'
+  while IFS='=' read -r key value; do
+    case "$key" in
+      BEFORE_SHA) recorded_before_sha="$value" ;;
+      AFTER_SHA) recorded_after_sha="$value" ;;
+      ACTIVE_SLOT) recorded_slot="$value" ;;
+      BACKUP_PATH) recorded_backup="$value" ;;
+      CANDIDATE_PATH) recorded_candidate="$value" ;;
+    esac
+  done <<EOF
+$fields
+EOF
+  validate_root_owned_directory 'Caddy backup directory' "$BACKUP_DIR"
+  validate_root_owned_readonly_file 'Caddy rollback backup' "$recorded_backup"
+  validate_root_owned_readonly_file 'retained Caddy candidate' "$recorded_candidate"
+  [ "$(file_sha "$recorded_backup")" = "$recorded_before_sha" ] \
+    && [ "$(file_sha "$recorded_candidate")" = "$recorded_after_sha" ] \
+    || die 'retained Caddy backup or candidate digest does not match the transaction'
+  if [ "$BEFORE_SLOT" != "$recorded_slot" ] \
+    || ! verify_converged_views "$recorded_before_sha" "$recorded_slot" "$BEFORE_CONFIG_SHA" false; then
+    die 'Caddy rollback has not restored the recorded old configuration and HTTPS health'
+  fi
+  archive="${recorded_backup}.rolled-back.env"
+  [ ! -e "$archive" ] && [ ! -L "$archive" ] \
+    || die 'Caddy rollback acknowledgement already exists'
+  [ ! -e "${recorded_backup}.release.env" ] && [ ! -L "${recorded_backup}.release.env" ] \
+    || die 'rolled-back Caddy release still has a completion record'
+  mv "$TRANSACTION_PATH" "$archive" || die 'could not archive the verified Caddy rollback transaction'
+  log "CADDY_CONFIG_ROLLBACK_ACKNOWLEDGED commit=${COMMIT} active_slot=${recorded_slot} archive=${archive}"
 }
 
 write_transaction() {
@@ -795,6 +888,7 @@ require_no_pending_transactions() {
     "$CUSTOMER_TRANSACTION_PATH" \
     "$BLUE_GREEN_TRANSACTION_PATH" \
     "$TRANSACTION_PATH"; do
+    [ "$path" != "${1:-}" ] || continue
     [ ! -e "$path" ] && [ ! -L "$path" ] \
       || die "unfinished Caddy or release transaction exists: ${path}"
   done
@@ -811,7 +905,11 @@ if ! sub2api_maintenance_lock_open "$MAINTENANCE_LOCK_FILE"; then
   die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
 fi
 flock -w 120 -x 8 || die 'timed out waiting for the maintenance lock'
-require_no_pending_transactions
+if [ "$MODE" = acknowledge-rollback ]; then
+  require_no_pending_transactions "$TRANSACTION_PATH"
+else
+  require_no_pending_transactions
+fi
 docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1 \
   || die "Caddy container is missing: ${CADDY_CONTAINER}"
 [ "$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Running}}')" = true ] \
@@ -824,6 +922,10 @@ check_active_runtime_contract \
   || die "active sub2api-${BEFORE_SLOT} does not expose the required 128 MiB HTTP/WS ingress limits and matching OCI revision"
 verify_source_contract "$INPUT_PATH" "$BEFORE_SLOT" template \
   || die 'candidate template does not have the required blue-only 128 MiB Caddy contract'
+if [ "$MODE" = acknowledge-rollback ]; then
+  acknowledge_rolled_back_transaction
+  exit 0
+fi
 
 ensure_backup_directory
 release_stamp="$(date -u '+%Y%m%dT%H%M%SZ')-${COMMIT:0:12}"

@@ -244,6 +244,20 @@ new active slot, because its previous active-slot expectation is now obsolete.
 The digest-bound Caddy receiver supports blue, green and legacy `sub2api`;
 mixed/unknown upstream sets remain rejected and its input stays blue-only.
 
+The Caddy receiver allows up to 118 seconds of strictly verified, loopback-pinned
+HTTPS readiness after configuration convergence, because first ACME issuance
+continues asynchronously after reload. Exhaustion still forces rollback.
+For its own retained `.sub2api-caddy-config-release-transaction.env` only, a
+root operator may run the receiver with `--acknowledge-rollback COMMIT DIGEST`
+and the original complete template on stdin. This does not reload or change
+Caddy/application state: it requires the exact recorded source and protected
+backup/candidate hashes, matching active image revision, no other pending
+transaction, all three views restored to the recorded old configuration, and
+successful HTTPS health. It then moves the fence to the backup's
+`.rolled-back.env` evidence file. Any ambiguity remains fenced; do not remove
+the transaction by hand. This mode is not exposed by the forced-command
+GitHub account and does not recover blue-green or other transaction formats.
+
 On a dual-node rollback or canary origin that must continue serving requests
 without consuming shared background work, set
 `SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby` for the audited release
