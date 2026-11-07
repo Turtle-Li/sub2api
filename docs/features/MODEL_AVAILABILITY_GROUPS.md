@@ -88,6 +88,8 @@ account-pool scope and90% display rule are intentional local differences.
 Regression coverage: `channel_monitor_v3_cache_test.go`, real PostgreSQL
 `channel_monitor_v3_cache_integration_test.go`, `GroupStatusCards.spec.ts`, and
 the versioned homepage's `status-metrics.test.mjs`. Existing attribution remains.
+Canonical release, live proof and rollback:
+`docs/operations/MODEL_STATUS_REAL_REQUEST_CACHE_20261108.md`.
 
 The owner authorized one inexpensive request model per enabled group,
 one check every ten minutes and minimal output. Active checks supplement quiet
