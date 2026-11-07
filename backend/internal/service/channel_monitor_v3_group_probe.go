@@ -39,23 +39,26 @@ func (t ChannelMonitorV3GroupProbeTarget) sameCheck(other ChannelMonitorV3GroupP
 }
 
 type ChannelMonitorV3GroupProbeResult struct {
-	ID           int64
-	GroupID      int64
-	Model        string
-	Slot         time.Time
-	FinishedAt   *time.Time
-	Outcome      string
-	Category     string
-	LatencyMs    int64
-	AccountID    int64
-	InputTokens  int64
-	OutputTokens int64
+	ID                   int64
+	GroupID              int64
+	Model                string
+	Slot                 time.Time
+	FinishedAt           *time.Time
+	Outcome              string
+	Category             string
+	LatencyMs            int64
+	AccountID            int64
+	InputTokens          int64
+	OutputTokens         int64
+	AttemptCount         int
+	MissingUsageAttempts int
 }
 
-// The persisted claim is also the attempt limit. Never reclaim an unfinished
-// slot: its upstream submission may already have consumed quota.
+// A persisted claim owns the bounded retry sequence. Never reclaim an unfinished
+// slot: its upstream submissions may already have consumed quota.
 type ChannelMonitorV3GroupProbeRepository interface {
 	ClaimGroupProbe(context.Context, ChannelMonitorV3GroupProbeTarget, time.Time) (int64, error)
+	RecordGroupProbeAttempt(context.Context, ChannelMonitorV3GroupProbeResult) error
 	FinishGroupProbe(context.Context, ChannelMonitorV3GroupProbeResult) error
 	GroupProbes(context.Context, []int64, time.Time, time.Time) ([]ChannelMonitorV3GroupProbeResult, error)
 	PruneGroupProbes(context.Context, time.Time) error

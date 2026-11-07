@@ -15,11 +15,13 @@ import (
 
 type groupProbeRepoFake struct {
 	*monitorV3RepoFake
-	mu         sync.Mutex
-	claims     map[time.Time]map[int64]bool
-	results    []ChannelMonitorV3GroupProbeResult
-	failConfig bool
-	queried    []int64
+	mu           sync.Mutex
+	claims       map[time.Time]map[int64]bool
+	results      []ChannelMonitorV3GroupProbeResult
+	failConfig   bool
+	queried      []int64
+	progress     []ChannelMonitorV3GroupProbeResult
+	failProgress bool
 }
 
 func (r *groupProbeRepoFake) GetConfig(ctx context.Context) (*ChannelMonitorV3Config, error) {
@@ -49,6 +51,13 @@ func (r *groupProbeRepoFake) FinishGroupProbe(_ context.Context, p ChannelMonito
 	r.results = append(r.results, p)
 	return nil
 }
+func (r *groupProbeRepoFake) RecordGroupProbeAttempt(_ context.Context, p ChannelMonitorV3GroupProbeResult) error {
+	if r.failProgress {
+		return errors.New("progress unavailable")
+	}
+	r.progress = append(r.progress, p)
+	return nil
+}
 func (r *groupProbeRepoFake) GroupProbes(_ context.Context, ids []int64, from, to time.Time) ([]ChannelMonitorV3GroupProbeResult, error) {
 	r.queried = append([]int64(nil), ids...)
 	out := []ChannelMonitorV3GroupProbeResult{}
@@ -73,6 +82,8 @@ func (r groupProbeRuntime) GetChannelMonitorRuntime(context.Context) ChannelMoni
 type groupProbeExec struct {
 	calls  int
 	cancel context.CancelFunc
+	steps  []ChannelMonitorV3GroupProbeResult
+	after  func()
 }
 
 func (e *groupProbeExec) Check(_ context.Context, _ *Group, _ string) ChannelMonitorV3GroupProbeResult {
@@ -80,7 +91,96 @@ func (e *groupProbeExec) Check(_ context.Context, _ *Group, _ string) ChannelMon
 	if e.cancel != nil {
 		e.cancel()
 	}
+	if e.after != nil {
+		e.after()
+	}
+	if len(e.steps) >= e.calls {
+		return e.steps[e.calls-1]
+	}
 	return ChannelMonitorV3GroupProbeResult{Outcome: "success"}
+}
+
+func TestChannelMonitorV3GroupProbeRecoversWithinThreeAttempts(t *testing.T) {
+	// Given a transient failure followed by a successful provider receipt.
+	repo, p, exec := groupProbeFixture()
+	exec.steps = []ChannelMonitorV3GroupProbeResult{
+		{Outcome: "failure", Category: "upstream_error", InputTokens: 20, OutputTokens: 2},
+		{Outcome: "success", InputTokens: 30, OutputTokens: 3},
+	}
+	// When one scheduled slot is processed.
+	p.RunDue(context.Background(), time.Now())
+	// Then only the final success is published and both receipts are retained.
+	require.Equal(t, 2, exec.calls)
+	require.Len(t, repo.results, 1)
+	require.Equal(t, "success", repo.results[0].Outcome)
+	require.EqualValues(t, 50, repo.results[0].InputTokens)
+	require.EqualValues(t, 5, repo.results[0].OutputTokens)
+	require.Equal(t, 2, repo.results[0].AttemptCount)
+	require.Len(t, repo.progress, 2)
+	require.EqualValues(t, 20, repo.progress[0].InputTokens)
+	require.EqualValues(t, 50, repo.progress[1].InputTokens)
+}
+
+func TestChannelMonitorV3GroupProbeFailsOnlyAfterThreeAttempts(t *testing.T) {
+	// Given a provider that fails every attempt.
+	repo, p, exec := groupProbeFixture()
+	exec.steps = []ChannelMonitorV3GroupProbeResult{
+		{Outcome: "failure", InputTokens: 10}, {Outcome: "failure", InputTokens: 20}, {Outcome: "failure", InputTokens: 30},
+	}
+	// When the same scheduled slot is visited twice.
+	now := time.Now()
+	p.RunDue(context.Background(), now)
+	p.RunDue(context.Background(), now)
+	// Then three attempts share one claim and yield one final failure.
+	require.Equal(t, 3, exec.calls)
+	require.Len(t, repo.results, 1)
+	require.Equal(t, "failure", repo.results[0].Outcome)
+	require.EqualValues(t, 60, repo.results[0].InputTokens)
+	require.Equal(t, 3, repo.results[0].AttemptCount)
+}
+
+func TestChannelMonitorV3GroupProbeStopsWhenProgressCannotBeSaved(t *testing.T) {
+	// Given a failed attempt whose consumption receipt cannot be saved.
+	repo, p, exec := groupProbeFixture()
+	repo.failProgress = true
+	exec.steps = []ChannelMonitorV3GroupProbeResult{{Outcome: "failure", InputTokens: 17}}
+	// When the scheduled slot is checked.
+	p.RunDue(context.Background(), time.Now())
+	// Then spending stops; finalization can retain the receipt as unknown status.
+	require.Equal(t, 1, exec.calls)
+	require.Len(t, repo.results, 1)
+	require.Equal(t, "cancelled", repo.results[0].Outcome)
+	require.EqualValues(t, 17, repo.results[0].InputTokens)
+}
+
+func TestChannelMonitorV3GroupProbeRetainsMissingUsageAcrossRecovery(t *testing.T) {
+	// Given a failed attempt without a receipt and two subsequent attempts.
+	repo, p, exec := groupProbeFixture()
+	exec.steps = []ChannelMonitorV3GroupProbeResult{
+		{Outcome: "failure"}, {Outcome: "failure", InputTokens: 10}, {Outcome: "success", InputTokens: 20},
+	}
+	// When the scheduled slot is checked.
+	p.RunDue(context.Background(), time.Now())
+	// Then the recovered status does not erase unknown consumption.
+	require.Len(t, repo.results, 1)
+	require.Equal(t, "success", repo.results[0].Outcome)
+	require.Equal(t, 3, repo.results[0].AttemptCount)
+	require.Equal(t, 1, repo.results[0].MissingUsageAttempts)
+	require.EqualValues(t, 30, repo.results[0].InputTokens)
+}
+
+func TestChannelMonitorV3GroupProbeWithdrawalStopsRetries(t *testing.T) {
+	// Given an operator disabling checks during a failed attempt.
+	repo, p, exec := groupProbeFixture()
+	exec.steps = []ChannelMonitorV3GroupProbeResult{{Outcome: "failure", InputTokens: 17}}
+	exec.after = func() { repo.config.GroupProbe.Enabled = false }
+	// When the slot is checked.
+	p.RunDue(context.Background(), time.Now())
+	// Then no retry is sent, consumption remains recorded and status is unknown.
+	require.Equal(t, 1, exec.calls)
+	require.Len(t, repo.results, 1)
+	require.Equal(t, "cancelled", repo.results[0].Outcome)
+	require.EqualValues(t, 17, repo.results[0].InputTokens)
 }
 
 func groupProbeFixture() (*groupProbeRepoFake, *ChannelMonitorV3GroupProber, *groupProbeExec) {
@@ -128,11 +228,14 @@ func TestChannelMonitorV3GroupProbeMinimalPayloadAndResponseValidation(t *testin
 	require.False(t, gjson.GetBytes(openai, "tools").Exists())
 	for _, body := range []string{
 		`data: {"choices":[{"delta":{"content":"1"}}]}` + "\n" + `data: {"choices":[{"finish_reason":"length"}]}`,
+		`data: {"choices":[{"delta":{"reasoning_content":"reasoning"}}]}` + "\n" + `data: {"choices":[{"finish_reason":"length"}]}`,
 		`data: {"type":"content_block_delta","delta":{"text":"1"}}` + "\n" + `data: {"type":"message_stop"}`,
 	} {
 		require.True(t, channelMonitorV3ProbeResponseOK([]byte(body)), body)
 	}
 	for _, body := range []string{"", `data: [DONE]`, `data: {"choices":[{"delta":{"content":"1"}}]}`,
+		`data: {"choices":[{"delta":{"reasoning_content":"reasoning"}}]}` + "\n" + `data: [DONE]`,
+		`data: {"choices":[{"delta":{"reasoning_content":"reasoning"}}]}` + "\n" + `data: {"error":{"type":"upstream_error"}}` + "\n" + `data: {"choices":[{"finish_reason":"length"}]}`,
 		`data: {"type":"response.output_text.delta","delta":"1"}` + "\n" + `data: {"type":"response.failed"}`,
 	} {
 		require.False(t, channelMonitorV3ProbeResponseOK([]byte(body)), body)
@@ -211,7 +314,7 @@ func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testi
 	got := out[4]
 	require.Equal(t, "ready", got.RequestSampleState)
 	require.InDelta(t, 100.0*29/30, *got.RequestSuccessRate, 0.00001)
-	require.Equal(t, 80.0, *got.CacheReadRate, "cache share includes fresh input and cache creation in its denominator")
+	require.Nil(t, got.CacheReadRate, "group/probe facts cannot substitute for real account-pool cache usage")
 	require.EqualValues(t, 3000, *got.TTFTP50Ms)
 	require.Len(t, got.Cells, 18)
 	require.Equal(t, "none", got.Cells[0].Source)

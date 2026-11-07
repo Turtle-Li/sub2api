@@ -29,6 +29,8 @@ BAD_ACTIVE_ENV="${TEST_ROOT}/bad-active-env"
 BAD_ACTIVE_WS_ENV="${TEST_ROOT}/bad-active-ws-env"
 BAD_ACTIVE_REVISION="${TEST_ROOT}/bad-active-revision"
 FAIL_TRANSACTION_CLEAR="${TEST_ROOT}/fail-transaction-clear"
+PUBLIC_HEALTH_FAILURES="${TEST_ROOT}/public-health-failures"
+SLEEP_LOG="${TEST_ROOT}/sleep.log"
 TRANSACTION_PATH="${APP_DIR}/.sub2api-caddy-config-release-transaction.env"
 COMMIT='0123456789abcdef0123456789abcdef01234567'
 
@@ -260,11 +262,12 @@ reset_fixture() {
 
   rm -rf "$BACKUP_DIR"
   rm -f "$TRANSACTION_PATH" "$FAIL_VALIDATE" "$FAIL_RELOAD" "$LOCK_BUSY" "$BAD_ACTIVE_ENV" "$BAD_ACTIVE_WS_ENV" \
-    "$BAD_ACTIVE_REVISION" "$FAIL_TRANSACTION_CLEAR"
+    "$BAD_ACTIVE_REVISION" "$FAIL_TRANSACTION_CLEAR" "$PUBLIC_HEALTH_FAILURES"
   : >"$DOCKER_LOG"
   : >"$NSENTER_LOG"
   : >"$CURL_LOG"
   : >"$FLOCK_LOG"
+  : >"$SLEEP_LOG"
   write_caddyfile "$HOST_CADDY" "$slot" "$max_size" "$threshold"
   cp "$HOST_CADDY" "$STARTUP_CADDY"
   chmod 0600 "$STARTUP_CADDY"
@@ -290,6 +293,8 @@ run_receiver() {
     FAKE_CONTAINER_ROOT="$FAKE_CONTAINER_ROOT" \
     FAKE_COMMIT="$COMMIT" \
     FAKE_CURL_LOG="$CURL_LOG" \
+    FAKE_PUBLIC_HEALTH_FAILURES="$PUBLIC_HEALTH_FAILURES" \
+    FAKE_SLEEP_LOG="$SLEEP_LOG" \
     FAKE_DOCKER_LOG="$DOCKER_LOG" \
     FAKE_FAIL_TRANSACTION_CLEAR="$FAIL_TRANSACTION_CLEAR" \
     FAKE_FAIL_RELOAD="$FAIL_RELOAD" \
@@ -302,7 +307,7 @@ run_receiver() {
     FAKE_TRANSACTION_PATH="$TRANSACTION_PATH" \
     SUB2API_CADDY_CONFIG_RELEASE_ALLOW_NON_ROOT_FOR_TESTS=1 \
     SUB2API_CADDY_CONFIG_RELEASE_CONFIG_FILE="$config_file" \
-    /bin/bash "$RECEIVER" "$COMMIT" "$digest" <"$candidate" >"$output" 2>&1
+    /bin/bash "$RECEIVER" ${5:+"$5"} "$COMMIT" "$digest" <"$candidate" >"$output" 2>&1
 }
 
 mkdir -p "$FAKE_BIN" "$FAKE_CONTAINER_ROOT" "$APP_DIR" "$LOCK_DIR"
@@ -512,9 +517,22 @@ cat >"${FAKE_BIN}/curl" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$@" >>"$FAKE_CURL_LOG"
+if [ -f "$FAKE_PUBLIC_HEALTH_FAILURES" ]; then
+  remaining="$(cat "$FAKE_PUBLIC_HEALTH_FAILURES")"
+  if [ "$remaining" -gt 0 ]; then
+    printf '%s\n' "$((remaining - 1))" >"$FAKE_PUBLIC_HEALTH_FAILURES"
+    exit 35
+  fi
+fi
 [ ! -e "${FAKE_FAIL_PUBLIC_HEALTH:-/nonexistent}" ]
 EOF
 chmod +x "${FAKE_BIN}/curl"
+
+cat >"${FAKE_BIN}/sleep" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_SLEEP_LOG"
+EOF
+chmod +x "${FAKE_BIN}/sleep"
 
 cat >"${FAKE_BIN}/rm" <<'EOF'
 #!/usr/bin/env bash
@@ -738,10 +756,35 @@ assert_contains "$CURL_LOG" '--show-error'
 assert_contains "$CURL_LOG" '--noproxy'
 assert_contains "$CURL_LOG" '*'
 assert_contains "$CURL_LOG" '--connect-timeout'
-assert_contains "$CURL_LOG" '20'
+assert_contains "$CURL_LOG" '3'
+assert_contains "$CURL_LOG" '--max-time'
+assert_contains "$CURL_LOG" '4'
 assert_contains "$CURL_LOG" '--resolve'
 assert_contains "$CURL_LOG" 'api.turtleligpt.com:443:127.0.0.1'
 assert_contains "$CURL_LOG" 'https://api.turtleligpt.com/health'
+
+# First ACME issuance is asynchronous: transient TLS failure must not cancel it.
+reset_fixture blue 128MiB 134217728
+printf '2\n' >"$PUBLIC_HEALTH_FAILURES"
+if ! run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/delayed-health.log"; then
+  cat "${TEST_ROOT}/delayed-health.log" >&2
+  fail 'receiver rolled back before asynchronous TLS became ready'
+fi
+assert_equal "$(wc -l <"$SLEEP_LOG" | tr -d ' ')" 2 'delayed TLS wait count'
+assert_not_contains "$DOCKER_LOG" 'caddy reload --force --config /tmp/sub2api-caddy-config-rollback-'
+[ ! -e "$TRANSACTION_PATH" ] || fail 'delayed TLS success retained a transaction'
+
+# Exhaustion still rolls back; the next probe verifies the restored old site.
+reset_fixture blue 128MiB 134217728
+before_sha="$(file_sha "$HOST_CADDY")"
+printf '20\n' >"$PUBLIC_HEALTH_FAILURES"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/exhausted-health.log"; then
+  fail 'receiver accepted exhausted HTTPS health checks'
+fi
+assert_contains "${TEST_ROOT}/exhausted-health.log" 'previous Caddy configuration was restored'
+assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'exhausted health rollback hash'
+assert_equal "$(wc -l <"$SLEEP_LOG" | tr -d ' ')" 19 'bounded TLS wait count'
+[ -f "$TRANSACTION_PATH" ] || fail 'exhausted health did not retain the fence'
 
 # Candidate validation failure occurs before the transaction/write boundary.
 reset_fixture blue 100MB 100000000
@@ -777,6 +820,58 @@ rollback_backup="$(sed -n 's/^BACKUP_PATH=//p' "$TRANSACTION_PATH")"
 [ -f "$rollback_backup" ] || fail 'reload rollback transaction does not retain a backup'
 assert_contains "$DOCKER_LOG" 'caddy reload --force --config /etc/caddy/Caddyfile --adapter caddyfile'
 assert_contains "$DOCKER_LOG" 'caddy reload --force --config /tmp/sub2api-caddy-config-rollback-'
+
+# Recovery acknowledges only an exact, already-restored transaction. It never
+# writes Caddy or reloads, and the archived fence remains alongside its backup.
+cp "$TRANSACTION_PATH" "${TEST_ROOT}/retained-transaction.env"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/normal-pending.log"; then
+  fail 'normal release ignored a retained Caddy transaction'
+fi
+assert_contains "${TEST_ROOT}/normal-pending.log" 'unfinished Caddy or release transaction exists'
+different_template="${TEST_ROOT}/different-template.Caddyfile"
+cp "$GOOD_TEMPLATE" "$different_template"
+printf '\n# different source digest\n' >>"$different_template"
+if run_receiver "$different_template" "sha256:$(file_sha "$different_template")" "${TEST_ROOT}/acknowledge-wrong-digest.log" "$CONFIG_FILE" --acknowledge-rollback; then
+  fail 'receiver acknowledged a different source digest'
+fi
+cmp -s "$TRANSACTION_PATH" "${TEST_ROOT}/retained-transaction.env" \
+  || fail 'wrong digest changed the retained transaction'
+chmod 0644 "$TRANSACTION_PATH"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/acknowledge-unsafe-mode.log" "$CONFIG_FILE" --acknowledge-rollback; then
+  fail 'receiver acknowledged unsafe transaction permissions'
+fi
+chmod 0600 "$TRANSACTION_PATH"
+touch "${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/acknowledge-other-fence.log" "$CONFIG_FILE" --acknowledge-rollback; then
+  fail 'receiver acknowledged rollback while another release was fenced'
+fi
+rm "${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
+: >"$DOCKER_LOG"
+if ! run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/acknowledge.log" "$CONFIG_FILE" --acknowledge-rollback; then
+  cat "${TEST_ROOT}/acknowledge.log" >&2
+  fail 'receiver could not acknowledge a verified rollback'
+fi
+[ ! -e "$TRANSACTION_PATH" ] || fail 'acknowledged rollback retained its live fence'
+cmp -s "${TEST_ROOT}/retained-transaction.env" "${rollback_backup}.rolled-back.env" \
+  || fail 'rollback acknowledgement did not preserve its complete transaction'
+assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'acknowledgement host hash'
+assert_not_contains "$DOCKER_LOG" 'caddy reload'
+assert_not_contains "$DOCKER_LOG" 'cp '
+
+# A modified backup or a live Caddy delta must retain the recovery fence.
+mv "${rollback_backup}.rolled-back.env" "$TRANSACTION_PATH"
+cp "$rollback_backup" "${TEST_ROOT}/backup-original"
+printf '\n# unexpected edit\n' >>"$rollback_backup"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/acknowledge-bad-backup.log" "$CONFIG_FILE" --acknowledge-rollback; then
+  fail 'receiver acknowledged a modified rollback backup'
+fi
+[ -f "$TRANSACTION_PATH" ] || fail 'bad backup cleared the recovery fence'
+cp "${TEST_ROOT}/backup-original" "$rollback_backup"
+printf '\n# unexpected live edit\n' >>"$HOST_CADDY"
+if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/acknowledge-bad-live.log" "$CONFIG_FILE" --acknowledge-rollback; then
+  fail 'receiver acknowledged a live configuration delta'
+fi
+[ -f "$TRANSACTION_PATH" ] || fail 'bad live configuration cleared the recovery fence'
 
 # If completion persistence succeeds but the transaction cannot be cleared,
 # cleanup rolls back and must remove the record that would otherwise claim a

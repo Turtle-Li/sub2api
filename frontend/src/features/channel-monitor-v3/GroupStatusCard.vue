@@ -9,9 +9,9 @@
     </header>
 
     <p class="mt-6 text-xs text-gray-500 dark:text-dark-300">{{ t('channelMonitorV3.cards.requestWindow', { minutes: status?.window_minutes ?? 180 }) }}</p>
-    <dl class="mt-4 grid grid-cols-3 gap-3">
+    <dl class="mt-4 grid gap-3" :class="cacheVisible ? 'grid-cols-3' : 'grid-cols-2'">
       <div v-for="metric in metrics" :key="metric.key" class="min-w-0">
-        <dt class="text-[11px] leading-5 text-gray-500 dark:text-dark-300">{{ t(`channelMonitorV3.cards.${metric.key}`) }}</dt>
+        <dt class="text-[11px] leading-5 text-gray-500 dark:text-dark-300">{{ t(`channelMonitorV3.cards.${metric.key}`) }}<span class="block text-[10px]">{{ t(`channelMonitorV3.cards.${metric.key === 'cache' ? 'cacheScope' : 'groupScope'}`) }}</span></dt>
         <dd class="mt-1 font-mono text-xl font-semibold tabular-nums tracking-tight text-gray-900 dark:text-dark-50 sm:text-2xl" :data-metric="metric.key">{{ metric.value }}</dd>
       </div>
     </dl>
@@ -21,7 +21,7 @@
         <span>{{ t('channelMonitorV3.cards.slots', { count: status?.cells.length ?? 18 }) }}</span>
         <span>{{ checkedLabel }}</span>
       </div>
-      <div class="status-timeline" :aria-label="t('modelPlaza.availability.history')">
+      <div class="status-timeline" :aria-label="t('channelMonitorV3.cards.slots', { count: cells.length })">
         <button v-for="(cell, index) in cells" :key="cell.start" type="button" :data-state="cell.status" :aria-label="cellLabel(cell)" :title="cellLabel(cell)" @focus="selected = index" @blur="selected = null" @mouseenter="selected = index" @mouseleave="selected = null" @click="selected = index"></button>
       </div>
       <div class="mt-2 flex justify-between font-mono text-[10px] tracking-wide text-gray-400 dark:text-dark-400" aria-hidden="true"><span>{{ t('channelMonitorV3.cards.past') }}</span><span>{{ t('channelMonitorV3.cards.now') }}</span></div>
@@ -50,8 +50,9 @@ const selected = ref<number | null>(null)
 const status = computed(() => props.group.availability)
 const percent = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1)}%`
 const requestReady = computed(() => status.value?.request_sample_state === 'ready')
+const cacheVisible = computed(() => status.value?.cache_sample_state === 'ready' && status.value?.cache_scope === 'shared_account_pool' && typeof status.value.cache_read_rate === 'number' && Number.isFinite(status.value.cache_read_rate) && status.value.cache_read_rate >= 90 && status.value.cache_read_rate <= 100)
 const metrics = computed(() => [
-  { key: 'cache', value: requestReady.value ? percent(status.value?.cache_read_rate) : '—' },
+  ...(cacheVisible.value ? [{ key: 'cache', value: percent(status.value?.cache_read_rate) }] : []),
   { key: 'success', value: requestReady.value ? percent(status.value?.request_success_rate) : '—' },
   { key: 'ttft', value: requestReady.value && status.value?.ttft_p50_ms != null ? `${(status.value.ttft_p50_ms / 1000).toFixed(1)}s` : '—' },
 ])

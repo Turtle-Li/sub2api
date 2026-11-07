@@ -111,7 +111,9 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 		result, forwardErr := p.gateway.Forward(ctx, c, account, parsed)
 		err = forwardErr
 		if result != nil {
-			out.InputTokens = int64(result.Usage.InputTokens)
+			// Anthropic reports disjoint input buckets; unlike OpenAI's total,
+			// input_tokens alone omits the cached consumption of this check.
+			out.InputTokens = int64(result.Usage.InputTokens) + int64(result.Usage.CacheCreationInputTokens) + int64(result.Usage.CacheReadInputTokens)
 			out.OutputTokens = int64(result.Usage.OutputTokens)
 		}
 	}
@@ -143,10 +145,12 @@ func channelMonitorV3ProbeBody(platform, model string) []byte {
 	return body
 }
 
-// A 200 response alone is insufficient: drain and require a completed text
-// result. Never retain full provider errors, prompts or account credentials.
+// Require a completed response. The intentional tiny output budget may end a
+// reasoning-only answer at length; this proves connectivity without requiring
+// a larger paid budget. Empty streams and provider errors still fail.
 func channelMonitorV3ProbeResponseOK(body []byte) bool {
 	text, terminal, bad := false, false, false
+	reasoning, budgetEnd := false, false
 	inspect := func(raw string) {
 		if !gjson.Valid(raw) {
 			return
@@ -158,6 +162,12 @@ func channelMonitorV3ProbeResponseOK(body []byte) bool {
 		}
 		if v.Get("choices.0.delta.content").String() != "" || v.Get("delta.text").String() != "" || v.Get("delta").String() != "" && kind == "response.output_text.delta" {
 			text = true
+		}
+		if v.Get("choices.0.delta.reasoning_content").String() != "" {
+			reasoning = true
+		}
+		if v.Get("choices.0.finish_reason").String() == "length" {
+			budgetEnd = true
 		}
 		if kind == "message_stop" || kind == "response.completed" || v.Get("choices.0.finish_reason").String() != "" {
 			terminal = true
@@ -174,7 +184,7 @@ func channelMonitorV3ProbeResponseOK(body []byte) bool {
 			}
 		}
 	}
-	return text && terminal && !bad
+	return (text || reasoning && budgetEnd) && terminal && !bad
 }
 
 type channelMonitorV3ProbeWriter struct {

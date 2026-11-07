@@ -14,8 +14,12 @@ state together with text. Request success, cache share and first-token P50 are
 the primary figures; exact check models belong only to the admin group editor. Prices
 and multipliers belong to the model plaza, not this dashboard.
 
-The grid is one column on phones, two at medium widths and three on wide
-screens. Search and visible refresh feedback precede platform sections.
+The grid fits the available container width with a minimum card width of22rem
+(or the full width on narrower containers). Platforms with one group share
+columns in one grid; a platform with multiple groups spans the row and uses
+the same fluid grid inside. Filtering recomputes these spans. A lone card
+fills its available row instead of reserving empty columns. Search and visible
+refresh feedback precede platform sections.
 Timeline buttons expose a textual source/status/time explanation on hover,
 focus and tap. No samples, insufficient samples and stale metrics have explicit
 copy and em dashes, never fabricated percentages. Failed refresh clears old
@@ -28,6 +32,13 @@ configuration, and model selection always remains an explicit owner action.
 The homepage has its own `#status` card section with the same sample guards,
 metrics and observation window. Model plaza contains prices without status.
 The November 8 correction aligns 18 cells to ten-minute checks (180 minutes).
+The later cache correction independently labels cache as shared-account-pool,
+all-model real usage; success and latency keep their own group scope. Cache
+only occupies a metric column when independently ready and at least90%; other
+states collapse that column and let the remaining two figures fill the card.
+Statistics disclosure explains the display threshold without changing values.
+An idle check group can therefore show valid pool cache while its group-only
+figures await traffic. The homepage uses the same behavior in immutable v5.
 Sparse observations retain success/error labels without a percentage; a current
 empty partial slot is collecting. Public configuration is grouped by platform,
 searchable, excludes private/inactive groups and includes domestic providers.
@@ -58,3 +69,11 @@ add/select/name/save/remove/readd. Live origin, homepage and status module
 publish exactly2selected groups; the admin editor has2rows and group-scoped
 model choices. Live390px has no overflow. No production settings were saved.
 Evidence and canonical release: `docs/operations/MODEL_STATUS_SELECTION_RELEASE_20261108.md`.
+
+The later fluid-layout refinement passed102frontend/14static tests, scoped Go
+tests/builds and independent Standards/Spec APPROVE. Real local1440/980/390px
+verification covers six singleton platforms, mixed multi-group platforms and
+search reflow; live1440/390px confirms six owner-selected cards and the separate
+homepage. Both incumbent dark fixtures and light production were inspected.
+No overflow was observed. The24h probe-use follow-up and exact source/static
+digests are in `docs/operations/MODEL_STATUS_LAYOUT_TRIAL_20261108.md`.

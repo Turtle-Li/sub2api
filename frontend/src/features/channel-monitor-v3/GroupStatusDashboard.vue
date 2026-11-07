@@ -15,10 +15,12 @@
     <p v-if="error" class="mb-6 rounded-xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-200" role="alert">{{ t('channelMonitorV3.cards.loadFailed') }}</p>
     <div v-if="loading && !data" class="grid gap-5 md:grid-cols-2 xl:grid-cols-3" aria-busy="true"><div v-for="n in 3" :key="n" class="h-80 animate-pulse rounded-2xl bg-gray-200 dark:bg-dark-800"></div></div>
     <p v-else-if="sections.length === 0" class="py-16 text-center text-sm text-gray-500 dark:text-dark-300">{{ t(query ? 'channelMonitorV3.cards.noMatch' : 'channelMonitorV3.cards.empty') }}</p>
-    <section v-for="section in sections" :key="section.platform" class="mb-9" :aria-label="section.label">
-      <h2 class="mb-4 flex items-center gap-2.5 text-lg font-semibold text-gray-900 dark:text-dark-100"><PlatformIcon :platform="section.platform" size="lg" />{{ section.label }}<span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-dark-200">{{ section.groups.length }}</span></h2>
-      <div class="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-3"><GroupStatusCard v-for="group in section.groups" :key="group.id" :group="group" /></div>
-    </section>
+    <div class="status-sections">
+      <section v-for="section in sections" :key="section.platform" class="min-w-0" :class="{ 'status-section-expanded': section.groups.length > 1 }" :aria-label="section.label">
+        <h2 class="mb-4 flex items-center gap-2.5 text-lg font-semibold text-gray-900 dark:text-dark-100"><PlatformIcon :platform="section.platform" size="lg" />{{ section.label }}<span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-dark-200">{{ section.groups.length }}</span></h2>
+        <div class="status-group-grid"><GroupStatusCard v-for="group in section.groups" :key="group.id" :group="group" /></div>
+      </section>
+    </div>
     <details class="mt-3 max-w-3xl text-xs leading-6 text-gray-500 dark:text-dark-300"><summary class="w-fit cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500">{{ t('channelMonitorV3.cards.rules') }}</summary><p class="mt-2">{{ t('channelMonitorV3.cards.rulesDetail') }}</p></details>
   </section>
 </template>
@@ -85,3 +87,16 @@ onMounted(() => {
 })
 onBeforeUnmount(() => { controller.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', visible) })
 </script>
+
+<style scoped>
+.status-sections,
+.status-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  align-items: start;
+  gap: 2rem 1.25rem;
+}
+.status-sections { margin-bottom: 2rem; }
+.status-group-grid { gap: 1.25rem; }
+.status-section-expanded { grid-column: 1 / -1; }
+</style>

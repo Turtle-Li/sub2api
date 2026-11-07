@@ -47,6 +47,48 @@ including account-mapped media and wildcard IDs. No accounts returns no models,
 and lookup failure remains an error. Existing unavailable choices are retained
 and explained, never silently substituted. Discovery sends no provider requests.
 
+Later November8 refinement: singleton platform sections share a fluid grid;
+platforms with multiple selected groups expand across the row. Search recomputes
+the layout. The homepage uses a fluid card grid in immutable asset namespacev4.
+That revision used group-only request metrics. The owner's later correction
+below supersedes its cache scope; success, latency and history remain group-only.
+
+Latest owner correction, November8: inexpensive selected models measure only
+connectivity. Cache comes directly from the dashboard's `usage_logs` token
+buckets over the preceding180minutes, across every real text model served by
+the selected group's currently bound, nondeleted accounts in active
+groups on the same platform, including subscription traffic. Other accounts, inactive/deleted
+groups, media and scheduled checks are excluded. Never filter by the check
+model or average model percentages: sum cache-read tokens divided by the sum
+of uncached input + cache creation + cache read, as the dashboard does. Real
+zero-price token usage is included. The account/peer joins must not duplicate
+a request; scopes are resolved on every read so revoked bindings are immediate.
+
+This cache sample state is independent of group request sample state and the
+passive collector watermark. At least20token-bearing requests (or the higher
+configured minimum) are required. Following the owner's request to omit low
+cache figures, the public cache metric is collapsed below90%, with the display
+standard explained in Statistics and color definitions. Values are never
+rounded up, clamped to a desired result or changed in the dashboard/ledger.
+Subscription groups contribute only to the account-pool aggregate, never to a
+public card, group identity, success rate or history. The sanitized status DTO
+includes `cache_scope=shared_account_pool` and an
+independent `cache_sample_state`; no accounts, models, counts or tokens leave
+the status endpoint. Every displayed metric labels its scope. Availability,
+success, first-token latency and history still describe the selected group.
+The homepage uses immutable asset namespacev5 and the same publication guards.
+
+Reference checked: ranxi2001/sub2api at
+`5f0b6321a50153a738aef3fbade57c969dbe710c`, LGPLv3; its
+`frontend/src/components/charts/TokenUsageTrend.vue` uses the same dashboard
+formula, and `backend/internal/service/channel_monitor_v2_test.go` tests the
+disjoint denominator (1input+3creation+4read=8). Local dashboard source is
+`backend/internal/repository/usage_log_repo_trend.go`. The explicit shared
+account-pool scope and90% display rule are intentional local differences.
+Regression coverage: `channel_monitor_v3_cache_test.go`, real PostgreSQL
+`channel_monitor_v3_cache_integration_test.go`, `GroupStatusCards.spec.ts`, and
+the versioned homepage's `status-metrics.test.mjs`. Existing attribution remains.
+
 The owner authorized one inexpensive request model per enabled group,
 one check every ten minutes and minimal output. Active checks supplement quiet
 groups; they never enter real-request success-rate denominators. Unknown,
@@ -101,11 +143,30 @@ The fixed upstream reference is `ranxi2001/sub2api` at
 is `backend/internal/service/channel_monitor_v3_probe.go` (claim / runProbe /
 verdict), its `channel_monitor_v3_probe_test.go`, the corresponding repository
 probe methods and migrations 264/273. Local source attribution is retained.
-Local differences: no Pelican, cognitive challenge, account failover, or
+Local differences: no Pelican, cognitive challenge, or
 synthetic rows in customer usage; at most ten enabled checks and 1000 configured
 display-name rows; one unique
 group/ten-minute slot claim even after model changes. A selected-account native
 forwarder may retain its own protocol compatibility handling.
+
+Owner correction on2026-11-08: one claimed check may make at most three
+selected-account attempts, stopping at the first success. The normal scheduler
+and account concurrency admission run for every attempt. Only three completed
+failures publish a failed check. Configuration withdrawal, execution fencing,
+shutdown, or failure to persist progress stops further spending and leaves the
+check unknown. Each attempt retains the45-second deadline; retries wait250ms.
+The runner remains serial, so persistent timeouts can delay later groups and
+freshness then becomes unknown. It never reclaims an unfinished slot to catch up.
+
+Migration269adds private attempt/missing-usage counters and a status-history
+visibility flag. Progress writes retain cumulative tokens before any retry;
+the account/latency in the final receipt describe the final attempt. Clearing
+display history preserves the unique paid claim and private consumption totals.
+Old writers can finish during natural drain; their attempt counter stays NULL,
+while new claims explicitly start at0. The report treats only NULL legacy
+completions as one attempt; an unexecuted new cancellation stays0. Rollback retains
+the additive columns and receipts, and disables probes if restoring an older
+verdict would republish Kimi's false outage.
 
 Migration `268_channel_monitor_group_probes.sql` is additive. The global and
 per-group probe switches start disabled. Scheduled-check configuration is at
@@ -121,10 +182,26 @@ Claude requests use `max_tokens: 1`; OpenAI requests use
 `max_completion_tokens: 16` and `reasoning_effort: none`. Existing protocol
 conversion floors still apply, and native Codex OAuth strips unsupported output
 limits. Do not promise a strict one-token upper bound for that protocol. A tiny
-prompt, inexpensive selected model, 45-second deadline and a single claimed
-attempt bound the trial; actual input/output tokens are retained privately.
+prompt, inexpensive selected model,45-second attempt deadline and at most three
+attempts per claimed check bound the trial; actual input/output tokens from all
+attempts are retained privately.
 The existing HTTP stream-drain helpers preserve the private probe execution
 deadline/cancellation; ordinary clients still retain their normal usage drain.
+
+Private check input receipts count all provider-reported input tokens. OpenAI
+already reports a total, while native Claude requires summing its disjoint
+ordinary, cache-creation and cache-read buckets. Historical receipts are not
+rewritten. The operator-only24h consumption report is
+`deploy/model-status-probe-consumption.sql`; missing upstream usage remains
+unknown rather than proven zero. It never reads customer usage or bills users.
+
+For Chat Completions, nonempty reasoning followed by the explicit `length`
+terminal also proves connectivity: the monitor intentionally exhausts a tiny
+output budget before some reasoning models emit visible text. Empty streams,
+reasoning without this terminal, and any provider error still fail. This is
+connectivity evidence, not an answer-quality test. The observed WorkBuddy Kimi
+contract, fixed source, numeric diagnostic and correction are recorded in
+`docs/operations/MODEL_STATUS_RETRY_CORRECTION_20261108.md`.
 
 The independent same-origin status endpoint returns only sanitized public groups.
 The plaza endpoint no longer enriches pricing with availability. Current state is unknown after
@@ -154,7 +231,7 @@ anonymous publication still requires the explicit opt-in. It discloses neither
 request/token counts nor accounts, upstream errors or custom prices.
 Vue and static clients refresh every minute
 while visible. Failed refresh removes old status while preserving group identity.
-Homepage assets are additive under `turtleroute-status-20261108-v3`; the prior
+Homepage assets are additive under `turtleroute-status-20261108-v4`; prior
 catalog module remains authoritative and untouched.
 
 Failures and recoveries use existing ops email recipients, templates, minimum

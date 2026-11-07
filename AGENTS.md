@@ -299,6 +299,10 @@
 
 ## Production host
 
+- API automatic certificate management uses Caddy ACME; read
+  `deploy/API_CERT_AUTORENEW_20261108.md` before changing its TLS ownership.
+  Preserve persistent Caddy data and verify a newly served certificate.
+
 - The AWS Lightsail production host is documented in
   `deploy/AWS_CANDIDATE_20260923.md`; use `deploy/AWS_MIGRATION_RUNBOOK.md`
   for deployment, recovery and retirement evidence. It is the public API/www

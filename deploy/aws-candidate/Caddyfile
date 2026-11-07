@@ -21,7 +21,6 @@
 }
 
 api.turtleligpt.com {
-	tls /etc/sub2api-certs/api/current/fullchain.pem /etc/sub2api-certs/api/current/privkey.pem
 	encode zstd gzip
 
 	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
@@ -51,9 +50,8 @@ api.turtleligpt.com {
 	}
 }
 
-# DNS-only cutover rehearsal host. Unlike api/www, this host deliberately has
-# no imported certificate directive so Caddy must prove automatic ACME issuance
-# and renewal on the AWS route before production DNS changes.
+# DNS-only cutover rehearsal host. It has no imported certificate directive,
+# so it continues to exercise automatic ACME issuance and renewal on AWS.
 aws-test.turtleligpt.com {
 	encode zstd gzip
 

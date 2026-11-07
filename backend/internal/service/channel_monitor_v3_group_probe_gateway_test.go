@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -71,18 +72,29 @@ func TestChannelMonitorV3ProbeOpenAIProviderForwarding(t *testing.T) {
 
 func TestChannelMonitorV3ProbeAnthropicProviderForwarding(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	stream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_probe\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n" +
-		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"1\"}}\n\n" +
-		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":1}}\n\n" +
-		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
-	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
-	probe := &channelMonitorV3GatewayProbe{gateway: newForwardPartialUsageServiceForTest(upstream)}
-	result := probe.checkAccount(context.Background(), &Group{ID: 10, Platform: PlatformAnthropic}, "claude-haiku-4-5", newAnthropicAPIKeyAccountForTest())
-	require.Equal(t, "success", result.Outcome)
-	require.EqualValues(t, 9, result.InputTokens)
-	require.EqualValues(t, 1, result.OutputTokens)
-	require.EqualValues(t, 1, gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
-	require.Equal(t, "claude-haiku-4-5", gjson.GetBytes(upstream.lastBody, "model").String())
+	for _, tc := range []struct {
+		name  string
+		usage string
+		input int64
+	}{
+		{"uncached", `{"input_tokens":9}`, 9},
+		{"cached", `{"input_tokens":9,"cache_creation_input_tokens":20,"cache_read_input_tokens":70}`, 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_probe\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":%s}}\n\n", tc.usage) +
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"1\"}}\n\n" +
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
+			probe := &channelMonitorV3GatewayProbe{gateway: newForwardPartialUsageServiceForTest(upstream)}
+			result := probe.checkAccount(context.Background(), &Group{ID: 10, Platform: PlatformAnthropic}, "claude-haiku-4-5", newAnthropicAPIKeyAccountForTest())
+			require.Equal(t, "success", result.Outcome)
+			require.EqualValues(t, tc.input, result.InputTokens)
+			require.EqualValues(t, 1, result.OutputTokens)
+			require.EqualValues(t, 1, gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+			require.Equal(t, "claude-haiku-4-5", gjson.GetBytes(upstream.lastBody, "model").String())
+		})
+	}
 }
 
 func TestChannelMonitorV3ProbeRejectsMappedMediaBeforeSending(t *testing.T) {
@@ -112,6 +124,25 @@ func TestChannelMonitorV3ProbeDomesticTextProvidersUseNativeChatForwarding(t *te
 			require.EqualValues(t, 1, out.OutputTokens)
 		})
 	}
+}
+
+func TestChannelMonitorV3ProbeWorkBuddyReasoningBudgetIsAvailable(t *testing.T) {
+	// Given the sanitized shape of WorkBuddy's16-token Kimi receipt.
+	gin.SetMode(gin.TestMode)
+	stream := "data: {\"id\":\"probe\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"reasoning\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":6369,\"completion_tokens\":16,\"prompt_tokens_details\":{\"cached_tokens\":6144}}}\n\ndata: [DONE]\n\n"
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
+	cfg := &config.Config{}
+	cfg.Gateway.MinOutputTokens = 16
+	account := &Account{ID: 2, Platform: "workbuddy", Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "fixture", "base_url": "https://workbuddy.example.test/v1", "api_protocol": APIProtocolChatCompletions}}
+	probe := &channelMonitorV3GatewayProbe{openai: &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}}
+	// When it passes through the actual domestic-provider forwarder.
+	out := probe.checkAccount(context.Background(), &Group{ID: 18, Platform: PlatformKimi}, "kimi-k3.1-pro", account)
+	// Then the tiny budget proves connectivity and retains total consumption.
+	require.Equal(t, "success", out.Outcome)
+	require.EqualValues(t, 6369, out.InputTokens)
+	require.EqualValues(t, 16, out.OutputTokens)
+	require.Len(t, upstream.requests, 1)
 }
 
 func TestChannelMonitorV3ProbeCaptureOverflowFailsClosed(t *testing.T) {

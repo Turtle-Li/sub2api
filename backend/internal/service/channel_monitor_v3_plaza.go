@@ -13,6 +13,7 @@ const (
 	ChannelMonitorV3GroupMinProbes     = 6
 	channelMonitorV3GroupCells         = 18
 	channelMonitorV3GroupInterval      = ChannelMonitorV3ProbeInterval
+	channelMonitorV3CacheMinPercent    = 90.0
 )
 
 type ChannelMonitorV3GroupCell struct {
@@ -33,6 +34,8 @@ type ChannelMonitorV3GroupStatus struct {
 	RequestSuccessRate *float64                    `json:"request_success_rate"`
 	ProbeSuccessRate   *float64                    `json:"probe_success_rate"`
 	CacheReadRate      *float64                    `json:"cache_read_rate"`
+	CacheSampleState   string                      `json:"cache_sample_state"`
+	CacheScope         string                      `json:"cache_scope"`
 	TTFTP50Ms          *int64                      `json:"ttft_p50_ms"`
 	RequestSampleState string                      `json:"request_sample_state"`
 	ProbeSampleState   string                      `json:"probe_sample_state"`
@@ -41,8 +44,13 @@ type ChannelMonitorV3GroupStatus struct {
 	Cells              []ChannelMonitorV3GroupCell `json:"cells"`
 }
 
-// PlazaStatuses accepts only IDs that the caller has already authorized for
-// public status publication. It never discovers groups or expands viewer scope.
+// Token buckets match the dashboard's usage_logs contract and are never public.
+type ChannelMonitorV3RequestCache struct {
+	Requests, InputTokens, CacheCreationTokens, CacheReadTokens int64
+}
+
+// PlazaStatuses accepts only IDs authorized for public card publication.
+// Success/history stay group-scoped; cache has an explicit account-pool scope.
 func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []int64, anonymous bool) (map[int64]*ChannelMonitorV3GroupStatus, error) {
 	out := map[int64]*ChannelMonitorV3GroupStatus{}
 	if len(groupIDs) == 0 {
@@ -68,6 +76,10 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		return nil, err
 	}
 	passiveFresh := through != nil && !through.After(now) && now.Sub(*through) <= 10*time.Minute
+	requestCache, err := s.repo.GroupRequestCache(ctx, groupIDs, now.Add(-ChannelMonitorV3GroupWindowMinutes*time.Minute), now)
+	if err != nil {
+		return nil, err
+	}
 	var probes []ChannelMonitorV3GroupProbeResult
 	if repo, ok := s.repo.(ChannelMonitorV3GroupProbeRepository); ok {
 		probes, err = repo.GroupProbes(ctx, groupIDs, first, now.Add(time.Nanosecond))
@@ -86,7 +98,18 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	for _, id := range groupIDs {
 		target := targets[id]
 		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model,
-			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
+			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", CacheSampleState: "none", CacheScope: "shared_account_pool", WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
+		cache := requestCache[id]
+		if input := cache.InputTokens + cache.CacheCreationTokens + cache.CacheReadTokens; input > 0 && cache.InputTokens >= 0 && cache.CacheCreationTokens >= 0 && cache.CacheReadTokens >= 0 {
+			item.CacheSampleState = "insufficient"
+			if cache.Requests >= int64(item.MinRequests) {
+				rate := 100 * float64(cache.CacheReadTokens) / float64(input)
+				item.CacheSampleState = "below_threshold"
+				if rate >= channelMonitorV3CacheMinPercent && rate <= 100 {
+					item.CacheSampleState, item.CacheReadRate = "ready", &rate
+				}
+			}
+		}
 		component := ChannelMonitorV3Component{GroupID: id}
 		total := channelMonitorV3Accumulate(*cfg, component, facts, time.Time{}, 0)[0]
 		if total.counted() > 0 {
@@ -98,10 +121,6 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			item.RequestSampleState = "ready"
 			rate := 100 * float64(total.success) / float64(total.counted())
 			item.RequestSuccessRate = &rate
-			if input := total.input + total.cacheWrite + total.cacheRead; input > 0 {
-				cache := 100 * float64(total.cacheRead) / float64(input)
-				item.CacheReadRate = &cache
-			}
 			var latencySamples int64
 			for _, n := range total.ttft {
 				latencySamples += n
