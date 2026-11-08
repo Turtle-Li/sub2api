@@ -38,6 +38,46 @@ beforeEach(() => {
   mocks.models.mockReset().mockResolvedValue(['new-owner-model', 'deepseek-chat'])
 })
 describe('status group cards', () => {
+  const probeCache = { cache_sample_state: 'none', cache_peak_hour_rate: null, probe_cache_read_rate: 96.5,
+    probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens' }
+  it.each([
+    { probe_cache_sample_state: 'none' }, { probe_cache_sample_state: 'insufficient' },
+    { probe_cache_sample_state: 'stale' }, { probe_cache_sample_state: 'disabled' },
+    { probe_cache_scope: undefined }, { probe_cache_scope: 'shared_account_pool' },
+    { probe_cache_statistic: undefined }, { probe_cache_statistic: 'best_complete_hour' },
+    { window_minutes: 60 }, { probe_enabled: false }, { probe_metrics_version: undefined },
+    { probe_sample_state: 'stale' }, { probe_cache_read_rate: null },
+    { probe_cache_read_rate: NaN }, { probe_cache_read_rate: Infinity },
+    { probe_cache_read_rate: -1 }, { probe_cache_read_rate: 101 },
+  ])('keeps unavailable or incompatible check cache unknown: %j', overrides => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ ...probeCache, ...overrides }) } })
+    expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('retains measured cold and low cache shares without changing or hiding their values', () => {
+    for (const rate of [0, 52, 89.99, 100]) {
+      const wrapper = mount(GroupStatusCard, { props: { group: group({ ...probeCache, probe_cache_read_rate: rate }) } })
+      expect(wrapper.get('[data-metric="cache"]').text()).toBe(`${rate.toFixed(1)}%`)
+      wrapper.unmount()
+    }
+  })
+  it('prefers eligible real pool cache to check cache without relabelling either', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ ...probeCache, cache_sample_state: 'ready', cache_peak_hour_rate: 87.2 }) } })
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe('87.2%')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.cacheScope')
+    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.probeCache')
+    wrapper.unmount()
+  })
+  it('uses explicitly labelled check cache when real pool cache is unavailable', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ cache_sample_state: 'none', cache_peak_hour_rate: null,
+      probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens', probe_cache_read_rate: 96.5 }) } })
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe('96.5%')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeCache')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeCacheWindow')
+    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.cacheScope')
+    expect(wrapper.get('[data-metric="cache"]').attributes('title')).toBeUndefined()
+    wrapper.unmount()
+  })
   it('shows labelled scheduled metrics when real request samples are missing', () => {
     // Given an idle group with qualified scheduled-check statistics.
     const idle = group({ request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null,

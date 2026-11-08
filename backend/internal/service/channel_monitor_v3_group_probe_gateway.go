@@ -87,6 +87,8 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 	}
 	var err error
 	var firstTokenMs *int
+	var cacheReadTokens int64
+	var nativeCacheReceipt bool
 	body := channelMonitorV3ProbeBody(group.Platform, model)
 	writer := &channelMonitorV3ProbeWriter{header: make(http.Header)}
 	c, _ := gin.CreateTestContext(writer)
@@ -102,6 +104,8 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 			out.InputTokens = int64(result.Usage.InputTokens)
 			out.OutputTokens = int64(result.Usage.OutputTokens)
 			firstTokenMs = result.FirstTokenMs
+			cacheReadTokens = int64(result.Usage.CacheReadInputTokens)
+			nativeCacheReceipt = result.UpstreamEndpoint == grokChatRawEndpoint
 		}
 	} else {
 		parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
@@ -118,6 +122,8 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 			out.InputTokens = int64(result.Usage.InputTokens) + int64(result.Usage.CacheCreationInputTokens) + int64(result.Usage.CacheReadInputTokens)
 			out.OutputTokens = int64(result.Usage.OutputTokens)
 			firstTokenMs = result.FirstTokenMs
+			cacheReadTokens = int64(result.Usage.CacheReadInputTokens)
+			nativeCacheReceipt = result.OpenAIResult == nil
 		}
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
@@ -136,9 +142,56 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 		ms := int64(*firstTokenMs)
 		out.FirstTokenMs = &ms
 	}
+	// Compatibility converters do not preserve explicit zero versus missing
+	// cache details. Use only native receipts, never their synthesized fields.
+	if nativeCacheReceipt {
+		if cached := channelMonitorV3ProbeCacheReadTokens(writer.body.Bytes(), out.InputTokens, cacheReadTokens); cached != nil {
+			input := out.InputTokens
+			out.CacheInputTokens, out.CacheReadTokens = &input, cached
+		}
+	}
 	out.Outcome = "success"
 	out.Category = ""
 	return
+}
+
+// Use the native normalized buckets, but require an explicit numeric cache
+// declaration in the captured receipt. Absent usage must not become a cold hit.
+func channelMonitorV3ProbeCacheReadTokens(body []byte, input, cached int64) *int64 {
+	if input <= 0 || cached < 0 || cached > input {
+		return nil
+	}
+	reported, invalid := false, false
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if !gjson.Valid(raw) {
+			continue
+		}
+		v := gjson.Parse(raw)
+		for _, root := range []string{"usage", "response.usage", "message.usage"} {
+			usage := v.Get(root)
+			for _, key := range []string{"input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens", "cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"} {
+				value := usage.Get(key)
+				if !value.Exists() {
+					continue
+				}
+				n := value.Int()
+				if value.Type != gjson.Number || n < 0 || n > input || value.Float() != float64(n) {
+					invalid = true
+				} else if n == cached {
+					reported = true
+				}
+			}
+		}
+	}
+	if !reported || invalid {
+		return nil
+	}
+	return &cached
 }
 
 func channelMonitorV3ProbeBody(platform, model string) []byte {

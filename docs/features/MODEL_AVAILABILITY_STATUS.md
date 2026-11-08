@@ -13,6 +13,13 @@ notification path; they never become user request facts. This supersedes the
 initial passive-only implementation scope and quota guidance below, which
 describe the earlier release.
 
+Scheduled cache fallback (November8): native check receipts can supply a
+separate three-hour token-weighted cache share after six valid successful
+samples when real pool cache is unavailable. Preserve explicit zero versus
+unknown, final-attempt cache versus cumulative paid retry usage, and native
+versus converted receipt boundaries. Read the current group contract and
+`docs/operations/MODEL_STATUS_PROBE_CACHE_20261108.md` before changing this path.
+
 Implementation contract (2026-11-07). User requested reuse of the researched
 Sub2 status logic and good design, with anonymous public status and logged-in
 group-scoped views. Preserve the incumbent UI if adequate; a broad redesign is

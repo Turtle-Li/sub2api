@@ -158,6 +158,7 @@ func (p *ChannelMonitorV3GroupProber) checkWithRetries(ctx context.Context, id i
 		result.Outcome, result.Category = receipt.Outcome, receipt.Category
 		result.LatencyMs, result.AccountID = receipt.LatencyMs, receipt.AccountID
 		result.FirstTokenMs = receipt.FirstTokenMs
+		result.CacheInputTokens, result.CacheReadTokens = receipt.CacheInputTokens, receipt.CacheReadTokens
 		saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := p.probes.RecordGroupProbeAttempt(saveCtx, result)
 		saveCancel()

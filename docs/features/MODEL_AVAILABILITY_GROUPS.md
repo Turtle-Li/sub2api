@@ -5,8 +5,12 @@ explicitly labelled card metrics when real traffic is insufficient. Success and
 first-token latency independently prefer qualified real group traffic. Otherwise,
 show qualified check success and native check first-token P50; if native timing
 is not yet sufficient, use the separately labelled whole-check duration P50.
-No checks are added to real-request denominators or cache usage. Details and
-rollout evidence: `docs/operations/MODEL_STATUS_PROBE_METRICS_20261108.md`.
+No checks are added to real-request denominators or dashboard cache usage.
+Native check cache receipts now provide a separately qualified fallback,
+labelled “检测缓存占比” with its three-hour token-weighted window. This is not
+the real-request best-hour statistic. Details and rollout evidence:
+`docs/operations/MODEL_STATUS_PROBE_METRICS_20261108.md` and
+`docs/operations/MODEL_STATUS_PROBE_CACHE_20261108.md`.
 
 Historical owner correction, 2026-11-07: the homepage and signed-in model plaza must show
 availability inside each existing group card. All viewers use their existing
@@ -96,7 +100,32 @@ independent `cache_sample_state`. The retired `cache_read_rate` remainsnull so
 older clients cannot mislabel the historical maximum. No accounts, models, counts or tokens leave
 the status endpoint. Every displayed metric labels its scope. Availability,
 success, first-token latency and history still describe the selected group.
-The homepage uses immutable asset namespacev6 and the same publication guards.
+The homepage uses immutable asset namespacev8 and the same publication guards.
+
+If no eligible real-traffic hour exists, native scheduled-check cache can be
+published independently: at least six successful cache-bearing final receipts
+in the last180minutes, current configured model, checks enabled and latest
+completed check no older than15minutes. Compute sum(cache-read) divided by
+sum(totalinput), including explicit zeros and all valid low values; never
+average request percentages or discard cold hits. Failed/retried attempts
+remain in cumulative private consumption, but only the final successful
+attempt supplies the separate nullable `cache_input_tokens`/`cache_read_tokens`
+pair. Missing, invalid or historical cache reporting stays unknown. OpenAI
+input is already total; native Anthropic input is the sum of its disjoint
+uncached, creation and read buckets. The DTO adds `probe_cache_read_rate`,
+`probe_cache_sample_state`, `probe_cache_scope=group_probe` and
+`probe_cache_statistic=weighted_tokens`; it publishes no raw usage or identities.
+Both clients require the explicit source/statistic and180-minute window, prefer
+qualified real pool cache, and otherwise label the check ratio/window separately.
+
+This local extension follows the pinned source below. Its probe does not
+provide this fallback. Native raw ChatCompletions and native Anthropic receipts
+retain cache field presence. Compatibility conversion may synthesize zeros or
+omit explicit zeros; exclude that entire converted cache source, including
+positive receipts, rather than select only favorable values. A future extension
+must preserve native cache-field presence through every conversion before
+admitting those receipts. Do not change billing or extend probe prompts to
+manufacture cache hits.
 
 Reference checked: ranxi2001/sub2api at
 `5f0b6321a50153a738aef3fbade57c969dbe710c`, LGPLv3; its

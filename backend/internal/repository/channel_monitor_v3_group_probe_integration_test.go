@@ -114,6 +114,8 @@ func TestChannelMonitorV3GroupProbeClaimsAndSeparateFacts(t *testing.T) {
 	progress.FinishedAt, progress.Outcome, progress.AccountID = &finished, "success", 123
 	firstToken := int64(1200)
 	progress.FirstTokenMs, progress.LatencyMs = &firstToken, 4500
+	cacheInput, cacheRead := int64(12), int64(0)
+	progress.CacheInputTokens, progress.CacheReadTokens = &cacheInput, &cacheRead
 	require.NoError(t, repo.FinishGroupProbe(ctx, progress))
 	require.NoError(t, repo.FinishGroupProbe(ctx, service.ChannelMonitorV3GroupProbeResult{ID: claimed, FinishedAt: &finished, Outcome: "failure"}))
 	rows, err := repo.GroupProbes(ctx, []int64{group.ID}, slot, slot.Add(10*time.Minute))
@@ -121,6 +123,8 @@ func TestChannelMonitorV3GroupProbeClaimsAndSeparateFacts(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "success", rows[0].Outcome)
 	require.Equal(t, &firstToken, rows[0].FirstTokenMs)
+	require.Equal(t, &cacheInput, rows[0].CacheInputTokens, "cache input differs from cumulative paid consumption")
+	require.Equal(t, &cacheRead, rows[0].CacheReadTokens, "explicit cold-cache zero survives persistence")
 	require.EqualValues(t, 4500, rows[0].LatencyMs)
 	require.Equal(t, int64(1), rows[0].OutputTokens)
 	require.Equal(t, 2, rows[0].AttemptCount)
@@ -150,6 +154,12 @@ func TestChannelMonitorV3GroupProbeClaimsAndSeparateFacts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacy, 1)
 	require.Nil(t, legacy[0].FirstTokenMs)
+	require.Nil(t, legacy[0].CacheInputTokens)
+	require.Nil(t, legacy[0].CacheReadTokens, "legacy receipts cannot invent cache usage")
+	for _, pair := range [][2]any{{nil, 0}, {10, nil}, {0, 0}, {10, -1}, {10, 11}} {
+		_, err = integrationDB.ExecContext(ctx, `UPDATE channel_monitor_v3_group_probes SET cache_input_tokens=$1,cache_read_tokens=$2 WHERE id=$3`, pair[0], pair[1], claimed)
+		require.Error(t, err, "invalid cache pair must fail closed: %v", pair)
+	}
 	require.EqualValues(t, 6000, legacy[0].LatencyMs)
 	require.NoError(t, repo.PruneGroupProbes(ctx, slot.Add(time.Minute)))
 	rows, err = repo.GroupProbes(ctx, []int64{group.ID}, slot, slot.Add(10*time.Minute))

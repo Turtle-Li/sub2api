@@ -105,8 +105,8 @@ func TestChannelMonitorV3GroupProbeRecoversWithinThreeAttempts(t *testing.T) {
 	repo, p, exec := groupProbeFixture()
 	failedTTFT, successfulTTFT := int64(100), int64(1200)
 	exec.steps = []ChannelMonitorV3GroupProbeResult{
-		{Outcome: "failure", Category: "upstream_error", FirstTokenMs: &failedTTFT, LatencyMs: 500, InputTokens: 20, OutputTokens: 2},
-		{Outcome: "success", FirstTokenMs: &successfulTTFT, LatencyMs: 4500, InputTokens: 30, OutputTokens: 3},
+		{Outcome: "failure", Category: "upstream_error", FirstTokenMs: &failedTTFT, LatencyMs: 500, InputTokens: 20, OutputTokens: 2, CacheInputTokens: probeTimingPtr(20), CacheReadTokens: probeTimingPtr(19)},
+		{Outcome: "success", FirstTokenMs: &successfulTTFT, LatencyMs: 4500, InputTokens: 30, OutputTokens: 3, CacheInputTokens: probeTimingPtr(30), CacheReadTokens: probeTimingPtr(25)},
 	}
 	// When one scheduled slot is processed.
 	p.RunDue(context.Background(), time.Now())
@@ -117,6 +117,8 @@ func TestChannelMonitorV3GroupProbeRecoversWithinThreeAttempts(t *testing.T) {
 	require.Equal(t, &successfulTTFT, repo.results[0].FirstTokenMs, "timing belongs only to the final successful attempt")
 	require.EqualValues(t, 4500, repo.results[0].LatencyMs)
 	require.EqualValues(t, 50, repo.results[0].InputTokens)
+	require.Equal(t, probeTimingPtr(30), repo.results[0].CacheInputTokens, "cache uses only the final successful receipt")
+	require.Equal(t, probeTimingPtr(25), repo.results[0].CacheReadTokens)
 	require.EqualValues(t, 5, repo.results[0].OutputTokens)
 	require.Equal(t, 2, repo.results[0].AttemptCount)
 	require.Len(t, repo.progress, 2)
@@ -129,12 +131,14 @@ func TestChannelMonitorV3GroupProbeRecoveryDoesNotReuseFailedTiming(t *testing.T
 	repo, p, exec := groupProbeFixture()
 	failedTTFT := int64(100)
 	exec.steps = []ChannelMonitorV3GroupProbeResult{
-		{Outcome: "failure", FirstTokenMs: &failedTTFT}, {Outcome: "success", LatencyMs: 4500},
+		{Outcome: "failure", FirstTokenMs: &failedTTFT, CacheInputTokens: probeTimingPtr(20), CacheReadTokens: probeTimingPtr(19)}, {Outcome: "success", LatencyMs: 4500},
 	}
 	// When the slot is finalized, unknown native timing stays unknown.
 	p.RunDue(context.Background(), time.Now())
 	require.Len(t, repo.results, 1)
 	require.Nil(t, repo.results[0].FirstTokenMs)
+	require.Nil(t, repo.results[0].CacheInputTokens)
+	require.Nil(t, repo.results[0].CacheReadTokens, "a retry cannot inherit the failed attempt's cache")
 	require.EqualValues(t, 4500, repo.results[0].LatencyMs)
 }
 

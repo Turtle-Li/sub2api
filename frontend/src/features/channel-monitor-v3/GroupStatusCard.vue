@@ -12,8 +12,8 @@
     <dl class="mt-4 grid gap-3" :class="cacheVisible ? 'grid-cols-3' : 'grid-cols-2'">
       <div v-for="metric in metrics" :key="metric.key" class="min-w-0">
         <dt class="text-[11px] leading-5 text-gray-500 dark:text-dark-300">{{ t(`channelMonitorV3.cards.${metric.label}`) }}<span class="block text-[10px]">{{ t(`channelMonitorV3.cards.${metric.scope}`) }}</span></dt>
-        <dd class="mt-1 font-mono text-xl font-semibold tabular-nums tracking-tight text-gray-900 dark:text-dark-50 sm:text-2xl" :data-metric="metric.key" :title="metric.key === 'cache' ? cacheHourTitle : undefined">{{ metric.value }}</dd>
-        <span v-if="metric.key === 'cache'" class="mt-1 block text-[10px] leading-4 text-gray-500 dark:text-dark-300">{{ cacheHourLabel }}</span>
+        <dd class="mt-1 font-mono text-xl font-semibold tabular-nums tracking-tight text-gray-900 dark:text-dark-50 sm:text-2xl" :data-metric="metric.key" :title="metric.key === 'cache' && realCacheReady ? cacheHourTitle : undefined">{{ metric.value }}</dd>
+        <span v-if="metric.key === 'cache'" class="mt-1 block text-[10px] leading-4 text-gray-500 dark:text-dark-300">{{ realCacheReady ? cacheHourLabel : t('channelMonitorV3.cards.probeCacheWindow', { hours: (status?.window_minutes ?? 180) / 60 }) }}</span>
       </div>
     </dl>
 
@@ -55,11 +55,13 @@ const percent = (value: number | null | undefined) => validPercent(value) ? `${v
 const seconds = (value: number) => `${(value / 1000).toFixed(1)}s`
 const requestReady = computed(() => status.value?.request_sample_state === 'ready')
 const probeReady = computed(() => status.value?.probe_metrics_version === 1 && status.value.probe_enabled && status.value.probe_sample_state === 'ready')
-const cacheVisible = computed(() => {
+const realCacheReady = computed(() => {
   const s = status.value
   const start = Date.parse(s?.cache_hour_start ?? ''), end = Date.parse(s?.cache_hour_end ?? '')
   return s?.cache_sample_state === 'ready' && s.cache_scope === 'shared_account_pool' && s.cache_statistic === 'best_complete_hour' && s.cache_lookback_hours === 24 && Number.isFinite(start) && start % 3600000 === 0 && end - start === 3600000 && typeof s.cache_peak_hour_rate === 'number' && Number.isFinite(s.cache_peak_hour_rate) && s.cache_peak_hour_rate >= 0 && s.cache_peak_hour_rate <= 100
 })
+const probeCacheReady = computed(() => !realCacheReady.value && probeReady.value && status.value?.probe_cache_sample_state === 'ready' && status.value.probe_cache_scope === 'group_probe' && status.value.probe_cache_statistic === 'weighted_tokens' && status.value.window_minutes === 180 && validPercent(status.value.probe_cache_read_rate))
+const cacheVisible = computed(() => realCacheReady.value || probeCacheReady.value)
 const metrics = computed(() => {
   const s = status.value
   const realSuccess = requestReady.value && validPercent(s?.request_success_rate)
@@ -68,15 +70,15 @@ const metrics = computed(() => {
   const probeTTFT = !realTime && probeReady.value && validTime(s?.probe_ttft_p50_ms)
   const probeLatency = !realTime && !probeTTFT && probeReady.value && validTime(s?.probe_latency_p50_ms)
   return [
-    ...(cacheVisible.value ? [{ key: 'cache', label: 'cache', scope: 'cacheScope', value: percent(s?.cache_peak_hour_rate), probe: false }] : []),
+    ...(cacheVisible.value ? [{ key: 'cache', label: probeCacheReady.value ? 'probeCache' : 'cache', scope: probeCacheReady.value ? 'probeScope' : 'cacheScope', value: percent(probeCacheReady.value ? s?.probe_cache_read_rate : s?.cache_peak_hour_rate), probe: probeCacheReady.value }] : []),
     { key: 'success', label: probeSuccess ? 'probeSuccess' : 'success', scope: probeSuccess ? 'probeScope' : 'groupScope', value: realSuccess ? percent(s?.request_success_rate) : probeSuccess ? percent(s?.probe_success_rate) : '—', probe: probeSuccess },
     { key: 'ttft', label: probeTTFT ? 'probeTTFT' : probeLatency ? 'probeLatency' : 'ttft', scope: probeTTFT || probeLatency ? 'probeScope' : 'groupScope', value: realTime && validTime(s?.ttft_p50_ms) ? seconds(s.ttft_p50_ms) : probeTTFT && validTime(s?.probe_ttft_p50_ms) ? seconds(s.probe_ttft_p50_ms) : probeLatency && validTime(s?.probe_latency_p50_ms) ? seconds(s.probe_latency_p50_ms) : '—', probe: probeTTFT || probeLatency },
   ]
 })
 const stateLabel = computed(() => t(`channelMonitorV3.cards.state.${status.value?.status ?? 'unknown'}`))
 const time = (value: string) => new Date(value).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
-const cacheHourLabel = computed(() => cacheVisible.value ? `${new Date(status.value!.cache_hour_start!).toLocaleDateString(locale.value, { month: '2-digit', day: '2-digit' })} ${time(status.value!.cache_hour_start!)}–${time(status.value!.cache_hour_end!)}` : '')
-const cacheHourTitle = computed(() => cacheVisible.value ? t('channelMonitorV3.cards.cacheHour', { start: new Date(status.value!.cache_hour_start!).toLocaleString(locale.value), end: new Date(status.value!.cache_hour_end!).toLocaleString(locale.value) }) : '')
+const cacheHourLabel = computed(() => realCacheReady.value ? `${new Date(status.value!.cache_hour_start!).toLocaleDateString(locale.value, { month: '2-digit', day: '2-digit' })} ${time(status.value!.cache_hour_start!)}–${time(status.value!.cache_hour_end!)}` : '')
+const cacheHourTitle = computed(() => realCacheReady.value ? t('channelMonitorV3.cards.cacheHour', { start: new Date(status.value!.cache_hour_start!).toLocaleString(locale.value), end: new Date(status.value!.cache_hour_end!).toLocaleString(locale.value) }) : '')
 const checkedLabel = computed(() => status.value?.checked_at ? t(`channelMonitorV3.cards.${status.value.source === 'probe' ? 'checked' : 'observed'}`, { time: time(status.value.checked_at) }) : t('channelMonitorV3.cards.noRecent'))
 const sampleLabel = computed(() => {
   if (metrics.value.some(metric => metric.probe)) return t('channelMonitorV3.cards.probeFallback')

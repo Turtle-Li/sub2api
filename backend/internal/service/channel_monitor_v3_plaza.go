@@ -36,6 +36,10 @@ type ChannelMonitorV3GroupStatus struct {
 	ProbeMetricsVersion int        `json:"probe_metrics_version"`
 	ProbeTTFTP50Ms      *int64     `json:"probe_ttft_p50_ms"`
 	ProbeLatencyP50Ms   *int64     `json:"probe_latency_p50_ms"`
+	ProbeCacheReadRate  *float64   `json:"probe_cache_read_rate"`
+	ProbeCacheState     string     `json:"probe_cache_sample_state"`
+	ProbeCacheScope     string     `json:"probe_cache_scope"`
+	ProbeCacheStatistic string     `json:"probe_cache_statistic"`
 	// Retired rolling-rate field stays null so older clients cannot mislabel a peak.
 	CacheReadRate      *float64                    `json:"cache_read_rate"`
 	CachePeakHourRate  *float64                    `json:"cache_peak_hour_rate"`
@@ -110,7 +114,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	for _, id := range groupIDs {
 		target := targets[id]
 		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model, ProbeMetricsVersion: 1,
-			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", CacheSampleState: "none", CacheScope: "shared_account_pool", CacheStatistic: "best_complete_hour", CacheLookbackHours: channelMonitorV3CacheLookbackHours, WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
+			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", ProbeCacheState: "none", ProbeCacheScope: "group_probe", ProbeCacheStatistic: "weighted_tokens", CacheSampleState: "none", CacheScope: "shared_account_pool", CacheStatistic: "best_complete_hour", CacheLookbackHours: channelMonitorV3CacheLookbackHours, WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
 		for _, cache := range requestCache[id] {
 			start := cache.HourStart.UTC()
 			if start.Before(cacheFrom) || !start.Before(cacheTo) || !start.Equal(start.Truncate(time.Hour)) || cache.Requests <= 0 || cache.InputTokens < 0 || cache.CacheCreationTokens < 0 || cache.CacheReadTokens < 0 {
@@ -166,7 +170,8 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 				}
 			}
 		}
-		var successes, count, latencySamples, ttftSamples int
+		var successes, count, latencySamples, ttftSamples, cacheSamples int
+		var probeCacheInput, probeCacheRead float64
 		probeLatency, probeTTFT := map[int64]int64{}, map[int64]int64{}
 		var latestProbeAt *time.Time
 		for _, probe := range byGroup[id] {
@@ -188,6 +193,11 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 				if probe.FirstTokenMs != nil && *probe.FirstTokenMs >= 0 && *probe.FirstTokenMs <= probe.LatencyMs {
 					probeTTFT[*probe.FirstTokenMs]++
 					ttftSamples++
+				}
+				if probe.CacheInputTokens != nil && probe.CacheReadTokens != nil && *probe.CacheInputTokens > 0 && *probe.CacheReadTokens >= 0 && *probe.CacheReadTokens <= *probe.CacheInputTokens {
+					cacheSamples++
+					probeCacheInput += float64(*probe.CacheInputTokens)
+					probeCacheRead += float64(*probe.CacheReadTokens)
 				}
 			}
 			index := int(probe.Slot.Sub(first) / interval)
@@ -214,6 +224,15 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			if ttftSamples >= ChannelMonitorV3GroupMinProbes {
 				item.ProbeTTFTP50Ms = channelMonitorV3P50(probeTTFT)
 			}
+		}
+		if cacheSamples > 0 {
+			item.ProbeCacheState = "insufficient"
+		}
+		if item.ProbeSampleState == "disabled" || item.ProbeSampleState == "stale" {
+			item.ProbeCacheState = item.ProbeSampleState
+		} else if item.ProbeSampleState == "ready" && cacheSamples >= ChannelMonitorV3GroupMinProbes {
+			rate := 100 * probeCacheRead / probeCacheInput
+			item.ProbeCacheReadRate, item.ProbeCacheState = &rate, "ready"
 		}
 		for i := len(item.Cells) - 1; i >= 0; i-- {
 			cell := item.Cells[i]

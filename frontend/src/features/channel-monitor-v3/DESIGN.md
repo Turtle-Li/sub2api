@@ -20,7 +20,13 @@ Quiet groups show qualified scheduled-check metrics with “检测成功率” a
 labelled “检测耗时 P50” until enough native TTFT samples exist. The descriptive
 window is neutral (“分组表现”), and the inline note explains separate sources.
 Require probe metric version1, enabled and ready; unavailable/invalid metrics
-remain unknown. Cache remains independently sourced from real pool usage.
+remain unknown. Cache prefers independently qualified real pool usage. If no
+eligible real hour exists, six successful native cache receipts in180minutes
+can supply “检测缓存占比” / “Check cache share”, scoped to this group's scheduled
+checks. Show “近3小时 · Token加权” beneath it, without a best-hour date/title.
+Require explicit group_probe/weighted_tokens metadata, the180-minute window,
+version1 and enabled/ready checks. Retain measured zero/low ratios. Absent or
+incompatible cache stays unknown; never infer it from successful connectivity.
 
 The grid fits the available container width with a minimum card width of22rem
 (or the full width on narrower containers). Platforms with one group share
@@ -46,11 +52,12 @@ uses the highest sample-qualified complete hour from the last24UTC hours,
 labelled “最佳小时缓存” / “Best-hour cache”, with its measured hour visible below
 the value. The shared pool and24h lookback are explicit. The historical best is
 never called a live/average rate; there is no90% floor. Invalid, incomplete or
-small-sample hours cannot supply a value. Without a qualifying hour the column
-collapses and the remaining two figures fill the card. The statistics disclosure
+small-sample hours cannot supply a value. Without a qualifying real hour or
+native check fallback the column collapses and the remaining figures fill the
+card. The statistics disclosure
 explains this selection without changing dashboard values.
 An idle check group can therefore show valid pool cache while its group-only
-figures await traffic. The homepage uses the same behavior in immutable v6.
+figures await traffic. The homepage uses the same behavior in immutable v8.
 Sparse observations retain success/error labels without a percentage; a current
 empty partial slot is collecting. Public configuration is grouped by platform,
 searchable, excludes private/inactive groups and includes domestic providers.

@@ -1,8 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statusMetrics, statusMetricDetails } from '../help/turtleroute-status-20261108-v7/group-availability.mjs';
+import { statusMetrics, statusMetricDetails } from '../help/turtleroute-status-20261108-v8/group-availability.mjs';
 const cacheStatus = (overrides = {}) => ({ cache_sample_state: 'ready', cache_scope: 'shared_account_pool', cache_statistic: 'best_complete_hour', cache_lookback_hours: 24, cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z', cache_read_rate: null, cache_peak_hour_rate: 97.2, ...overrides });
 const probeStatus = (overrides = {}) => ({ request_sample_state: 'none', probe_metrics_version: 1, probe_enabled: true, probe_sample_state: 'ready', probe_success_rate: 100, probe_ttft_p50_ms: 1200, probe_latency_p50_ms: 4500, ...overrides });
+const probeCache = (overrides = {}) => probeStatus({ window_minutes: 180, probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens', probe_cache_read_rate: 96.5, ...overrides });
+test('idle groups publish independently qualified token-weighted check cache', () => {
+  assert.deepEqual(statusMetrics(probeCache()), ['96.5%', '100.0%', '1.2s']);
+  const metric = statusMetricDetails(probeCache())[0];
+  assert.equal(metric.label, '检测缓存占比');
+  assert.equal(metric.scope, '本分组 · 定时检测');
+  assert.equal(metric.probe, true);
+  assert.equal(metric.cacheHour, false);
+});
+test('real pool cache remains first choice, including low real values', () => {
+  const status = cacheStatus(probeCache({ cache_peak_hour_rate: 52 }));
+  const metric = statusMetricDetails(status)[0];
+  assert.equal(metric.value, '52.0%');
+  assert.equal(metric.probe, false);
+  assert.equal(metric.cacheHour, true);
+});
+test('check cache requires explicit compatible source, window, readiness and finite ratio', () => {
+  const invalid = [{ probe_cache_scope: undefined }, { probe_cache_scope: 'shared_account_pool' },
+    { probe_cache_statistic: undefined }, { probe_cache_statistic: 'best_complete_hour' },
+    { window_minutes: 60 }, { probe_metrics_version: undefined }, { probe_enabled: false },
+    { probe_sample_state: 'stale' }, ...['none', 'insufficient', 'stale', 'disabled'].map(probe_cache_sample_state => ({ probe_cache_sample_state })),
+    ...[null, -1, 101, Infinity, NaN].map(probe_cache_read_rate => ({ probe_cache_read_rate }))];
+  for (const overrides of invalid) assert.equal(statusMetrics(probeCache(overrides))[0], null);
+  for (const rate of [0, 52, 89.99, 100]) assert.equal(statusMetrics(probeCache({ probe_cache_read_rate: rate }))[0], `${rate.toFixed(1)}%`);
+});
 test('quiet groups use separately labelled qualified check metrics, preserving real pool cache', () => {
   const status = cacheStatus(probeStatus());
   assert.deepEqual(statusMetrics(status), ['97.2%', '100.0%', '1.2s']);

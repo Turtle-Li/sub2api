@@ -108,6 +108,10 @@ export interface PlazaGroupAvailability {
 	probe_metrics_version?: number
 	probe_ttft_p50_ms?: number | null
 	probe_latency_p50_ms?: number | null
+	probe_cache_read_rate?: number | null
+	probe_cache_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled' | 'stale'
+	probe_cache_scope?: 'group_probe'
+	probe_cache_statistic?: 'weighted_tokens'
 	window_minutes?: number
 	min_requests?: number
   status: 'operational' | 'degraded' | 'down' | 'unknown' | 'observed' | 'errors_observed' | 'collecting'

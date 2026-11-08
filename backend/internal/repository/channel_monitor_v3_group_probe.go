@@ -23,8 +23,9 @@ func (r *channelMonitorV3Repository) ClaimGroupProbe(ctx context.Context, target
 func (r *channelMonitorV3Repository) FinishGroupProbe(ctx context.Context, result service.ChannelMonitorV3GroupProbeResult) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE channel_monitor_v3_group_probes SET finished_at=$2, outcome=$3,
  category=$4, latency_ms=$5, account_id=NULLIF($6,0), input_tokens=$7, output_tokens=$8,
- attempt_count=$9, missing_usage_attempts=$10, first_token_ms=$11 WHERE id=$1 AND outcome='pending'`,
-		result.ID, result.FinishedAt, result.Outcome, result.Category, result.LatencyMs, result.AccountID, result.InputTokens, result.OutputTokens, result.AttemptCount, result.MissingUsageAttempts, result.FirstTokenMs)
+ attempt_count=$9, missing_usage_attempts=$10, first_token_ms=$11, cache_input_tokens=$12,
+ cache_read_tokens=$13 WHERE id=$1 AND outcome='pending'`,
+		result.ID, result.FinishedAt, result.Outcome, result.Category, result.LatencyMs, result.AccountID, result.InputTokens, result.OutputTokens, result.AttemptCount, result.MissingUsageAttempts, result.FirstTokenMs, result.CacheInputTokens, result.CacheReadTokens)
 	return err
 }
 
@@ -51,7 +52,7 @@ func (r *channelMonitorV3Repository) GroupProbes(ctx context.Context, groups []i
 		return out, nil
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT id,group_id,model,slot_start,finished_at,outcome,category,latency_ms,
- COALESCE(account_id,0),input_tokens,output_tokens,COALESCE(attempt_count,0),missing_usage_attempts,first_token_ms FROM channel_monitor_v3_group_probes
+ COALESCE(account_id,0),input_tokens,output_tokens,COALESCE(attempt_count,0),missing_usage_attempts,first_token_ms,cache_input_tokens,cache_read_tokens FROM channel_monitor_v3_group_probes
  WHERE group_id=ANY($1::bigint[]) AND slot_start >= $2 AND slot_start < $3 AND NOT status_hidden ORDER BY slot_start,id`, pq.Array(groups), from, to)
 	if err != nil {
 		return nil, err
@@ -59,7 +60,7 @@ func (r *channelMonitorV3Repository) GroupProbes(ctx context.Context, groups []i
 	defer rows.Close()
 	for rows.Next() {
 		var p service.ChannelMonitorV3GroupProbeResult
-		if err := rows.Scan(&p.ID, &p.GroupID, &p.Model, &p.Slot, &p.FinishedAt, &p.Outcome, &p.Category, &p.LatencyMs, &p.AccountID, &p.InputTokens, &p.OutputTokens, &p.AttemptCount, &p.MissingUsageAttempts, &p.FirstTokenMs); err != nil {
+		if err := rows.Scan(&p.ID, &p.GroupID, &p.Model, &p.Slot, &p.FinishedAt, &p.Outcome, &p.Category, &p.LatencyMs, &p.AccountID, &p.InputTokens, &p.OutputTokens, &p.AttemptCount, &p.MissingUsageAttempts, &p.FirstTokenMs, &p.CacheInputTokens, &p.CacheReadTokens); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

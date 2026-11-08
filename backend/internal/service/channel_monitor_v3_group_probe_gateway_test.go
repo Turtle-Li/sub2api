@@ -37,7 +37,16 @@ func TestChannelMonitorV3ProbeKeepsExactRestrictedGroup(t *testing.T) {
 
 func TestChannelMonitorV3ProbeOpenAIProviderForwarding(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, oauth := range []bool{false, true} {
+	for _, tc := range []struct {
+		oauth   bool
+		details string
+	}{
+		{false, ""}, {true, ""},
+		{false, `,"input_tokens_details":{"cached_tokens":8}`},
+		{true, `,"input_tokens_details":{"cached_tokens":8}`},
+		{false, `,"input_tokens_details":{"audio_tokens":1}`},
+	} {
+		oauth := tc.oauth
 		name := "api_key"
 		if oauth {
 			name = "oauth"
@@ -45,7 +54,7 @@ func TestChannelMonitorV3ProbeOpenAIProviderForwarding(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stream := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_probe\",\"model\":\"gpt-5.4-mini\",\"status\":\"in_progress\",\"output\":[]}}\n\n" +
 				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"1\"}\n\n" +
-				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_probe\",\"model\":\"gpt-5.4-mini\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"1\"}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":1}}}\n\n"
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_probe\",\"model\":\"gpt-5.4-mini\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"1\"}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":1" + tc.details + "}}}\n\n"
 			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
 			cfg := &config.Config{}
 			cfg.Gateway.MinOutputTokens = 16
@@ -61,6 +70,7 @@ func TestChannelMonitorV3ProbeOpenAIProviderForwarding(t *testing.T) {
 			require.GreaterOrEqual(t, *result.FirstTokenMs, int64(0))
 			require.EqualValues(t, 9, result.InputTokens)
 			require.EqualValues(t, 1, result.OutputTokens)
+			require.Nil(t, result.CacheReadTokens, "compatibility responses cannot prove native cache presence")
 			require.Len(t, upstream.requests, 1)
 			require.Equal(t, "none", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
 			if oauth {
@@ -81,6 +91,7 @@ func TestChannelMonitorV3ProbeAnthropicProviderForwarding(t *testing.T) {
 	}{
 		{"uncached", `{"input_tokens":9}`, 9},
 		{"cached", `{"input_tokens":9,"cache_creation_input_tokens":20,"cache_read_input_tokens":70}`, 99},
+		{"cold", `{"input_tokens":9,"cache_read_input_tokens":0}`, 9},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stream := fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_probe\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":%s}}\n\n", tc.usage) +
@@ -94,6 +105,12 @@ func TestChannelMonitorV3ProbeAnthropicProviderForwarding(t *testing.T) {
 			require.NotNil(t, result.FirstTokenMs, "preserve native Messages first-token timing")
 			require.GreaterOrEqual(t, *result.FirstTokenMs, int64(0))
 			require.EqualValues(t, tc.input, result.InputTokens)
+			if tc.name == "uncached" {
+				require.Nil(t, result.CacheReadTokens)
+			} else {
+				require.Equal(t, probeTimingPtr(gjson.Get(tc.usage, "cache_read_input_tokens").Int()), result.CacheReadTokens)
+				require.Equal(t, &tc.input, result.CacheInputTokens)
+			}
 			require.EqualValues(t, 1, result.OutputTokens)
 			require.EqualValues(t, 1, gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
 			require.Equal(t, "claude-haiku-4-5", gjson.GetBytes(upstream.lastBody, "model").String())
@@ -110,11 +127,18 @@ func TestChannelMonitorV3ProbeRejectsMappedMediaBeforeSending(t *testing.T) {
 
 func TestChannelMonitorV3ProbeDomesticTextProvidersUseNativeChatForwarding(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, tc := range []struct{ platform, model string }{
-		{PlatformDeepseek, "deepseek-chat"}, {PlatformKimi, "kimi-k2.5"}, {PlatformZhipu, "glm-5"}, {PlatformMiniMax, "MiniMax-M2.7"},
+	for _, tc := range []struct {
+		platform, model, cache string
+		read                   *int64
+	}{
+		{PlatformDeepseek, "deepseek-chat", `,"prompt_cache_hit_tokens":8`, probeTimingPtr(8)},
+		{PlatformKimi, "kimi-k2.5", `,"prompt_tokens_details":{"cached_tokens":8}`, probeTimingPtr(8)},
+		{PlatformZhipu, "glm-5", `,"input_tokens_details":{"cached_tokens":8}`, probeTimingPtr(8)},
+		{PlatformMiniMax, "MiniMax-M2.7", `,"prompt_tokens_details":{"cached_tokens":0}`, probeTimingPtr(0)},
+		{PlatformMiniMax, "MiniMax-M2.7", "", nil},
 	} {
 		t.Run(tc.platform, func(t *testing.T) {
-			stream := "data: {\"id\":\"chat_probe\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"1\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1,\"total_tokens\":10}}\n\ndata: [DONE]\n\n"
+			stream := "data: {\"id\":\"chat_probe\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"1\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1,\"total_tokens\":10" + tc.cache + "}}\n\ndata: [DONE]\n\n"
 			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
 			cfg := &config.Config{}
 			cfg.Gateway.MinOutputTokens = 16
@@ -126,6 +150,10 @@ func TestChannelMonitorV3ProbeDomesticTextProvidersUseNativeChatForwarding(t *te
 			require.Equal(t, tc.model, gjson.GetBytes(upstream.lastBody, "model").String())
 			require.EqualValues(t, 9, out.InputTokens)
 			require.EqualValues(t, 1, out.OutputTokens)
+			require.Equal(t, tc.read, out.CacheReadTokens)
+			if tc.read != nil {
+				require.Equal(t, probeTimingPtr(9), out.CacheInputTokens)
+			}
 		})
 	}
 }
@@ -146,6 +174,9 @@ func TestChannelMonitorV3ProbeWorkBuddyReasoningBudgetIsAvailable(t *testing.T) 
 	require.Equal(t, "success", out.Outcome)
 	require.EqualValues(t, 6369, out.InputTokens)
 	require.EqualValues(t, 16, out.OutputTokens)
+	require.NotNil(t, out.CacheReadTokens)
+	require.EqualValues(t, 6144, *out.CacheReadTokens, "scheduled checks must retain the returned cache receipt")
+	require.EqualValues(t, 6369, *out.CacheInputTokens)
 	require.Len(t, upstream.requests, 1)
 }
 
