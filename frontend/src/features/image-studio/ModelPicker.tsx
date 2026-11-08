@@ -12,7 +12,7 @@ function pickerModels(models: readonly BatchImageModel[]) {
   return models.filter(model => {
     if (!['gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'].includes(model.id)) return true
     const stable = models.find(candidate => candidate.provider === model.provider && candidate.id === model.id.replace(/-preview$/, ''))
-    return !stable?.capabilities || !stable.prices || JSON.stringify(stable.capabilities) !== JSON.stringify(model.capabilities) || JSON.stringify(stable.prices) !== JSON.stringify(model.prices)
+    return !stable?.prices || JSON.stringify(stable.capabilities ?? null) !== JSON.stringify(model.capabilities ?? null) || JSON.stringify(stable.prices) !== JSON.stringify(model.prices)
   })
 }
 export function modelPrice(model: BatchImageModel | undefined, size: string, count = 1): string {

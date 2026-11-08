@@ -55,6 +55,11 @@ different capabilities/prices and a preview without its stable counterpart remai
 visible. Raw catalogue IDs, historical task IDs and continuation routing remain
 unchanged.
 
+The legacy Gemini catalogue omits capabilities on both members of these pairs.
+Equal absence is the same advertised default contract and may collapse when the
+verified pair's quotes match. A capability on only one member remains a real
+difference. This does not invent size/reference capabilities for legacy models.
+
 ## Gallery design and references
 
 The actual reference page was observed and captured on November 9. Its useful
