@@ -173,6 +173,9 @@ RUN addgroup -g 1000 sub2api && \
 WORKDIR /app
 
 COPY --from=image-bridge-builder /opt/sub2-image-bridge /opt/sub2-image-bridge
+# Host opt-in uses this entry point only on images that understand native CNY
+# model cards. Older rollback images lack it and keep Wan/Seedream unavailable.
+RUN ln -s python /opt/sub2-image-bridge/.venv/bin/python-native-tariffs-v1
 # Retain the adopted UI's attribution alongside the installed bridge provenance.
 COPY frontend/src/features/image-studio/upstream/LICENSE /app/licenses/image-studio/LICENSE
 
@@ -188,7 +191,7 @@ assert sys.version_info >= (3, 11)
 assert requests.__version__ == "2.34.2"
 for provider in ("wan", "seedream"):
     result = subprocess.run(
-        [sys.executable, "-m", "sub2_image_bridge"],
+        ["/opt/sub2-image-bridge/.venv/bin/python-native-tariffs-v1", "-m", "sub2_image_bridge"],
         input=json.dumps({"provider": provider, "operation": "capabilities"}),
         text=True, capture_output=True, check=True, timeout=10,
     )

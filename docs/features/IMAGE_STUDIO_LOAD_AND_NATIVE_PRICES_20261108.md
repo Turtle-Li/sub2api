@@ -80,7 +80,7 @@ account concurrency and no replay after an uncertain submit. The native Python
 runtime is already packaged; Go invokes its Python with `-m sub2_image_bridge`.
 The executable setting defaults empty in code. Explicit host activation sets
 `batch_image.python_bridge_executable` to
-`/opt/sub2-image-bridge/.venv/bin/python` in the existing protected data-volume
+`/opt/sub2-image-bridge/.venv/bin/python-native-tariffs-v1` in the protected data-volume
 `config.yaml`, preserving every other YAML value and its owner/mode.
 
 Only the four active, exact VSO provider configurations are read. Their secrets
@@ -101,6 +101,14 @@ old connection drains and compatible current rollback images. Rollback can
 unbind only the newly added accounts and restore only changed group/image-card
 settings; retain jobs, provider receipts, financial rows and all other channels.
 Clear the explicit bridge activation before intentionally disabling the runtime.
+
+The tariff-aware Python entry point exists only in images containing this
+pricing contract. An older rollback image cannot execute the configured path,
+so Wan/Seedream fail closed instead of falling back to Muse's group default.
+Muse's legacy group default remains0.10 and compatible. Do not replace this
+versioned opt-in with the unversioned Python path while native CNY cards are live.
+Both native capability operations run through this exact entry point in the
+Docker build, as UID1000 with networking disabled.
 
 ## Verification before release
 
