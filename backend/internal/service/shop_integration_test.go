@@ -88,6 +88,12 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 		_, err = db.ExecContext(ctx, string(skuMigration))
 		require.NoError(t, err)
 	}
+	deliveryMigration, err := migrations.FS.ReadFile("275_shop_delivery_config.sql")
+	require.NoError(t, err)
+	for range 2 {
+		_, err = db.ExecContext(ctx, string(deliveryMigration))
+		require.NoError(t, err)
+	}
 	_, err = db.ExecContext(ctx, "CREATE TABLE unified_payment_refund_attempts(order_id BIGINT,needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE); CREATE TABLE unified_payment_refund_events(order_id BIGINT,action TEXT NOT NULL)")
 	require.NoError(t, err)
 	u := createPaymentInvoicePostgresUser(t, ctx, client)
@@ -96,7 +102,7 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 	s.email = mail
 	s.feishu = shopPGFeishu{}
 	t.Run("configured SKU JSONB persistence snapshot and revision lock", func(t *testing.T) {
-		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG SKU", Enabled: true, FulfillmentMode: ShopAccountDelivery, DefaultSKUID: "week", SKUs: []ShopSKU{
+		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG SKU", Enabled: true, FulfillmentMode: ShopAccountDelivery, DeliveryConfig: &ShopDeliveryConfig{IndividualCopy: true}, DefaultSKUID: "week", SKUs: []ShopSKU{
 			{ID: "day", Attributes: map[string]string{"周期": "日卡"}, Price: 9.9, DurationValue: 1, DurationUnit: "day", Enabled: true},
 			{ID: "week", Attributes: map[string]string{"周期": "周卡"}, Price: 49.9, DurationValue: 7, DurationUnit: "day", Enabled: true},
 		}})
@@ -104,6 +110,7 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 		loaded, err := s.Product(ctx, p.ID, true)
 		require.NoError(t, err)
 		require.Equal(t, p.SKUs, loaded.SKUs)
+		require.Equal(t, &ShopDeliveryConfig{IndividualCopy: true}, loaded.DeliveryConfig)
 		selected, err := selectShopSKU(*loaded, ShopSKUSelection{ID: "week"})
 		require.NoError(t, err)
 		tx, err := client.Tx(ctx)
@@ -119,10 +126,15 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 		require.Len(t, frozen.SKUs, 1)
 		require.Equal(t, 49.9, frozen.Price)
 		loaded.SKUs[1].Price = 59.9
+		loaded.DeliveryConfig = nil
 		_, err = s.SaveProduct(ctx, loaded.ID, *loaded)
 		require.NoError(t, err)
 		require.Error(t, revalidateShopProductTx(ctx, client, &selected))
 		require.Equal(t, 49.9, frozen.Price)
+		require.Equal(t, &ShopDeliveryConfig{IndividualCopy: true}, frozen.DeliveryConfig)
+		current, err := s.Product(ctx, loaded.ID, true)
+		require.NoError(t, err)
+		require.Nil(t, current.DeliveryConfig)
 	})
 	makeOrder := func(mode string) (*dbent.PaymentOrder, *ShopOrderDetail) {
 		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG 商品", Price: 108, Enabled: true, FulfillmentMode: mode})

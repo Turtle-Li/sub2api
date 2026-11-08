@@ -108,7 +108,7 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
         <div v-if="error" role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">{{ error }}</div>
         <div v-if="message" role="status" aria-live="polite" class="mb-4 rounded-lg border border-primary-200 bg-primary-50 p-4 text-sm text-primary-900 dark:border-primary-900 dark:bg-primary-950/40 dark:text-primary-100">{{ message }}</div>
 
-        <div class="mb-5"><ShopOrderSummary :order="order" :show-guide="false" :show-notification="false" /></div>
+        <div class="mb-5"><ShopOrderSummary :order="order" :show-notification="false" /></div>
 
         <div class="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
           <div class="min-w-0 space-y-5">

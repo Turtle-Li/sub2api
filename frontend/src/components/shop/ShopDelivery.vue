@@ -2,14 +2,15 @@
 import { computed, ref, watch } from 'vue'
 import { parseShopAccountDelivery } from '@/utils/shopAccountDelivery'
 
-const props = defineProps<{ content: string; apiKey?: boolean }>()
+const props = defineProps<{ content: string; apiKey?: boolean; individualCopy?: boolean }>()
 const shown = ref(false)
 const copied = ref('')
 const error = ref('')
-const credentials = computed(() => props.apiKey ? null : parseShopAccountDelivery(props.content))
+const separateCopy = computed(() => props.individualCopy === true && !props.apiKey)
+const credentials = computed(() => separateCopy.value ? parseShopAccountDelivery(props.content) : null)
 const lines = computed(() => props.content.split('\n').filter(line => line.trim()))
 let copyAttempt = 0
-watch(() => [props.content, props.apiKey] as const, () => {
+watch(() => [props.content, props.apiKey, props.individualCopy] as const, () => {
   copyAttempt++
   shown.value = false
   copied.value = ''
@@ -28,17 +29,20 @@ async function copy(key: string, value: string) {
 }
 </script>
 <template>
-  <section class="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6" aria-labelledby="shop-delivery-title">
-    <h2 id="shop-delivery-title" class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ apiKey ? 'API Key 已交付' : '账号已交付' }}</h2>
-    <div class="mt-4 flex flex-wrap gap-2">
-      <button type="button" class="btn btn-primary min-h-11" :disabled="!content" :aria-expanded="shown" @click="shown = !shown">
-        {{ shown ? '隐藏交付内容' : '显示交付内容' }}
-      </button>
-      <button v-if="!credentials" type="button" class="btn btn-secondary min-h-11" :disabled="!content" @click="copy('raw', content)">
-        {{ copied === 'raw' ? '已复制' : '复制完整原文' }}
-      </button>
+  <section class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900 sm:p-5" aria-labelledby="shop-delivery-title">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <h2 id="shop-delivery-title" class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ apiKey ? 'API Key 已交付' : '账号已交付' }}</h2>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-primary-700 px-4 text-sm font-medium text-white hover:bg-primary-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300" :disabled="!content" :aria-expanded="shown" aria-controls="shop-delivery-content" @click="shown = !shown">
+          {{ shown ? '隐藏交付内容' : '显示交付内容' }}
+        </button>
+        <button v-if="!credentials" type="button" class="btn btn-secondary min-h-11" :disabled="!content" @click="copy('raw', content)">
+          {{ copied === 'raw' ? '已复制' : '复制完整原文' }}
+        </button>
+      </div>
     </div>
 
+    <div id="shop-delivery-content">
     <p v-if="!content" class="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200" role="alert">订单已标记交付，但未读取到交付内容，请联系站点客服核查。</p>
     <dl v-else-if="credentials" class="mt-5 divide-y divide-gray-200 rounded-lg border border-gray-200 px-4 dark:divide-gray-700 dark:border-gray-700" aria-label="账号与密码">
       <div v-for="field in (['account', 'password'] as const)" :key="field" class="flex flex-wrap items-center gap-x-4 gap-y-2 py-4">
@@ -53,8 +57,8 @@ async function copy(key: string, value: string) {
       </div>
     </dl>
     <template v-else-if="shown">
-      <pre class="mt-5 max-w-full whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-gray-50 p-4 font-mono text-sm leading-6 text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">{{ content }}</pre>
-      <div class="mt-5 border-t border-gray-200 pt-5 dark:border-gray-800">
+      <pre class="mt-4 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] rounded-lg border border-gray-200 bg-gray-50 p-4 font-mono text-sm leading-6 text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">{{ content }}</pre>
+      <div v-if="separateCopy" class="mt-5 border-t border-gray-200 pt-5 dark:border-gray-800">
         <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">逐项复制</h3>
         <ol class="mt-3 space-y-2">
           <li v-for="(line, index) in lines" :key="index" class="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
@@ -70,5 +74,6 @@ async function copy(key: string, value: string) {
     </div>
     <span class="sr-only" role="status" aria-live="polite">{{ copied ? '已复制' : '' }}</span>
     <p v-if="error" class="mt-4 text-sm text-red-700 dark:text-red-300" role="alert">{{ error }}</p>
+    </div>
   </section>
 </template>

@@ -7,6 +7,9 @@
   references, migration 274 and the paired DeepSeek receiver protocol. Preserve
   historical snapshots and version-zero binding digests. Configured checkouts
   require a server-resolved SKU ID; prices and entitlements come from the catalog.
+- For order delivery layout, inline guides and manual account-copy options, also
+  read `docs/features/SHOP_ORDER_DELIVERY_PRESENTATION_20261108.md`. Individual
+  copy is explicit, default-off and purchase-snapshotted; automatic keys use raw copy.
   This is live with receiver guard.5.3 and app `fafcdfb1a`; product3 has saved
   SKUs. Recovery must understand explicit SKU bindings and retain all data.
   Both automatic recovery slots now use that compatible image; never promote

@@ -1852,6 +1852,7 @@ var (
 		{Name: "guide_key", Type: field.TypeString, Size: 64, Default: ""},
 		{Name: "payment_actions", Type: field.TypeJSON, Nullable: true},
 		{Name: "sku_config", Type: field.TypeJSON, Nullable: true},
+		{Name: "delivery_config", Type: field.TypeJSON, Nullable: true},
 		{Name: "enabled", Type: field.TypeBool, Default: false},
 		{Name: "sort_order", Type: field.TypeInt, Default: 0},
 		{Name: "revision", Type: field.TypeInt, Default: 1},
@@ -1867,7 +1868,7 @@ var (
 			{
 				Name:    "shopproduct_enabled_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{ShopProductsColumns[15], ShopProductsColumns[16]},
+				Columns: []*schema.Column{ShopProductsColumns[16], ShopProductsColumns[17]},
 			},
 		},
 	}

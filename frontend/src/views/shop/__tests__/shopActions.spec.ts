@@ -115,6 +115,31 @@ describe('buyer automatic delivery updates', () => {
 })
 
 describe('payment action administration', () => {
+  it('retains an explicitly enabled manual account-copy option', async () => {
+    const wrapper = mount(ShopProductEditor, { props: { product: { ...product, automatic_fulfillment: false, delivery_config: { individual_copy: true } }, busy: false } })
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ delivery_config: { individual_copy: true }, payment_actions: [] })
+  })
+  it.each(['topup', 'automatic'])('clears manual account-copy options when switching to %s', async mode => {
+    const wrapper = mount(ShopProductEditor, { props: { product: { ...product, automatic_fulfillment: false, delivery_config: { individual_copy: true } }, busy: false, integrations: [integration] } })
+    await wrapper.get('#product-editor-delivery').trigger('click')
+    if (mode === 'topup') await wrapper.get('#fulfillment-mode').setValue('session_topup')
+    else {
+      await wrapper.get('input[value="automatic"]').setValue()
+      await wrapper.get('#payment-action').setValue('license@2')
+    }
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[0]?.[0]).toHaveProperty('delivery_config', undefined)
+    expect(wrapper.find('#individual-copy').exists()).toBe(false)
+  })
+  it.each([false, true])('shows individual-copy controls only when a manual purchase opted in: %s', async individualCopy => {
+    api.order.mockResolvedValue({ data: { ...order(), product: { ...product, automatic_fulfillment: false, delivery_config: { individual_copy: individualCopy } }, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', delivery_kind: 'text', delivery_content: 'synthetic@example.invalid----synthetic-password', automation: undefined } })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    expect(wrapper.text().includes('复制账号')).toBe(individualCopy)
+    expect(wrapper.text().includes('复制密码')).toBe(individualCopy)
+    expect(wrapper.text().includes('复制完整原文')).toBe(!individualCopy)
+  })
   it('binds another product to a registered version without changing its price or duration', async () => {
     const wrapper = mount(ShopProductEditor, { props: { product, busy: false, integrations: [integration] } })
     await wrapper.get('#product-editor-delivery').trigger('click')

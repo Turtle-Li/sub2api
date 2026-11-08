@@ -189,11 +189,11 @@ func (s *ShopService) sendNotification(ctx context.Context, job *dbent.ShopNotif
 		if err != nil {
 			return err
 		}
-		body += "<h3>交付信息</h3><pre style=\"white-space:pre-wrap;overflow-wrap:anywhere\">" + html.EscapeString(content) + "</pre>"
+		body += "<h3>交付信息</h3><pre style=\"white-space:pre-wrap;overflow-wrap:anywhere\">" + html.EscapeString(shopDeliveryContent(p, content)) + "</pre>"
 	}
 	body += "<p><a href=\"" + html.EscapeString(s.frontendURL(ctx, fmt.Sprintf("/shop/orders/%d", o.ID))) + "\">查看订单</a></p>"
 	if p.GuideKey != "" {
-		body += "<p><a href=\"" + html.EscapeString(s.frontendURL(ctx, "/shop/help/"+p.GuideKey)) + "\">查看使用文档</a></p>"
+		body += "<p><a href=\"" + html.EscapeString(s.frontendURL(ctx, fmt.Sprintf("/shop/orders/%d#usage-guide", o.ID))) + "\">查看使用指南</a></p>"
 	}
 	return s.email.SendEmail(ctx, o.UserEmail, subject, body)
 }

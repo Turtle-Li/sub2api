@@ -2329,25 +2329,25 @@ func init() {
 	// shopproduct.GuideKeyValidator is a validator for the "guide_key" field. It is called by the builders before save.
 	shopproduct.GuideKeyValidator = shopproductDescGuideKey.Validators[0].(func(string) error)
 	// shopproductDescEnabled is the schema descriptor for enabled field.
-	shopproductDescEnabled := shopproductFields[14].Descriptor()
+	shopproductDescEnabled := shopproductFields[15].Descriptor()
 	// shopproduct.DefaultEnabled holds the default value on creation for the enabled field.
 	shopproduct.DefaultEnabled = shopproductDescEnabled.Default.(bool)
 	// shopproductDescSortOrder is the schema descriptor for sort_order field.
-	shopproductDescSortOrder := shopproductFields[15].Descriptor()
+	shopproductDescSortOrder := shopproductFields[16].Descriptor()
 	// shopproduct.DefaultSortOrder holds the default value on creation for the sort_order field.
 	shopproduct.DefaultSortOrder = shopproductDescSortOrder.Default.(int)
 	// shopproductDescRevision is the schema descriptor for revision field.
-	shopproductDescRevision := shopproductFields[16].Descriptor()
+	shopproductDescRevision := shopproductFields[17].Descriptor()
 	// shopproduct.DefaultRevision holds the default value on creation for the revision field.
 	shopproduct.DefaultRevision = shopproductDescRevision.Default.(int)
 	// shopproduct.RevisionValidator is a validator for the "revision" field. It is called by the builders before save.
 	shopproduct.RevisionValidator = shopproductDescRevision.Validators[0].(func(int) error)
 	// shopproductDescCreatedAt is the schema descriptor for created_at field.
-	shopproductDescCreatedAt := shopproductFields[17].Descriptor()
+	shopproductDescCreatedAt := shopproductFields[18].Descriptor()
 	// shopproduct.DefaultCreatedAt holds the default value on creation for the created_at field.
 	shopproduct.DefaultCreatedAt = shopproductDescCreatedAt.Default.(func() time.Time)
 	// shopproductDescUpdatedAt is the schema descriptor for updated_at field.
-	shopproductDescUpdatedAt := shopproductFields[18].Descriptor()
+	shopproductDescUpdatedAt := shopproductFields[19].Descriptor()
 	// shopproduct.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	shopproduct.DefaultUpdatedAt = shopproductDescUpdatedAt.Default.(func() time.Time)
 	// shopproduct.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

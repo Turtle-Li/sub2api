@@ -11,6 +11,7 @@ const draft = reactive(defaults())
 const tab = ref('basic')
 const tabs = [{ value: 'basic', label: '基本信息' }, { value: 'sku', label: '规格与价格' }, { value: 'delivery', label: '交付设置' }]
 const delivery = ref<'manual' | 'automatic'>('manual')
+const individualCopy = ref(false)
 const paramsText = ref('{}')
 const error = ref('')
 const native = computed(() => delivery.value === 'automatic' && draft.payment_actions?.[0]?.adapter === 'newapi.daypass.v1')
@@ -30,9 +31,13 @@ watch(() => props.product, product => {
   draft.skus = source ? editableShopSKUs(source) : [newShopSKU(draft)]
   draft.default_sku_id = source?.default_sku_id || draft.skus[0].id
   delivery.value = source?.payment_actions?.length ? 'automatic' : 'manual'
+  individualCopy.value = delivery.value === 'manual' && draft.fulfillment_mode === 'account_delivery' && source?.delivery_config?.individual_copy === true
   paramsText.value = JSON.stringify(source?.payment_actions?.[0]?.params ?? {}, null, 2)
   error.value = ''; tab.value = 'basic'
 }, { immediate: true })
+watch(() => [delivery.value, draft.fulfillment_mode], () => {
+  if (delivery.value !== 'manual' || draft.fulfillment_mode !== 'account_delivery') individualCopy.value = false
+}, { flush: 'sync' })
 function invalid(message: string, panel: string) { error.value = message; tab.value = panel }
 function save() {
   error.value = ''
@@ -58,7 +63,8 @@ function save() {
     fulfillment_mode: delivery.value === 'automatic' ? 'account_delivery' : draft.fulfillment_mode,
     input_format: draft.input_format, input_url: draft.input_url, input_instructions: draft.input_instructions,
     guide_key: draft.guide_key, enabled: draft.enabled, sort_order: draft.sort_order, revision: draft.revision,
-    payment_actions: delivery.value === 'automatic' ? draft.payment_actions ?? [] : []
+    payment_actions: delivery.value === 'automatic' ? draft.payment_actions ?? [] : [],
+    delivery_config: delivery.value === 'manual' && draft.fulfillment_mode === 'account_delivery' && individualCopy.value ? { individual_copy: true } : undefined
   })
 }
 </script>
@@ -91,7 +97,13 @@ function save() {
             <div class="grid gap-4 sm:grid-cols-2"><label class="text-sm font-medium">资料格式<select id="input-format" v-model="draft.input_format" class="input mt-1.5"><option value="session_json">Session JSON</option><option value="text">原始文本</option></select></label><label class="text-sm font-medium">资料来源链接<input id="input-url" v-model="draft.input_url" type="url" class="input mt-1.5" placeholder="https://chatgpt.com/api/auth/session" /></label></div>
             <label class="block text-sm font-medium">买家提交说明<textarea id="input-instructions" v-model="draft.input_instructions" rows="4" maxlength="5000" class="input mt-1.5" placeholder="说明买家需提交哪些资料，以及如何获取"></textarea></label>
           </template>
-          <p v-else class="rounded-lg bg-gray-50 p-4 text-sm leading-6 text-gray-500 dark:bg-dark-800">付款后进入人工处理队列。管理员处理订单时填写账号与使用说明，买家在订单中查看交付内容。</p>
+          <div v-else class="space-y-4">
+            <p class="rounded-lg bg-gray-50 p-4 text-sm leading-6 text-gray-500 dark:bg-dark-800">付款后进入人工处理队列。管理员处理订单时填写账号与使用说明，买家在订单中查看交付内容。</p>
+            <label class="flex min-h-11 items-start gap-3 text-sm">
+              <input id="individual-copy" v-model="individualCopy" type="checkbox" class="mt-1 h-4 w-4 rounded" />
+              <span><span class="block font-medium">开启逐项复制</span><span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">默认仅复制完整内容。开启后，成品号支持分别复制账号、密码；其他格式按行复制。仅对新订单生效。</span></span>
+            </label>
+          </div>
         </template>
         <template v-else>
           <label class="block text-sm font-medium">自动交付服务<select id="payment-action" v-model="selectedIntegration" class="input mt-1.5"><option value="">请选择服务</option><option v-if="missingIntegration" :value="selectedIntegration">{{ selectedIntegration }}（当前不可用）</option><option v-for="integration in integrations" :key="`${integration.id}@${integration.version}`" :value="`${integration.id}@${integration.version}`" :disabled="!integration.enabled">{{ integration.adapter === 'newapi.daypass.v1' ? 'DeepSeek API Key' : '链接 / 回调交付' }} · {{ integration.id }} v{{ integration.version }}{{ integration.enabled ? '' : '（停用）' }}</option></select></label>

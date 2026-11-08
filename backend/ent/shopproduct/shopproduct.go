@@ -41,6 +41,8 @@ const (
 	FieldPaymentActions = "payment_actions"
 	// FieldSkuConfig holds the string denoting the sku_config field in the database.
 	FieldSkuConfig = "sku_config"
+	// FieldDeliveryConfig holds the string denoting the delivery_config field in the database.
+	FieldDeliveryConfig = "delivery_config"
 	// FieldEnabled holds the string denoting the enabled field in the database.
 	FieldEnabled = "enabled"
 	// FieldSortOrder holds the string denoting the sort_order field in the database.
@@ -72,6 +74,7 @@ var Columns = []string{
 	FieldGuideKey,
 	FieldPaymentActions,
 	FieldSkuConfig,
+	FieldDeliveryConfig,
 	FieldEnabled,
 	FieldSortOrder,
 	FieldRevision,

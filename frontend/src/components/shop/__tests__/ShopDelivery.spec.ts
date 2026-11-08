@@ -6,7 +6,7 @@ enableAutoUnmount(afterEach)
 afterEach(() => vi.unstubAllGlobals())
 describe('structured account delivery', () => {
   it('preserves API Key delivery as generic content even when it includes a delimiter', () => {
-    const wrapper = mount(ShopDelivery, { props: { content: 'prefix----synthetic-api-key', apiKey: true } })
+    const wrapper = mount(ShopDelivery, { props: { content: 'prefix----synthetic-api-key', apiKey: true, individualCopy: true } })
     expect(wrapper.text()).toContain('API Key 已交付')
     expect(wrapper.text()).not.toContain('复制账号')
     expect(wrapper.text()).not.toContain('复制密码')
@@ -17,7 +17,7 @@ describe('structured account delivery', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const content = 'buyer@example.invalid---- pass----word \r\n'
-    const wrapper = mount(ShopDelivery, { props: { content } })
+    const wrapper = mount(ShopDelivery, { props: { content, individualCopy: true } })
     expect(wrapper.text()).not.toContain('buyer@example.invalid')
     expect(wrapper.text()).not.toContain('pass----word')
     expect(wrapper.text()).not.toContain('复制完整原文')
@@ -39,7 +39,7 @@ describe('structured account delivery', () => {
     expect(wrapper.text()).not.toContain('next-password')
     expect(wrapper.text()).not.toContain('已复制')
   })
-  it('retains generic raw copy for unsupported multiline delivery', async () => {
+  it('keeps multiline delivery as one block when individual copy is off', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const content = '账号：one\n密码：two'
@@ -49,14 +49,35 @@ describe('structured account delivery', () => {
     await flushPromises()
     expect(writeText).toHaveBeenLastCalledWith(content)
     await wrapper.findAll('button')[0]!.trigger('click')
-    await wrapper.findAll('button').find(button => button.text() === '复制第2行')!.trigger('click')
+    expect(wrapper.find('pre').text()).toBe(content)
+    expect(wrapper.text()).not.toContain('逐项复制')
+    expect(wrapper.text()).not.toContain('复制第2行')
+  })
+  it('does not infer account controls from a delimiter without an explicit opt-in', async () => {
+    const wrapper = mount(ShopDelivery, { props: { content: 'one----two' } })
+    expect(wrapper.text()).toContain('复制完整原文')
+    expect(wrapper.text()).not.toContain('复制账号')
+    expect(wrapper.text()).not.toContain('复制密码')
+  })
+  it('offers per-line copy only for opted-in manual account content', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const wrapper = mount(ShopDelivery, { props: { content: '账号：one\n密码：two', individualCopy: true } })
+    await wrapper.get('button').trigger('click')
+    const secondLine = wrapper.findAll('button').find(button => button.text() === '复制第2行')
+    expect(secondLine).toBeDefined()
+    await secondLine?.trigger('click')
     await flushPromises()
     expect(writeText).toHaveBeenLastCalledWith('密码：two')
+    await wrapper.setProps({ apiKey: true })
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.text()).not.toContain('逐项复制')
+    expect(wrapper.text()).not.toContain('复制第2行')
   })
   it('does not show late clipboard success on another order', async () => {
     let finish!: () => void
     vi.stubGlobal('navigator', { clipboard: { writeText: () => new Promise<void>(resolve => { finish = resolve }) } })
-    const wrapper = mount(ShopDelivery, { props: { content: 'one----two' } })
+    const wrapper = mount(ShopDelivery, { props: { content: 'one----two', individualCopy: true } })
     await wrapper.findAll('button').find(button => button.text() === '复制密码')!.trigger('click')
     await wrapper.setProps({ content: 'three----four' })
     finish()

@@ -23,7 +23,11 @@ func shopProductDTO(p *dbent.ShopProduct) ShopProduct {
 	if len(p.SkuConfig) > 0 && json.Unmarshal(p.SkuConfig, &catalog) != nil {
 		catalog.SKUs = []ShopSKU{{ID: "invalid-catalog"}}
 	}
-	return ShopProduct{ID: p.ID, Name: p.Name, Category: p.Category, Summary: p.Summary, Description: p.Description, Price: float64(p.PriceFen) / 100, Currency: "CNY", DurationValue: p.DurationValue, DurationUnit: p.DurationUnit, FulfillmentMode: p.FulfillmentMode, InputFormat: p.InputFormat, InputURL: p.InputURL, InputInstructions: p.InputInstructions, GuideKey: p.GuideKey, Enabled: p.Enabled, SortOrder: p.SortOrder, Revision: p.Revision, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, PaymentActions: actions, AutomaticFulfillment: len(actions) > 0, SKUs: catalog.SKUs, DefaultSKUID: catalog.DefaultSKUID}
+	var delivery *ShopDeliveryConfig
+	if len(p.DeliveryConfig) > 0 && json.Unmarshal(p.DeliveryConfig, &delivery) != nil {
+		delivery = nil
+	}
+	return ShopProduct{ID: p.ID, Name: p.Name, Category: p.Category, Summary: p.Summary, Description: p.Description, Price: float64(p.PriceFen) / 100, Currency: "CNY", DurationValue: p.DurationValue, DurationUnit: p.DurationUnit, FulfillmentMode: p.FulfillmentMode, InputFormat: p.InputFormat, InputURL: p.InputURL, InputInstructions: p.InputInstructions, GuideKey: p.GuideKey, Enabled: p.Enabled, SortOrder: p.SortOrder, Revision: p.Revision, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, PaymentActions: actions, AutomaticFulfillment: len(actions) > 0, SKUs: catalog.SKUs, DefaultSKUID: catalog.DefaultSKUID, DeliveryConfig: delivery}
 }
 
 func normalizeShopProduct(p *ShopProduct) (int64, error) {
@@ -114,6 +118,13 @@ func (s *ShopService) SaveProduct(ctx context.Context, id int64, p ShopProduct) 
 	if err := s.normalizePaymentActions(&p); err != nil {
 		return nil, err
 	}
+	if err := normalizeShopDeliveryConfig(&p); err != nil {
+		return nil, err
+	}
+	delivery, err := json.Marshal(p.DeliveryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("encode shop delivery configuration: %w", err)
+	}
 	actions, err := json.Marshal(p.PaymentActions)
 	if err != nil {
 		return nil, infraerrors.BadRequest("SHOP_ACTION_PARAMS_INVALID", "动作参数无效")
@@ -123,14 +134,14 @@ func (s *ShopService) SaveProduct(ctx context.Context, id int64, p ShopProduct) 
 		return nil, infraerrors.BadRequest("SHOP_SKU_INVALID", "SKU 配置无效")
 	}
 	if id == 0 {
-		row, err := s.client.ShopProduct.Create().SetName(p.Name).SetCategory(p.Category).SetSummary(p.Summary).SetDescription(p.Description).SetPriceFen(fen).SetDurationValue(p.DurationValue).SetDurationUnit(p.DurationUnit).SetFulfillmentMode(p.FulfillmentMode).SetInputFormat(p.InputFormat).SetInputURL(p.InputURL).SetInputInstructions(p.InputInstructions).SetGuideKey(p.GuideKey).SetPaymentActions(actions).SetSkuConfig(catalog).SetEnabled(p.Enabled).SetSortOrder(p.SortOrder).Save(ctx)
+		row, err := s.client.ShopProduct.Create().SetName(p.Name).SetCategory(p.Category).SetSummary(p.Summary).SetDescription(p.Description).SetPriceFen(fen).SetDurationValue(p.DurationValue).SetDurationUnit(p.DurationUnit).SetFulfillmentMode(p.FulfillmentMode).SetInputFormat(p.InputFormat).SetInputURL(p.InputURL).SetInputInstructions(p.InputInstructions).SetGuideKey(p.GuideKey).SetPaymentActions(actions).SetSkuConfig(catalog).SetDeliveryConfig(delivery).SetEnabled(p.Enabled).SetSortOrder(p.SortOrder).Save(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("create shop product: %w", err)
 		}
 		dto := shopProductDTO(row)
 		return &dto, nil
 	}
-	row, err := s.client.ShopProduct.UpdateOneID(id).Where(shopproduct.RevisionEQ(p.Revision)).SetName(p.Name).SetCategory(p.Category).SetSummary(p.Summary).SetDescription(p.Description).SetPriceFen(fen).SetDurationValue(p.DurationValue).SetDurationUnit(p.DurationUnit).SetFulfillmentMode(p.FulfillmentMode).SetInputFormat(p.InputFormat).SetInputURL(p.InputURL).SetInputInstructions(p.InputInstructions).SetGuideKey(p.GuideKey).SetPaymentActions(actions).SetSkuConfig(catalog).SetEnabled(p.Enabled).SetSortOrder(p.SortOrder).AddRevision(1).Save(ctx)
+	row, err := s.client.ShopProduct.UpdateOneID(id).Where(shopproduct.RevisionEQ(p.Revision)).SetName(p.Name).SetCategory(p.Category).SetSummary(p.Summary).SetDescription(p.Description).SetPriceFen(fen).SetDurationValue(p.DurationValue).SetDurationUnit(p.DurationUnit).SetFulfillmentMode(p.FulfillmentMode).SetInputFormat(p.InputFormat).SetInputURL(p.InputURL).SetInputInstructions(p.InputInstructions).SetGuideKey(p.GuideKey).SetPaymentActions(actions).SetSkuConfig(catalog).SetDeliveryConfig(delivery).SetEnabled(p.Enabled).SetSortOrder(p.SortOrder).AddRevision(1).Save(ctx)
 	if dbent.IsNotFound(err) {
 		return nil, shopConflict()
 	}

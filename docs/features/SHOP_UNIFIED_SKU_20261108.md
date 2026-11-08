@@ -99,6 +99,10 @@ detail，每订单唯一动作、原始 paid_at、接收端幂等授权与全部
 
 ## 验证与独立复核
 
+后续订单详情、人工成品号可选复制和内联指南契约见
+[`SHOP_ORDER_DELIVERY_PRESENTATION_20261108.md`](SHOP_ORDER_DELIVERY_PRESENTATION_20261108.md)。
+人工 `delivery_config` 使用独立迁移275；不混入 SKU 身份或改写历史购买数据。
+
 | 范围 | 实际结果 |
 |---|---|
 | 已复现价格 Bug | 同一数据库保存非 6 元原生商品的测试修改前红灯、修改后通过；重载保持 9.9 / 49.9 |

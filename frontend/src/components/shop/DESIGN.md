@@ -131,6 +131,25 @@ Admin badges distinguish automatic/manual delivery and availability using text a
 
 Single/multiple SKU modes share the same fields. DeepSeek template loading remains secondary to editing prices. Delivery settings explicitly distinguish manual top-up/account fulfillment from service-driven automatic delivery. Technical JSON stays within advanced service parameters. Errors appear inside the form/dialog with alert semantics; save progress disables editing and updates the button label.
 
+### Order delivery and usage guide
+
+The order detail follows the owner-selected Gemini 4 composition: a compact summary,
+then the delivery controls, then the full existing usage guide on the same page.
+Order ID lives in the expandable order-information row. Delivery headings and actions
+share a wrapping row; card padding is 16px on phones and 20px from the small breakpoint.
+The primary reveal action uses solid primary-700 with white text in light mode and
+primary-400 with gray-950 text in dark mode. Copy and refresh retain shared secondary
+buttons. Controls stay at least 44px high. Raw delivery wraps long tokens and starts
+hidden; it is a single block for API Keys and ordinary manual delivery.
+
+Individual account/password or line copy requires an explicitly enabled option in
+manual finished-account delivery settings. It defaults off and follows the purchased
+snapshot. No guide choice, delimiter or line break enables this option. The standalone
+guide page and its navigation CTA are removed; the shared guide content retains its
+sections, local illustrations and FAQ directly below delivery. See the project feature
+record `docs/features/SHOP_ORDER_DELIVERY_PRESENTATION_20261108.md` for data and route
+compatibility, actual Gemini model receipt and validation scope.
+
 ## Do's and Don'ts
 
 ### Do:

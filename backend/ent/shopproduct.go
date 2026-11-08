@@ -47,6 +47,8 @@ type ShopProduct struct {
 	PaymentActions jsontext.Value `json:"payment_actions,omitempty"`
 	// SkuConfig holds the value of the "sku_config" field.
 	SkuConfig jsontext.Value `json:"sku_config,omitempty"`
+	// DeliveryConfig holds the value of the "delivery_config" field.
+	DeliveryConfig jsontext.Value `json:"delivery_config,omitempty"`
 	// Enabled holds the value of the "enabled" field.
 	Enabled bool `json:"enabled,omitempty"`
 	// SortOrder holds the value of the "sort_order" field.
@@ -65,7 +67,7 @@ func (*ShopProduct) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case shopproduct.FieldPaymentActions, shopproduct.FieldSkuConfig:
+		case shopproduct.FieldPaymentActions, shopproduct.FieldSkuConfig, shopproduct.FieldDeliveryConfig:
 			values[i] = new([]byte)
 		case shopproduct.FieldEnabled:
 			values[i] = new(sql.NullBool)
@@ -184,6 +186,14 @@ func (_m *ShopProduct) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field sku_config: %w", err)
 				}
 			}
+		case shopproduct.FieldDeliveryConfig:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field delivery_config", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.DeliveryConfig); err != nil {
+					return fmt.Errorf("unmarshal field delivery_config: %w", err)
+				}
+			}
 		case shopproduct.FieldEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field enabled", values[i])
@@ -291,6 +301,9 @@ func (_m *ShopProduct) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("sku_config=")
 	builder.WriteString(fmt.Sprintf("%v", _m.SkuConfig))
+	builder.WriteString(", ")
+	builder.WriteString("delivery_config=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DeliveryConfig))
 	builder.WriteString(", ")
 	builder.WriteString("enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Enabled))

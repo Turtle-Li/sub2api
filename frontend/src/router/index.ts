@@ -13,6 +13,7 @@ import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { resolveRouteDocumentTitle } from './title'
+import { resolveShopGuideRedirect } from './shopGuideRedirect'
 
 /**
  * Route definitions with lazy loading
@@ -366,13 +367,13 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/shop/help/chatgpt-plus-account',
     name: 'ShopGuide',
-    component: () => import('@/views/shop/ShopGuideView.vue'),
+    redirect: to => resolveShopGuideRedirect(to.query),
     meta: { requiresAuth: true, requiresAdmin: false, title: '商城', requiresPayment: false }
   },
   {
     path: '/shop/help/deepseek-daypass',
     name: 'ShopDaypassGuide',
-    component: () => import('@/views/shop/ShopGuideView.vue'),
+    redirect: to => resolveShopGuideRedirect(to.query),
     meta: { requiresAuth: true, requiresAdmin: false, title: 'API 日卡使用指南', requiresPayment: false }
   },
   {

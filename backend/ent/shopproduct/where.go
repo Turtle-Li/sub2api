@@ -889,6 +889,16 @@ func SkuConfigNotNil() predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldNotNull(FieldSkuConfig))
 }
 
+// DeliveryConfigIsNil applies the IsNil predicate on the "delivery_config" field.
+func DeliveryConfigIsNil() predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIsNull(FieldDeliveryConfig))
+}
+
+// DeliveryConfigNotNil applies the NotNil predicate on the "delivery_config" field.
+func DeliveryConfigNotNil() predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotNull(FieldDeliveryConfig))
+}
+
 // EnabledEQ applies the EQ predicate on the "enabled" field.
 func EnabledEQ(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldEnabled, v))

@@ -7,7 +7,7 @@ import type { ShopProduct } from '@/types/shop'
 
 type GuideKey = Exclude<ShopProduct['guide_key'], ''>
 
-const props = defineProps<{ guideKey: GuideKey; embedded?: boolean }>()
+const props = defineProps<{ guideKey: GuideKey; embedded?: boolean; headingLevel?: 3 | 4 }>()
 const sources: Record<GuideKey, string> = {
   'chatgpt-plus-account': chatgptGuide,
   'deepseek-daypass': deepseekGuide,
@@ -16,7 +16,7 @@ const html = computed(() => {
   const source = sources[props.guideKey]
   if (typeof source !== 'string') return ''
   const markup = props.embedded
-    ? source.replace(/<(\/?)h([2-4])(?=[\s>])/g, (_tag, slash: string, level: string) => `<${slash}h${Number(level) + 2}`)
+    ? source.replace(/<(\/?)h([2-4])(?=[\s>])/g, (_tag, slash: string, level: string) => `<${slash}h${Number(level) + (props.headingLevel ?? 4) - 2}`)
     : source
   return DOMPurify.sanitize(markup)
 })
@@ -33,7 +33,7 @@ const html = computed(() => {
 }
 .inline-guide :deep(.guide-section) { @apply scroll-mt-24; }
 .inline-guide :deep(.guide-section + .guide-section) { @apply mt-4 border-t border-gray-200 pt-4 dark:border-gray-800; }
-.inline-guide :deep(h4) { @apply text-base font-semibold text-gray-900 dark:text-gray-100; }
+.inline-guide :deep(h3), .inline-guide :deep(h4) { @apply text-base font-semibold text-gray-900 dark:text-gray-100; }
 .inline-guide :deep(h5), .inline-guide :deep(h6) { @apply mt-3 font-semibold text-gray-900 dark:text-gray-100; }
 .inline-guide :deep(.guide-section-number) { @apply mr-2 text-primary-700 dark:text-primary-300; }
 .inline-guide :deep(p), .inline-guide :deep(ul), .inline-guide :deep(ol), .inline-guide :deep(dl) { @apply mt-2; }

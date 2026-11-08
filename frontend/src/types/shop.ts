@@ -33,6 +33,7 @@ export interface ShopSKU {
   enabled: boolean
 }
 export interface ShopProduct {
+  delivery_config?: { readonly individual_copy: boolean }
   skus?: ShopSKU[]
   default_sku_id?: string
   sku_id?: string

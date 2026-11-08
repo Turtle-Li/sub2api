@@ -248,6 +248,24 @@ func (_u *ShopProductUpdate) ClearSkuConfig() *ShopProductUpdate {
 	return _u
 }
 
+// SetDeliveryConfig sets the "delivery_config" field.
+func (_u *ShopProductUpdate) SetDeliveryConfig(v jsontext.Value) *ShopProductUpdate {
+	_u.mutation.SetDeliveryConfig(v)
+	return _u
+}
+
+// AppendDeliveryConfig appends value to the "delivery_config" field.
+func (_u *ShopProductUpdate) AppendDeliveryConfig(v jsontext.Value) *ShopProductUpdate {
+	_u.mutation.AppendDeliveryConfig(v)
+	return _u
+}
+
+// ClearDeliveryConfig clears the value of the "delivery_config" field.
+func (_u *ShopProductUpdate) ClearDeliveryConfig() *ShopProductUpdate {
+	_u.mutation.ClearDeliveryConfig()
+	return _u
+}
+
 // SetEnabled sets the "enabled" field.
 func (_u *ShopProductUpdate) SetEnabled(v bool) *ShopProductUpdate {
 	_u.mutation.SetEnabled(v)
@@ -486,6 +504,17 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.SkuConfigCleared() {
 		_spec.ClearField(shopproduct.FieldSkuConfig, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.DeliveryConfig(); ok {
+		_spec.SetField(shopproduct.FieldDeliveryConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedDeliveryConfig(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, shopproduct.FieldDeliveryConfig, value)
+		})
+	}
+	if _u.mutation.DeliveryConfigCleared() {
+		_spec.ClearField(shopproduct.FieldDeliveryConfig, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)
@@ -740,6 +769,24 @@ func (_u *ShopProductUpdateOne) AppendSkuConfig(v jsontext.Value) *ShopProductUp
 // ClearSkuConfig clears the value of the "sku_config" field.
 func (_u *ShopProductUpdateOne) ClearSkuConfig() *ShopProductUpdateOne {
 	_u.mutation.ClearSkuConfig()
+	return _u
+}
+
+// SetDeliveryConfig sets the "delivery_config" field.
+func (_u *ShopProductUpdateOne) SetDeliveryConfig(v jsontext.Value) *ShopProductUpdateOne {
+	_u.mutation.SetDeliveryConfig(v)
+	return _u
+}
+
+// AppendDeliveryConfig appends value to the "delivery_config" field.
+func (_u *ShopProductUpdateOne) AppendDeliveryConfig(v jsontext.Value) *ShopProductUpdateOne {
+	_u.mutation.AppendDeliveryConfig(v)
+	return _u
+}
+
+// ClearDeliveryConfig clears the value of the "delivery_config" field.
+func (_u *ShopProductUpdateOne) ClearDeliveryConfig() *ShopProductUpdateOne {
+	_u.mutation.ClearDeliveryConfig()
 	return _u
 }
 
@@ -1011,6 +1058,17 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 	}
 	if _u.mutation.SkuConfigCleared() {
 		_spec.ClearField(shopproduct.FieldSkuConfig, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.DeliveryConfig(); ok {
+		_spec.SetField(shopproduct.FieldDeliveryConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedDeliveryConfig(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, shopproduct.FieldDeliveryConfig, value)
+		})
+	}
+	if _u.mutation.DeliveryConfigCleared() {
+		_spec.ClearField(shopproduct.FieldDeliveryConfig, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)

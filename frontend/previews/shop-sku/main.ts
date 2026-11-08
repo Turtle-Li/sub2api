@@ -12,6 +12,7 @@ import AdminShopProductsView from '@/views/shop/AdminShopProductsView.vue'
 import ShopProductView from '@/views/shop/ShopProductView.vue'
 import ShopView from '@/views/shop/ShopView.vue'
 import ShopOrderView from '@/views/shop/ShopOrderView.vue'
+import { resolveShopGuideRedirect } from '@/router/shopGuideRedirect'
 import type { ShopOrderDetail, ShopProduct } from '@/types/shop'
 import '@/style.css'
 
@@ -39,15 +40,18 @@ apiClient.defaults.adapter = async config => {
     const id = Number(path.split('/').at(-1))
     const requests = (orderRequests.get(id) ?? 0) + 1
     orderRequests.set(id, requests)
-    const completed = requests >= 3
+    const manual = id === 8802 || id === 8803
+    const review = id === 8805
+    const completed = !review && (manual || requests >= 3)
+    const product = manual ? { ...products[2], automatic_fulfillment: false, delivery_config: id === 8802 ? { individual_copy: true } : undefined } : products[0]
     data = {
-      order_id: id, out_trade_no: `synthetic-${id}`, product: products[0], user_id: 1, pay_amount: 6, currency: 'CNY',
+      order_id: id, out_trade_no: `synthetic-${id}`, product, user_id: 1, pay_amount: product.price, currency: 'CNY',
       payment_status: completed ? 'COMPLETED' : 'PAID', fulfillment_status: completed ? 'COMPLETED' : 'PROCESSING',
       revision: completed ? 3 : 2, input_revision: 0, input_account: '', created_at: stamp, paid_at: stamp, status_note: '',
       email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: false, can_start: false,
       can_complete: false, can_reveal_input: false, delivery_kind: 'text',
-      delivery_content: completed ? 'DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com/v1\nAPI Key：sk-synthetic-preview-only\n有效期：1天（自付款起算）' : '',
-      automation: { status: completed ? 'SUCCEEDED' : 'RUNNING', result_kind: 'text' }
+      delivery_content: completed ? manual ? 'synthetic@example.invalid----synthetic-password' : 'DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com/v1\nAPI Key：sk-synthetic-preview-only\n有效期：1天（自付款起算）' : '',
+      automation: manual ? undefined : { status: review ? 'REVIEW_REQUIRED' : completed ? 'SUCCEEDED' : 'RUNNING', result_kind: 'text' }
     } satisfies ShopOrderDetail
   } else if (path.endsWith('action-integrations')) data = [{ id: 'newapi-domestic', version: 1, adapter: 'newapi.daypass.v1', enabled: true }, { id: 'license-service', version: 1, adapter: 'http.webhook.v1', enabled: true }]
   else if (path.includes('checkout-info')) data = { enabled: true, methods: { alipay: { available: true, currency: 'CNY', single_min: 0.01, single_max: 9999 }, wxpay: { available: true, currency: 'CNY', single_min: 0.01, single_max: 9999 } } }
@@ -63,6 +67,7 @@ const router = createRouter({ history: createWebHashHistory(), routes: [
   { path: '/shop', component: ShopView, meta: { title: '商城' } },
   { path: '/shop/products/:id', component: ShopProductView, meta: { title: '商品详情' } },
   { path: '/shop/orders/:id', component: ShopOrderView, meta: { title: '交付详情' } },
+  { path: '/shop/help/:guide', redirect: to => resolveShopGuideRedirect(to.query) },
   { path: '/:pathMatch(.*)*', redirect: '/admin/products' }
 ] })
 const app = createApp({ render: () => h(RouterView) })

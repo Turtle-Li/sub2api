@@ -78,6 +78,7 @@ func (s *ShopService) orderDTO(ctx context.Context, o *dbent.PaymentOrder, f *db
 		if err != nil {
 			return nil, err
 		}
+		d.DeliveryContent = shopDeliveryContent(p, d.DeliveryContent)
 	}
 	jobs, err := s.client.ShopNotification.Query().Where(shopnotification.OrderIDEQ(o.ID)).Order(dbent.Desc(shopnotification.FieldID)).All(ctx)
 	if err != nil {

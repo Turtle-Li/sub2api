@@ -9,7 +9,7 @@ import ShopDelivery from '@/components/shop/ShopDelivery.vue'
 import ShopMarkdown from '@/components/shop/ShopMarkdown.vue'
 import ShopProductEditor from '@/components/shop/ShopProductEditor.vue'
 import ShopProductView from '../ShopProductView.vue'
-import ShopGuideView from '../ShopGuideView.vue'
+import ShopGuideContent from '@/components/shop/ShopGuideContent.vue'
 import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import { isManualShopPaymentConfirmed } from '@/components/payment/manualShopPayment'
 const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), createOrder: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
@@ -121,7 +121,8 @@ describe('automatic day-pass surfaces', () => {
     api.order.mockResolvedValueOnce({ data: { ...order(), product: daypass, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', can_submit: false, delivery_content: 'API Key: sk-fictional-daypass' } })
     await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')
     await flushPromises()
-    expect(wrapper.get('a[aria-label="API Key 使用指南"]').attributes('to')).toBe('/shop/help/deepseek-daypass?order=42')
+    expect(wrapper.get('#usage-guide').text()).toContain('https://ds.turtleligpt.com/v1')
+    expect(wrapper.find('a[to^="/shop/help/"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('sk-fictional-daypass')
     expect(wrapper.text()).toContain('API Key 已交付')
     expect(wrapper.text()).not.toContain('账号已交付')
@@ -136,8 +137,7 @@ describe('automatic day-pass surfaces', () => {
     expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ price: 0, duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', guide_key: 'deepseek-daypass', enabled: false, payment_actions: [] })
   })
   it('renders working API guide anchors and the formal endpoint without account login steps', () => {
-    route.path = '/shop/help/deepseek-daypass'
-    const wrapper = mount(ShopGuideView, { global })
+    const wrapper = mount(ShopGuideContent, { props: { guideKey: 'deepseek-daypass' } })
     const article = wrapper.get('article')
     expect(article.text()).toContain('https://ds.turtleligpt.com/v1')
     expect(article.text()).toContain('deepseek-v4.1-flash')
@@ -215,19 +215,19 @@ describe('manual shop surfaces', () => {
     expect(wrapper.text().match(/5分钟/g)).toHaveLength(1)
     expect(wrapper.text().match(/测试客服入口/g)).toHaveLength(1)
   })
-  it('puts the required guide before delivered credentials without repeating the generic notice or guide link', async () => {
+  it('puts the full guide below delivered credentials without a separate guide link', async () => {
     api.order.mockResolvedValue({ data: { ...order(), product: { ...product, fulfillment_mode: 'account_delivery', guide_key: 'chatgpt-plus-account' }, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', can_submit: false, delivery_content: '账号：fictional@example.invalid' } })
     const wrapper = mount(ShopOrderView, { global: { stubs: { ...global.stubs, ShopOrderSummary: false, OrderStatusBadge: true } } })
     await flushPromises()
-    const link = wrapper.get('a[aria-label="必看：成品号使用指南"]')
-    expect(link.attributes('to')).toBe('/shop/help/chatgpt-plus-account?order=42')
+    expect(wrapper.get('#usage-guide').findAll('img')).toHaveLength(13)
+    expect(wrapper.find('a[to^="/shop/help/"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('查看使用教程')
     expect(wrapper.text()).not.toContain('5分钟')
-    expect(wrapper.text().indexOf('必看')).toBeLessThan(wrapper.text().indexOf('账号已交付'))
+    expect(wrapper.text().indexOf('账号已交付')).toBeLessThan(wrapper.text().indexOf('使用指南'))
     expect(wrapper.findComponent(ShopOrderSummary).exists()).toBe(true)
   })
   it('renders the HTML guide with all local illustrations, working section targets and only operational external sites', () => {
-    const wrapper = mount(ShopGuideView, { global })
+    const wrapper = mount(ShopGuideContent, { props: { guideKey: 'chatgpt-plus-account' } })
     const article = wrapper.get('article')
     expect(article.findAll('img')).toHaveLength(13)
     expect(article.findAll('img').every(img => /^\/shop\/help\/image-\d{2}\.jpg$/.test(img.attributes('src')))).toBe(true)

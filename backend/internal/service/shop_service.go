@@ -49,6 +49,11 @@ type ShopProduct struct {
 	UpdatedAt            time.Time               `json:"updated_at"`
 	PaymentActions       []shopaction.Binding    `json:"payment_actions,omitempty"`
 	AutomaticFulfillment bool                    `json:"automatic_fulfillment"`
+	DeliveryConfig       *ShopDeliveryConfig     `json:"delivery_config,omitempty"`
+}
+
+type ShopDeliveryConfig struct {
+	IndividualCopy bool `json:"individual_copy,omitempty"`
 }
 
 type ShopOrderDetail struct {

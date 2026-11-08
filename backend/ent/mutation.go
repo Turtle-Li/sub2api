@@ -51175,6 +51175,8 @@ type ShopProductMutation struct {
 	appendpayment_actions jsontext.Value
 	sku_config            *jsontext.Value
 	appendsku_config      jsontext.Value
+	delivery_config       *jsontext.Value
+	appenddelivery_config jsontext.Value
 	enabled               *bool
 	sort_order            *int
 	addsort_order         *int
@@ -51888,6 +51890,71 @@ func (m *ShopProductMutation) ResetSkuConfig() {
 	delete(m.clearedFields, shopproduct.FieldSkuConfig)
 }
 
+// SetDeliveryConfig sets the "delivery_config" field.
+func (m *ShopProductMutation) SetDeliveryConfig(j jsontext.Value) {
+	m.delivery_config = &j
+	m.appenddelivery_config = nil
+}
+
+// DeliveryConfig returns the value of the "delivery_config" field in the mutation.
+func (m *ShopProductMutation) DeliveryConfig() (r jsontext.Value, exists bool) {
+	v := m.delivery_config
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeliveryConfig returns the old "delivery_config" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldDeliveryConfig(ctx context.Context) (v jsontext.Value, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeliveryConfig is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeliveryConfig requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeliveryConfig: %w", err)
+	}
+	return oldValue.DeliveryConfig, nil
+}
+
+// AppendDeliveryConfig adds j to the "delivery_config" field.
+func (m *ShopProductMutation) AppendDeliveryConfig(j jsontext.Value) {
+	m.appenddelivery_config = append(m.appenddelivery_config, j...)
+}
+
+// AppendedDeliveryConfig returns the list of values that were appended to the "delivery_config" field in this mutation.
+func (m *ShopProductMutation) AppendedDeliveryConfig() (jsontext.Value, bool) {
+	if len(m.appenddelivery_config) == 0 {
+		return nil, false
+	}
+	return m.appenddelivery_config, true
+}
+
+// ClearDeliveryConfig clears the value of the "delivery_config" field.
+func (m *ShopProductMutation) ClearDeliveryConfig() {
+	m.delivery_config = nil
+	m.appenddelivery_config = nil
+	m.clearedFields[shopproduct.FieldDeliveryConfig] = struct{}{}
+}
+
+// DeliveryConfigCleared returns if the "delivery_config" field was cleared in this mutation.
+func (m *ShopProductMutation) DeliveryConfigCleared() bool {
+	_, ok := m.clearedFields[shopproduct.FieldDeliveryConfig]
+	return ok
+}
+
+// ResetDeliveryConfig resets all changes to the "delivery_config" field.
+func (m *ShopProductMutation) ResetDeliveryConfig() {
+	m.delivery_config = nil
+	m.appenddelivery_config = nil
+	delete(m.clearedFields, shopproduct.FieldDeliveryConfig)
+}
+
 // SetEnabled sets the "enabled" field.
 func (m *ShopProductMutation) SetEnabled(b bool) {
 	m.enabled = &b
@@ -52142,7 +52209,7 @@ func (m *ShopProductMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopProductMutation) Fields() []string {
-	fields := make([]string, 0, 19)
+	fields := make([]string, 0, 20)
 	if m.name != nil {
 		fields = append(fields, shopproduct.FieldName)
 	}
@@ -52184,6 +52251,9 @@ func (m *ShopProductMutation) Fields() []string {
 	}
 	if m.sku_config != nil {
 		fields = append(fields, shopproduct.FieldSkuConfig)
+	}
+	if m.delivery_config != nil {
+		fields = append(fields, shopproduct.FieldDeliveryConfig)
 	}
 	if m.enabled != nil {
 		fields = append(fields, shopproduct.FieldEnabled)
@@ -52236,6 +52306,8 @@ func (m *ShopProductMutation) Field(name string) (ent.Value, bool) {
 		return m.PaymentActions()
 	case shopproduct.FieldSkuConfig:
 		return m.SkuConfig()
+	case shopproduct.FieldDeliveryConfig:
+		return m.DeliveryConfig()
 	case shopproduct.FieldEnabled:
 		return m.Enabled()
 	case shopproduct.FieldSortOrder:
@@ -52283,6 +52355,8 @@ func (m *ShopProductMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldPaymentActions(ctx)
 	case shopproduct.FieldSkuConfig:
 		return m.OldSkuConfig(ctx)
+	case shopproduct.FieldDeliveryConfig:
+		return m.OldDeliveryConfig(ctx)
 	case shopproduct.FieldEnabled:
 		return m.OldEnabled(ctx)
 	case shopproduct.FieldSortOrder:
@@ -52399,6 +52473,13 @@ func (m *ShopProductMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSkuConfig(v)
+		return nil
+	case shopproduct.FieldDeliveryConfig:
+		v, ok := value.(jsontext.Value)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeliveryConfig(v)
 		return nil
 	case shopproduct.FieldEnabled:
 		v, ok := value.(bool)
@@ -52522,6 +52603,9 @@ func (m *ShopProductMutation) ClearedFields() []string {
 	if m.FieldCleared(shopproduct.FieldSkuConfig) {
 		fields = append(fields, shopproduct.FieldSkuConfig)
 	}
+	if m.FieldCleared(shopproduct.FieldDeliveryConfig) {
+		fields = append(fields, shopproduct.FieldDeliveryConfig)
+	}
 	return fields
 }
 
@@ -52541,6 +52625,9 @@ func (m *ShopProductMutation) ClearField(name string) error {
 		return nil
 	case shopproduct.FieldSkuConfig:
 		m.ClearSkuConfig()
+		return nil
+	case shopproduct.FieldDeliveryConfig:
+		m.ClearDeliveryConfig()
 		return nil
 	}
 	return fmt.Errorf("unknown ShopProduct nullable field %s", name)
@@ -52591,6 +52678,9 @@ func (m *ShopProductMutation) ResetField(name string) error {
 		return nil
 	case shopproduct.FieldSkuConfig:
 		m.ResetSkuConfig()
+		return nil
+	case shopproduct.FieldDeliveryConfig:
+		m.ResetDeliveryConfig()
 		return nil
 	case shopproduct.FieldEnabled:
 		m.ResetEnabled()

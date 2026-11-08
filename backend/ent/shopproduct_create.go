@@ -187,6 +187,12 @@ func (_c *ShopProductCreate) SetSkuConfig(v jsontext.Value) *ShopProductCreate {
 	return _c
 }
 
+// SetDeliveryConfig sets the "delivery_config" field.
+func (_c *ShopProductCreate) SetDeliveryConfig(v jsontext.Value) *ShopProductCreate {
+	_c.mutation.SetDeliveryConfig(v)
+	return _c
+}
+
 // SetEnabled sets the "enabled" field.
 func (_c *ShopProductCreate) SetEnabled(v bool) *ShopProductCreate {
 	_c.mutation.SetEnabled(v)
@@ -545,6 +551,10 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 		_spec.SetField(shopproduct.FieldSkuConfig, field.TypeJSON, value)
 		_node.SkuConfig = value
 	}
+	if value, ok := _c.mutation.DeliveryConfig(); ok {
+		_spec.SetField(shopproduct.FieldDeliveryConfig, field.TypeJSON, value)
+		_node.DeliveryConfig = value
+	}
 	if value, ok := _c.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)
 		_node.Enabled = value
@@ -806,6 +816,24 @@ func (u *ShopProductUpsert) UpdateSkuConfig() *ShopProductUpsert {
 // ClearSkuConfig clears the value of the "sku_config" field.
 func (u *ShopProductUpsert) ClearSkuConfig() *ShopProductUpsert {
 	u.SetNull(shopproduct.FieldSkuConfig)
+	return u
+}
+
+// SetDeliveryConfig sets the "delivery_config" field.
+func (u *ShopProductUpsert) SetDeliveryConfig(v jsontext.Value) *ShopProductUpsert {
+	u.Set(shopproduct.FieldDeliveryConfig, v)
+	return u
+}
+
+// UpdateDeliveryConfig sets the "delivery_config" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateDeliveryConfig() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldDeliveryConfig)
+	return u
+}
+
+// ClearDeliveryConfig clears the value of the "delivery_config" field.
+func (u *ShopProductUpsert) ClearDeliveryConfig() *ShopProductUpsert {
+	u.SetNull(shopproduct.FieldDeliveryConfig)
 	return u
 }
 
@@ -1135,6 +1163,27 @@ func (u *ShopProductUpsertOne) UpdateSkuConfig() *ShopProductUpsertOne {
 func (u *ShopProductUpsertOne) ClearSkuConfig() *ShopProductUpsertOne {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.ClearSkuConfig()
+	})
+}
+
+// SetDeliveryConfig sets the "delivery_config" field.
+func (u *ShopProductUpsertOne) SetDeliveryConfig(v jsontext.Value) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDeliveryConfig(v)
+	})
+}
+
+// UpdateDeliveryConfig sets the "delivery_config" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateDeliveryConfig() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDeliveryConfig()
+	})
+}
+
+// ClearDeliveryConfig clears the value of the "delivery_config" field.
+func (u *ShopProductUpsertOne) ClearDeliveryConfig() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.ClearDeliveryConfig()
 	})
 }
 
@@ -1640,6 +1689,27 @@ func (u *ShopProductUpsertBulk) UpdateSkuConfig() *ShopProductUpsertBulk {
 func (u *ShopProductUpsertBulk) ClearSkuConfig() *ShopProductUpsertBulk {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.ClearSkuConfig()
+	})
+}
+
+// SetDeliveryConfig sets the "delivery_config" field.
+func (u *ShopProductUpsertBulk) SetDeliveryConfig(v jsontext.Value) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDeliveryConfig(v)
+	})
+}
+
+// UpdateDeliveryConfig sets the "delivery_config" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateDeliveryConfig() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDeliveryConfig()
+	})
+}
+
+// ClearDeliveryConfig clears the value of the "delivery_config" field.
+func (u *ShopProductUpsertBulk) ClearDeliveryConfig() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.ClearDeliveryConfig()
 	})
 }
 
