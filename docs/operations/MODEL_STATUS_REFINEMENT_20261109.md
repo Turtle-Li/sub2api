@@ -106,3 +106,47 @@ The focused official Claude Code re-review returned APPROVE after verifying
 both corrections against the actual forwarding path. The other reviewed source
 hashes remained unchanged. Production release and live backup-route recovery
 are not established by this local approval.
+
+## Production acceptance — November8 UTC
+
+Source `8403b219df2cd5a46f2ea86b9259a3a2911f4674` was pushed directly to
+owner main after a fresh fetch. Canonical GitHub run `42509827294` completed
+successfully; image identity, unchanged-main gate, blue-green release and Caddy
+activation all passed. The active blue container has that exact revision,
+healthy status, zero restarts/OOM and a validated read-only active background
+fence. Prior green606df1c45 remains healthy/standby while its old connection
+drains; no connection was terminated for this release.
+
+The locked strict-CAS homepage publication installed immutablev9. Served hashes:
+
+- HTML `94586f5e7d5a5f1aaaeb7a37ce2cc3fe6010d9106cd3c8c5cd92ea169721b543`
+- JS `f19319df9129b90254f249309a3f490d418a313202d46d27dcda3fc62b3d9b6e`
+- CSS `e2eb6929b380bebddfc79a6d02b2de8e02acc7cbd95601a817d01076f3e4ffde`
+
+Prior HTML remains at `/data/sub2-web/home/index.before-status-refinement-20261109.html`;
+publication evidence is `/var/log/sub2api-release/model-groups-20261107.f0a87G`.
+Both anonymous API/www responses pass72-cell/720-minute history,180-minute
+metrics, native-proof version/window, source/privacy and plaza separation
+assertions. All six public groups are currently operational. Qualified real
+best-hour rates are GPT98.94%, Claude98.08%, DeepSeek99.04%; the other three show
+native cache verification rather than isolated probe percentages. Their actual
+low probe rates remain present and unchanged in the raw API fields.
+
+Real Chrome acceptance verified both public surfaces at desktop and390px
+mobile widths:72 cells per card, one keyboard stop, ArrowLeft focus movement,
+no horizontal overflow, no app browser errors. Production captures are under
+`.omo/evidence/status-refinement/production-*` (local only). No live countdown
+was manufactured: the primary Claude quota window had reset and automatic
+checks at18:10,18:20 and18:30 succeeded. Quota warning/countdown boundaries were
+verified in local fixtures/tests. A further bounded historical-log read found
+36 backup403-related log lines without explicit CLI-only, depleted-credit or
+model-denial proof. Backup recovery remains unproven; no account, credential,
+model or reserve-policy change was made for this task.
+
+Post-release read-only configuration verification retained version5,
+`public_enabled=true`, and the original group-probe configuration digest
+`ec263ba0fb0fddbde71cc8786192c207`. Model/account choices remain owner-managed.
+The first natural post-release18:40UTC check round completed for all six groups
+at18:40:34–18:40:42UTC: all succeeded on outer attempt1. No manual check or
+warm-up request was submitted. This proves the new generation's scheduler and
+ordinary selected routes; it does not establish a particular backup's recovery.
