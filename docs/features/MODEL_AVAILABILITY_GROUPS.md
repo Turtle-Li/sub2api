@@ -276,7 +276,22 @@ from certifying a different group. This is provider readiness, not customer
 client/admission certification; ordinary client restrictions remain in force.
 Selected account model mappings to media are rejected before submission.
 
-Claude requests use `max_tokens: 1`; OpenAI requests use
+Claude probes use a greeting and `max_tokens: 1`. Ordinary API-key accounts
+send no system prompt or client metadata. OAuth/setup-token accounts keep the
+normal OAuth forwarding, fingerprint, header and beta handling. Only the private
+operator-runner context selects the existing minimal billing-attribution and
+identity blocks (also used by Fable), omitting the general agent expansion.
+The existing injection-enable switch remains authoritative for probes too.
+API-key relays in Claude-Code-only groups retain their small native connection-test
+profile. This preserves credential/client restrictions. No agent/tool instructions
+or extra warm-up requests are added; real customer forwarding remains unchanged. Native input
+usage, rather than a presumed token ceiling, remains the consumption authority.
+This local adaptation rechecked the pinned ranxi2001 revision's
+`channel_monitor_v3_probe.go`, its tests and `account_test_service.go`;
+the upstream challenge workload remains intentionally excluded.
+Wire-level regression coverage is in `channel_monitor_v3_probe_request_test.go`.
+
+OpenAI requests use
 `max_completion_tokens: 16` and `reasoning_effort: none`. Existing protocol
 conversion floors still apply, and native Codex OAuth strips unsupported output
 limits. Do not promise a strict one-token upper bound for that protocol. A tiny

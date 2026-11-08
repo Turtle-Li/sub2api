@@ -1294,13 +1294,6 @@ func (s *GatewayService) normalizeClientDatelineIfEnabled(ctx context.Context, a
 	return next, true
 }
 
-func (s *GatewayService) claudeOAuthSystemPromptInjectionSettings(ctx context.Context) (bool, string, string) {
-	if s == nil || s.settingService == nil {
-		return true, "", ""
-	}
-	return s.settingService.GetClaudeOAuthSystemPromptInjectionSettings(ctx)
-}
-
 // systemHasBillingAttributionBlock 检查请求体的 system 字段中是否包含真实 Claude Code
 // 客户端注入的 billing attribution block。该 block 格式稳定（见 gateway_billing_block.go），
 // 仅由真实 Claude Code CLI 生成；第三方客户端（opencode 等）不会生成此 block。

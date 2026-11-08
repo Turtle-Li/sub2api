@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -196,40 +194,6 @@ func channelMonitorV3ProbeCacheReadTokens(body []byte, input, cached int64) *int
 		return nil
 	}
 	return &cached
-}
-
-// API-key relays in client-restricted groups use the existing native test profile
-// to satisfy provider client allowlists. OAuth keeps its gateway mimic path.
-// Preserve the one-token budget and normal routing.
-func channelMonitorV3ProbeRequest(group *Group, account *Account, model string) ([]byte, http.Header, error) {
-	headers := http.Header{"Content-Type": {"application/json"}, "User-Agent": {"Sub2API-Availability-Probe"}}
-	if group.Platform != PlatformAnthropic || !group.ClaudeCodeOnly || account.Type != AccountTypeAPIKey {
-		return channelMonitorV3ProbeBody(group.Platform, model), headers, nil
-	}
-	payload, err := createTestPayload(model)
-	if err != nil {
-		return nil, nil, err
-	}
-	payload["max_tokens"] = 1
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, nil, err
-	}
-	for key, value := range claude.DefaultHeaders() {
-		headers.Set(key, value)
-	}
-	return body, headers, nil
-}
-
-func channelMonitorV3ProbeBody(platform, model string) []byte {
-	payload := map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply with 1."}}, "stream": true, "max_tokens": 1}
-	if domain.UsesOpenAIGateway(platform) {
-		delete(payload, "max_tokens")
-		payload["max_completion_tokens"] = 16
-		payload["reasoning_effort"] = "none"
-	}
-	body, _ := json.Marshal(payload)
-	return body
 }
 
 // Require a completed response. The intentional tiny output budget may end a
