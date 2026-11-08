@@ -230,6 +230,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
+	// Claude Code 退化 UA 归一化：(external, unknown) -> (external, sdk-cli)。
+	// 这类请求是真实 CLI 在无终端环境下产生的，body 完全合法，只有产品标识
+	// 不被上游接受；在出站前改写比把请求拒掉更合理。
+	normalizeOutboundClaudeCLIUserAgent(req.Header)
+
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。
 	// 放在所有 header 逻辑之后，确保配置值对同名头拥有最终决定权。
 	account.ApplyHeaderOverrides(req.Header)
