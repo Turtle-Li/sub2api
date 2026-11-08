@@ -2,7 +2,65 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { describe, expect, it } from 'vitest'
+import { enableAutoUnmount, mount, RouterLinkStub } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import AppSidebar from '../AppSidebar.vue'
+
+const { appStore, adminSettingsStore } = vi.hoisted(() => ({
+  appStore: {
+    sidebarCollapsed: false,
+    mobileOpen: false,
+    siteName: 'Sub2API',
+    siteLogo: '',
+    siteVersion: 'test',
+    publicSettingsLoaded: true,
+    sidebarScrollTop: 0,
+    cachedPublicSettings: { payment_enabled: false },
+  },
+  adminSettingsStore: {
+    paymentEnabled: false,
+    customMenuItems: [],
+    fetch: vi.fn(),
+  },
+}))
+
+vi.mock('@/stores', () => ({
+  useAppStore: () => appStore,
+  useAdminSettingsStore: () => adminSettingsStore,
+  useAuthStore: () => ({ isAdmin: true, isSimpleMode: false }),
+  useOnboardingStore: () => ({}),
+}))
+
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => appStore,
+}))
+
+vi.mock('vue-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-router')>()
+  return {
+    ...actual,
+    useRoute: () => ({ path: '/admin/products' }),
+    useRouter: () => ({ push: vi.fn() }),
+  }
+})
+
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-i18n')>()
+  return {
+    ...actual,
+    useI18n: () => ({ t: (key: string) => key }),
+  }
+})
+
+vi.mock('@/composables/useBatchImageAccess', () => ({
+  useBatchImageAccess: () => ({
+    canUseBatchImage: { value: false },
+    refreshBatchImageAccess: vi.fn(),
+  }),
+}))
+
+enableAutoUnmount(afterEach)
 
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), '../AppSidebar.vue')
 const componentSource = readFileSync(componentPath, 'utf8')
@@ -59,11 +117,26 @@ describe('AppSidebar admin order access', () => {
     expect(componentSource).toContain("{ path: '/admin/orders/coupons', label: t('nav.paymentCoupons'), icon: GiftIcon }")
   })
 
-  it('keeps payment dashboard and plans inside the enabled-payment branch only', () => {
-    const paymentNavigation = componentSource.slice(componentSource.indexOf('...(adminSettingsStore.paymentEnabled'))
-    expect(paymentNavigation).toContain("{ path: '/admin/orders/dashboard', label: t('nav.paymentDashboard'), icon: ChartIcon }")
-    expect(paymentNavigation).toContain("{ path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon }")
-  })
+  it.each([false, true])(
+    'keeps catalog and order links available with payment enabled = %s',
+    (paymentEnabled) => {
+      adminSettingsStore.paymentEnabled = paymentEnabled
+      appStore.cachedPublicSettings = { payment_enabled: paymentEnabled }
+      const wrapper = mount(AppSidebar, {
+        global: { stubs: { RouterLink: RouterLinkStub, VersionBadge: true } },
+      })
+      const destinations = wrapper.findAllComponents(RouterLinkStub).map((link) => link.props('to'))
+
+      expect(destinations).toEqual(expect.arrayContaining([
+        '/admin/orders',
+        '/admin/orders/coupons',
+        '/admin/orders/invoices',
+        '/admin/products',
+      ]))
+      expect(destinations.includes('/admin/orders/dashboard')).toBe(paymentEnabled)
+      expect(destinations).not.toContain('/admin/orders/plans')
+    }
+  )
 })
 
 describe('AppSidebar purchase entry visibility', () => {
