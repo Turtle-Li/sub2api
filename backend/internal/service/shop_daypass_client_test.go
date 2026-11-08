@@ -91,3 +91,44 @@ func TestShopDaypassClientRejectsUnboundRepliesAndRedirects(t *testing.T) {
 		})
 	}
 }
+
+func TestShopDaypassClientRequiresExplicitSKUCapability(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(map[bool]string{false: "old-receiver", true: "configured-receiver"}[supported], func(t *testing.T) {
+			binding := shopDaypassBinding{Instance: shopDaypassInstance, OrderID: 71, ProductID: 8, PriceFen: 600, Currency: "CNY", PaidAt: time.Now().Unix(), SKUVersion: 2, DurationSeconds: 604800, Concurrency: 3}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if strings.HasSuffix(r.URL.Path, "/ready") {
+					versions := []int{}
+					if supported {
+						versions = []int{2}
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"instance": shopDaypassInstance, "product_id": 8, "status": "ready", "concurrencies": []int{2, 3}, "duration_days": []int{1, 7}, "sku_versions": versions}})
+					return
+				}
+				var got shopDaypassBinding
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+				require.Equal(t, binding, got)
+				grant := shopDaypassGrant{Instance: binding.Instance, OrderID: binding.OrderID, ProductID: binding.ProductID, PaidAt: binding.PaidAt, ExpiresAt: binding.PaidAt + 604800, TokenID: 19, Status: "active", Key: "sk-" + strings.Repeat("d", 48)}
+				if strings.HasSuffix(r.URL.Path, "/revoke") {
+					grant.Status = "revoked"
+					grant.Key = ""
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": grant})
+			}))
+			defer server.Close()
+			client := newShopDaypassGateway(8, server.URL).(*shopDaypassClient)
+			client.endpoint = server.URL
+			client.loadBearer = func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }
+			if !supported {
+				require.ErrorIs(t, client.ReadySKU(context.Background(), 7), errShopDaypassUnavailable)
+				return
+			}
+			require.NoError(t, client.ReadySKU(context.Background(), 7))
+			grant, err := client.Provision(context.Background(), binding)
+			require.NoError(t, err)
+			require.Equal(t, binding.PaidAt+604800, grant.ExpiresAt)
+			require.NoError(t, client.Revoke(context.Background(), binding))
+		})
+	}
+}

@@ -181,6 +181,12 @@ func (_c *ShopProductCreate) SetPaymentActions(v jsontext.Value) *ShopProductCre
 	return _c
 }
 
+// SetSkuConfig sets the "sku_config" field.
+func (_c *ShopProductCreate) SetSkuConfig(v jsontext.Value) *ShopProductCreate {
+	_c.mutation.SetSkuConfig(v)
+	return _c
+}
+
 // SetEnabled sets the "enabled" field.
 func (_c *ShopProductCreate) SetEnabled(v bool) *ShopProductCreate {
 	_c.mutation.SetEnabled(v)
@@ -535,6 +541,10 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 		_spec.SetField(shopproduct.FieldPaymentActions, field.TypeJSON, value)
 		_node.PaymentActions = value
 	}
+	if value, ok := _c.mutation.SkuConfig(); ok {
+		_spec.SetField(shopproduct.FieldSkuConfig, field.TypeJSON, value)
+		_node.SkuConfig = value
+	}
 	if value, ok := _c.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)
 		_node.Enabled = value
@@ -778,6 +788,24 @@ func (u *ShopProductUpsert) UpdatePaymentActions() *ShopProductUpsert {
 // ClearPaymentActions clears the value of the "payment_actions" field.
 func (u *ShopProductUpsert) ClearPaymentActions() *ShopProductUpsert {
 	u.SetNull(shopproduct.FieldPaymentActions)
+	return u
+}
+
+// SetSkuConfig sets the "sku_config" field.
+func (u *ShopProductUpsert) SetSkuConfig(v jsontext.Value) *ShopProductUpsert {
+	u.Set(shopproduct.FieldSkuConfig, v)
+	return u
+}
+
+// UpdateSkuConfig sets the "sku_config" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateSkuConfig() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldSkuConfig)
+	return u
+}
+
+// ClearSkuConfig clears the value of the "sku_config" field.
+func (u *ShopProductUpsert) ClearSkuConfig() *ShopProductUpsert {
+	u.SetNull(shopproduct.FieldSkuConfig)
 	return u
 }
 
@@ -1086,6 +1114,27 @@ func (u *ShopProductUpsertOne) UpdatePaymentActions() *ShopProductUpsertOne {
 func (u *ShopProductUpsertOne) ClearPaymentActions() *ShopProductUpsertOne {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.ClearPaymentActions()
+	})
+}
+
+// SetSkuConfig sets the "sku_config" field.
+func (u *ShopProductUpsertOne) SetSkuConfig(v jsontext.Value) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetSkuConfig(v)
+	})
+}
+
+// UpdateSkuConfig sets the "sku_config" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateSkuConfig() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateSkuConfig()
+	})
+}
+
+// ClearSkuConfig clears the value of the "sku_config" field.
+func (u *ShopProductUpsertOne) ClearSkuConfig() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.ClearSkuConfig()
 	})
 }
 
@@ -1570,6 +1619,27 @@ func (u *ShopProductUpsertBulk) UpdatePaymentActions() *ShopProductUpsertBulk {
 func (u *ShopProductUpsertBulk) ClearPaymentActions() *ShopProductUpsertBulk {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.ClearPaymentActions()
+	})
+}
+
+// SetSkuConfig sets the "sku_config" field.
+func (u *ShopProductUpsertBulk) SetSkuConfig(v jsontext.Value) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetSkuConfig(v)
+	})
+}
+
+// UpdateSkuConfig sets the "sku_config" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateSkuConfig() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateSkuConfig()
+	})
+}
+
+// ClearSkuConfig clears the value of the "sku_config" field.
+func (u *ShopProductUpsertBulk) ClearSkuConfig() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.ClearSkuConfig()
 	})
 }
 

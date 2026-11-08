@@ -132,11 +132,16 @@ func (h *ShopHandler) CreateOrder(c *gin.Context) {
 		PaymentType     string          `json:"payment_type"`
 		Concurrency     json.RawMessage `json:"concurrency"`
 		DurationDays    json.RawMessage `json:"duration_days"`
+		SKUID           string          `json:"sku_id"`
 	}
 	if !decodeShopRequest(c, &in, 4096) {
 		return
 	}
-	var sku service.ShopSKUSelection
+	sku := service.ShopSKUSelection{ID: in.SKUID}
+	if len(in.SKUID) > 80 {
+		response.BadRequest(c, "SKU 编码无效")
+		return
+	}
 	if len(in.Concurrency) != 0 && (json.Unmarshal(in.Concurrency, &sku.Concurrency) != nil || sku.Concurrency != 2 && sku.Concurrency != 3) {
 		response.BadRequest(c, "并发必须是整数2或3")
 		return

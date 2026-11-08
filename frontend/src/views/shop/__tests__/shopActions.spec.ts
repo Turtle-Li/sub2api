@@ -42,6 +42,8 @@ beforeEach(() => { vi.clearAllMocks() })
 describe('payment action administration', () => {
   it('binds another product to a registered version without changing its price or duration', async () => {
     const wrapper = mount(ShopProductEditor, { props: { product, busy: false, integrations: [integration] } })
+    await wrapper.get('#product-editor-delivery').trigger('click')
+    await wrapper.get('input[value="automatic"]').setValue()
     await wrapper.get('#payment-action').setValue('license@2')
     await wrapper.get('#payment-action-params').setValue('{"sku":"pro-year"}')
     await wrapper.get('form').trigger('submit')
@@ -53,6 +55,8 @@ describe('payment action administration', () => {
   })
   it.each(['[]', 'null', '{bad json', '"' + 'x'.repeat(4096) + '"'])('blocks invalid parameters: %s', async value => {
     const wrapper = mount(ShopProductEditor, { props: { product, busy: false, integrations: [integration] } })
+    await wrapper.get('#product-editor-delivery').trigger('click')
+    await wrapper.get('input[value="automatic"]').setValue()
     await wrapper.get('#payment-action').setValue('license@2')
     await wrapper.get('#payment-action-params').setValue(value)
     await wrapper.get('form').trigger('submit')

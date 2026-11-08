@@ -27,12 +27,15 @@ var (
 )
 
 type shopDaypassBinding struct {
-	Instance  string `json:"instance"`
-	OrderID   int64  `json:"order_id"`
-	ProductID int64  `json:"product_id"`
-	PriceFen  int64  `json:"price_fen"`
-	Currency  string `json:"currency"`
-	PaidAt    int64  `json:"paid_at"`
+	Instance        string `json:"instance"`
+	OrderID         int64  `json:"order_id"`
+	ProductID       int64  `json:"product_id"`
+	PriceFen        int64  `json:"price_fen"`
+	Currency        string `json:"currency"`
+	PaidAt          int64  `json:"paid_at"`
+	SKUVersion      int    `json:"sku_version,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	Concurrency     int    `json:"concurrency,omitempty"`
 }
 
 type shopDaypassGrant struct {
@@ -106,6 +109,14 @@ func validShopDaypassBearer(value string) bool {
 }
 
 func (c *shopDaypassClient) Ready(ctx context.Context, durationDays int) error {
+	return c.ready(ctx, durationDays, false)
+}
+
+func (c *shopDaypassClient) ReadySKU(ctx context.Context, durationDays int) error {
+	return c.ready(ctx, durationDays, true)
+}
+
+func (c *shopDaypassClient) ready(ctx context.Context, durationDays int, configurable bool) error {
 	bearer, err := c.loadBearer(ctx)
 	if err != nil {
 		return errShopDaypassUnavailable
@@ -127,6 +138,7 @@ func (c *shopDaypassClient) Ready(ctx context.Context, durationDays int) error {
 		Data    struct {
 			Concurrencies []int  `json:"concurrencies"`
 			DurationDays  []int  `json:"duration_days"`
+			SKUVersions   []int  `json:"sku_versions"`
 			Instance      string `json:"instance"`
 			ProductID     int64  `json:"product_id"`
 			Status        string `json:"status"`
@@ -138,6 +150,9 @@ func (c *shopDaypassClient) Ready(ctx context.Context, durationDays int) error {
 	}
 	// Older receivers omit duration_days. They still serve existing day passes.
 	if durationDays != 1 && !slices.Contains(result.Data.DurationDays, durationDays) {
+		return errShopDaypassUnavailable
+	}
+	if configurable && !slices.Contains(result.Data.SKUVersions, 2) {
 		return errShopDaypassUnavailable
 	}
 	return nil
@@ -154,6 +169,15 @@ func (c *shopDaypassClient) Revoke(ctx context.Context, binding shopDaypassBindi
 
 func (c *shopDaypassClient) call(ctx context.Context, action string, binding shopDaypassBinding) (*shopDaypassGrant, error) {
 	duration := shopDaypassDurationForPrice(binding.PriceFen)
+	if binding.SKUVersion == 2 {
+		sku := shopDaypassParams{Version: 2, PriceFen: binding.PriceFen, Duration: binding.DurationSeconds, Concurrency: binding.Concurrency}
+		if sku.priceFen() == 0 {
+			return nil, errShopDaypassUnavailable
+		}
+		duration = int64(binding.DurationSeconds)
+	} else if binding.SKUVersion != 0 || binding.DurationSeconds != 0 || binding.Concurrency != 0 {
+		return nil, errShopDaypassUnavailable
+	}
 	if duration == 0 {
 		return nil, errShopDaypassUnavailable
 	}

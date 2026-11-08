@@ -51173,6 +51173,8 @@ type ShopProductMutation struct {
 	guide_key             *string
 	payment_actions       *jsontext.Value
 	appendpayment_actions jsontext.Value
+	sku_config            *jsontext.Value
+	appendsku_config      jsontext.Value
 	enabled               *bool
 	sort_order            *int
 	addsort_order         *int
@@ -51821,6 +51823,71 @@ func (m *ShopProductMutation) ResetPaymentActions() {
 	delete(m.clearedFields, shopproduct.FieldPaymentActions)
 }
 
+// SetSkuConfig sets the "sku_config" field.
+func (m *ShopProductMutation) SetSkuConfig(j jsontext.Value) {
+	m.sku_config = &j
+	m.appendsku_config = nil
+}
+
+// SkuConfig returns the value of the "sku_config" field in the mutation.
+func (m *ShopProductMutation) SkuConfig() (r jsontext.Value, exists bool) {
+	v := m.sku_config
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSkuConfig returns the old "sku_config" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldSkuConfig(ctx context.Context) (v jsontext.Value, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSkuConfig is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSkuConfig requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSkuConfig: %w", err)
+	}
+	return oldValue.SkuConfig, nil
+}
+
+// AppendSkuConfig adds j to the "sku_config" field.
+func (m *ShopProductMutation) AppendSkuConfig(j jsontext.Value) {
+	m.appendsku_config = append(m.appendsku_config, j...)
+}
+
+// AppendedSkuConfig returns the list of values that were appended to the "sku_config" field in this mutation.
+func (m *ShopProductMutation) AppendedSkuConfig() (jsontext.Value, bool) {
+	if len(m.appendsku_config) == 0 {
+		return nil, false
+	}
+	return m.appendsku_config, true
+}
+
+// ClearSkuConfig clears the value of the "sku_config" field.
+func (m *ShopProductMutation) ClearSkuConfig() {
+	m.sku_config = nil
+	m.appendsku_config = nil
+	m.clearedFields[shopproduct.FieldSkuConfig] = struct{}{}
+}
+
+// SkuConfigCleared returns if the "sku_config" field was cleared in this mutation.
+func (m *ShopProductMutation) SkuConfigCleared() bool {
+	_, ok := m.clearedFields[shopproduct.FieldSkuConfig]
+	return ok
+}
+
+// ResetSkuConfig resets all changes to the "sku_config" field.
+func (m *ShopProductMutation) ResetSkuConfig() {
+	m.sku_config = nil
+	m.appendsku_config = nil
+	delete(m.clearedFields, shopproduct.FieldSkuConfig)
+}
+
 // SetEnabled sets the "enabled" field.
 func (m *ShopProductMutation) SetEnabled(b bool) {
 	m.enabled = &b
@@ -52075,7 +52142,7 @@ func (m *ShopProductMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopProductMutation) Fields() []string {
-	fields := make([]string, 0, 18)
+	fields := make([]string, 0, 19)
 	if m.name != nil {
 		fields = append(fields, shopproduct.FieldName)
 	}
@@ -52114,6 +52181,9 @@ func (m *ShopProductMutation) Fields() []string {
 	}
 	if m.payment_actions != nil {
 		fields = append(fields, shopproduct.FieldPaymentActions)
+	}
+	if m.sku_config != nil {
+		fields = append(fields, shopproduct.FieldSkuConfig)
 	}
 	if m.enabled != nil {
 		fields = append(fields, shopproduct.FieldEnabled)
@@ -52164,6 +52234,8 @@ func (m *ShopProductMutation) Field(name string) (ent.Value, bool) {
 		return m.GuideKey()
 	case shopproduct.FieldPaymentActions:
 		return m.PaymentActions()
+	case shopproduct.FieldSkuConfig:
+		return m.SkuConfig()
 	case shopproduct.FieldEnabled:
 		return m.Enabled()
 	case shopproduct.FieldSortOrder:
@@ -52209,6 +52281,8 @@ func (m *ShopProductMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldGuideKey(ctx)
 	case shopproduct.FieldPaymentActions:
 		return m.OldPaymentActions(ctx)
+	case shopproduct.FieldSkuConfig:
+		return m.OldSkuConfig(ctx)
 	case shopproduct.FieldEnabled:
 		return m.OldEnabled(ctx)
 	case shopproduct.FieldSortOrder:
@@ -52318,6 +52392,13 @@ func (m *ShopProductMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPaymentActions(v)
+		return nil
+	case shopproduct.FieldSkuConfig:
+		v, ok := value.(jsontext.Value)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSkuConfig(v)
 		return nil
 	case shopproduct.FieldEnabled:
 		v, ok := value.(bool)
@@ -52438,6 +52519,9 @@ func (m *ShopProductMutation) ClearedFields() []string {
 	if m.FieldCleared(shopproduct.FieldPaymentActions) {
 		fields = append(fields, shopproduct.FieldPaymentActions)
 	}
+	if m.FieldCleared(shopproduct.FieldSkuConfig) {
+		fields = append(fields, shopproduct.FieldSkuConfig)
+	}
 	return fields
 }
 
@@ -52454,6 +52538,9 @@ func (m *ShopProductMutation) ClearField(name string) error {
 	switch name {
 	case shopproduct.FieldPaymentActions:
 		m.ClearPaymentActions()
+		return nil
+	case shopproduct.FieldSkuConfig:
+		m.ClearSkuConfig()
 		return nil
 	}
 	return fmt.Errorf("unknown ShopProduct nullable field %s", name)
@@ -52501,6 +52588,9 @@ func (m *ShopProductMutation) ResetField(name string) error {
 		return nil
 	case shopproduct.FieldPaymentActions:
 		m.ResetPaymentActions()
+		return nil
+	case shopproduct.FieldSkuConfig:
+		m.ResetSkuConfig()
 		return nil
 	case shopproduct.FieldEnabled:
 		m.ResetEnabled()

@@ -23,6 +23,9 @@ const (
 )
 
 type ShopProduct struct {
+	SKUs                 []ShopSKU               `json:"skus,omitempty"`
+	DefaultSKUID         string                  `json:"default_sku_id,omitempty"`
+	SKUID                string                  `json:"sku_id,omitempty"`
 	Concurrency          int                     `json:"concurrency,omitempty"`
 	ConcurrencyOptions   []ShopConcurrencyOption `json:"concurrency_options,omitempty"`
 	ID                   int64                   `json:"id"`

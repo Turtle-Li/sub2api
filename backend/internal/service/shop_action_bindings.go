@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -17,7 +18,7 @@ func publicShopProduct(p ShopProduct) ShopProduct {
 	p.AutomaticFulfillment = shopAutomaticFulfillment(p)
 	p.Concurrency = shopProductConcurrency(p)
 	p.ConcurrencyOptions = nil
-	if validShopDaypassProduct(p) {
+	if len(p.SKUs) == 0 && validShopDaypassProduct(p) {
 		for _, concurrency := range []int{2, 3} {
 			sku := shopDaypassParams{Duration: shopDaypassDaySeconds, Concurrency: concurrency}
 			p.ConcurrencyOptions = append(p.ConcurrencyOptions, ShopConcurrencyOption{Concurrency: concurrency, Price: float64(sku.priceFen()) / 100})
@@ -58,14 +59,26 @@ func (s *ShopService) normalizePaymentActions(p *ShopProduct) error {
 		return infraerrors.BadRequest("SHOP_ACTION_PARAMS_INVALID", "动作参数必须是4KB以内的JSON对象")
 	}
 	if b.Adapter == shopaction.Native {
-		if p.Price != 6 || !validShopDaypassCatalog(*p) {
-			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "DeepSeek 自动交付商品的基础规格为6元、24小时")
+		if len(p.SKUs) > 0 {
+			for _, sku := range p.SKUs {
+				if sku.ID == p.DefaultSKUID {
+					raw, err := json.Marshal(shopDaypassParams{Version: 2, PriceFen: int64(math.Round(sku.Price * 100)), Duration: sku.DurationValue * shopDaypassDaySeconds, Concurrency: sku.Concurrency})
+					if err != nil {
+						return err
+					}
+					b.Params = raw
+				}
+			}
+		} else {
+			if p.Price != 6 || !validShopDaypassCatalog(*p) {
+				return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "DeepSeek 自动交付商品的基础规格为6元、24小时")
+			}
+			var native shopDaypassParams
+			if json.Unmarshal(b.Params, &native) != nil || (native.Duration != 0 && native.Duration != shopDaypassDaySeconds) || (native.Concurrency != 0 && native.Concurrency != 2) {
+				return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "基础规格固定24小时、默认2并发")
+			}
+			b.Params = json.RawMessage(`{"duration_seconds":86400,"default_concurrency":2}`)
 		}
-		var native shopDaypassParams
-		if json.Unmarshal(b.Params, &native) != nil || (native.Duration != 0 && native.Duration != shopDaypassDaySeconds) || (native.Concurrency != 0 && native.Concurrency != 2) {
-			return infraerrors.BadRequest("SHOP_DAYPASS_INVALID", "基础规格固定24小时、默认2并发")
-		}
-		b.Params = json.RawMessage(`{"duration_seconds":86400,"default_concurrency":2}`)
 	}
 	p.AutomaticFulfillment = true
 	return nil
@@ -106,7 +119,8 @@ func (s *ShopService) actionAdapterFor(b shopaction.Binding, cleanup bool) (shop
 		if client, ok := s.daypass.(*shopDaypassClient); ok && client.endpoint != i.Endpoint {
 			gateway = newShopDaypassGateway(s.daypassCfg.ProductID, i.Endpoint)
 		}
-		return &shopDaypassAdapter{gateway: gateway, productID: s.daypassCfg.ProductID, durationDays: shopNativeSKU(b.Params).selection().DurationDays}, nil
+		sku := shopNativeSKU(b.Params)
+		return &shopDaypassAdapter{gateway: gateway, productID: s.daypassCfg.ProductID, durationDays: sku.selection().DurationDays, skuVersion: sku.Version}, nil
 	case shopaction.HTTP:
 		return s.webhook(i), nil
 	default:

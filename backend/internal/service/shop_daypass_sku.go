@@ -13,6 +13,20 @@ type ShopConcurrencyOption struct {
 	WeeklyPrice float64 `json:"weekly_price,omitempty"`
 }
 
+func legacyShopSKUOptions(weekly bool) []ShopConcurrencyOption {
+	options := make([]ShopConcurrencyOption, 0, 2)
+	for _, concurrency := range []int{2, 3} {
+		day := shopDaypassParams{Duration: shopDaypassDaySeconds, Concurrency: concurrency}
+		option := ShopConcurrencyOption{Concurrency: concurrency, Price: float64(day.priceFen()) / 100}
+		if weekly {
+			week := shopDaypassParams{Duration: shopDaypassWeekDays * shopDaypassDaySeconds, Concurrency: concurrency}
+			option.WeeklyPrice = float64(week.priceFen()) / 100
+		}
+		options = append(options, option)
+	}
+	return options
+}
+
 const (
 	shopDaypassDaySeconds    = 24 * 60 * 60
 	shopDaypassWeekDays      = 7
@@ -22,6 +36,7 @@ const (
 // Zero fields are omitted selections. Native checkout supplies the legacy
 // defaults; unrelated products accept neither option.
 type ShopSKUSelection struct {
+	ID           string
 	Concurrency  int
 	DurationDays int
 }
@@ -37,11 +52,22 @@ func (s ShopSKUSelection) withNativeDefaults() ShopSKUSelection {
 }
 
 type shopDaypassParams struct {
-	Duration    int `json:"duration_seconds"`
-	Concurrency int `json:"default_concurrency"`
+	Version     int   `json:"sku_version,omitempty"`
+	PriceFen    int64 `json:"price_fen,omitempty"`
+	Duration    int   `json:"duration_seconds"`
+	Concurrency int   `json:"default_concurrency"`
 }
 
 func (p shopDaypassParams) priceFen() int64 {
+	if p.Version == 2 {
+		if p.PriceFen > 0 && p.PriceFen <= 100000000 && (p.Concurrency == 2 || p.Concurrency == 3) && (p.Duration == shopDaypassDaySeconds || p.Duration == 7*shopDaypassDaySeconds) {
+			return p.PriceFen
+		}
+		return 0
+	}
+	if p.Version != 0 || p.PriceFen != 0 {
+		return 0
+	}
 	var dailyPrice int64
 	switch p.Concurrency {
 	case 2:
@@ -65,8 +91,7 @@ func (p shopDaypassParams) selection() ShopSKUSelection {
 	return ShopSKUSelection{Concurrency: p.Concurrency, DurationDays: p.Duration / shopDaypassDaySeconds}
 }
 
-// The native wire binding keeps its original fields. The frozen amount
-// uniquely identifies the duration and concurrency at the receiver.
+// Historical version-zero orders retain their original price-based mapping.
 func shopDaypassDurationForPrice(priceFen int64) int64 {
 	for _, days := range []int{1, shopDaypassWeekDays} {
 		for _, concurrency := range []int{2, 3} {
@@ -99,17 +124,26 @@ func shopProductConcurrency(p ShopProduct) int {
 }
 
 func (s *ShopService) resolveShopSKU(p ShopProduct, selected ShopSKUSelection) (ShopProduct, error) {
-	if s.daypassCfg.MaxConcurrency == 2 && selected.Concurrency == 3 {
+	resolved, err := selectShopSKU(p, selected)
+	if err != nil {
+		return p, err
+	}
+	if nativeShopProduct(p) && s.daypassCfg.MaxConcurrency == 2 && resolved.Concurrency == 3 {
 		return p, infraerrors.BadRequest("SHOP_CONCURRENCY_INVALID", "3并发档位暂未开放")
 	}
-	resolved, err := selectShopSKU(p, selected)
-	if err == nil && selected.DurationDays == shopDaypassWeekDays && !s.daypassCfg.WeeklyEnabled {
+	if nativeShopProduct(p) && resolved.DurationValue == shopDaypassWeekDays && !s.daypassCfg.WeeklyEnabled {
 		return p, infraerrors.BadRequest("SHOP_DURATION_INVALID", "周卡暂未开放")
 	}
 	return resolved, err
 }
 
 func selectShopSKU(p ShopProduct, selected ShopSKUSelection) (ShopProduct, error) {
+	if len(p.SKUs) > 0 {
+		return selectConfiguredShopSKU(p, selected)
+	}
+	if selected.ID != "" {
+		return p, infraerrors.BadRequest("SHOP_SKU_UNAVAILABLE", "此商品的规格已更新，请刷新后重试")
+	}
 	native := len(p.PaymentActions) == 1 && p.PaymentActions[0].Adapter == shopaction.Native
 	if !native {
 		if selected.DurationDays != 0 {
@@ -147,7 +181,32 @@ func selectShopSKU(p ShopProduct, selected ShopSKUSelection) (ShopProduct, error
 }
 
 func (s *ShopService) publicCatalogProduct(p ShopProduct) ShopProduct {
+	native := nativeShopProduct(p)
 	p = publicShopProduct(p)
+	if len(p.SKUs) > 0 {
+		visible := make([]ShopSKU, 0, len(p.SKUs))
+		for _, sku := range p.SKUs {
+			if !sku.Enabled || native && (s.daypassCfg.MaxConcurrency == 2 && sku.Concurrency == 3 || !s.daypassCfg.WeeklyEnabled && sku.DurationValue == 7) {
+				continue
+			}
+			visible = append(visible, sku)
+		}
+		p.SKUs = visible
+		p.ConcurrencyOptions = nil
+		if len(visible) == 0 {
+			p.Enabled = false
+		} else {
+			chosen := visible[0]
+			for _, sku := range visible {
+				if sku.ID == p.DefaultSKUID {
+					chosen = sku
+				}
+			}
+			p.DefaultSKUID = chosen.ID
+			p.Price, p.DurationValue, p.DurationUnit = chosen.Price, chosen.DurationValue, chosen.DurationUnit
+		}
+		return p
+	}
 	if s.daypassCfg.MaxConcurrency == 2 && len(p.ConcurrencyOptions) == 2 {
 		p.ConcurrencyOptions = p.ConcurrencyOptions[:1]
 	}

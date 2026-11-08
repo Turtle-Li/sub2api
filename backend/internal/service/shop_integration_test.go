@@ -77,6 +77,12 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(actionsMigration))
 	require.NoError(t, err)
+	skuMigration, err := migrations.FS.ReadFile("274_shop_sku_config.sql")
+	require.NoError(t, err)
+	for range 2 {
+		_, err = db.ExecContext(ctx, string(skuMigration))
+		require.NoError(t, err)
+	}
 	_, err = db.ExecContext(ctx, "CREATE TABLE unified_payment_refund_attempts(order_id BIGINT,needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE); CREATE TABLE unified_payment_refund_events(order_id BIGINT,action TEXT NOT NULL)")
 	require.NoError(t, err)
 	u := createPaymentInvoicePostgresUser(t, ctx, client)
@@ -84,6 +90,35 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 	mail := &shopPGMail{}
 	s.email = mail
 	s.feishu = shopPGFeishu{}
+	t.Run("configured SKU JSONB persistence snapshot and revision lock", func(t *testing.T) {
+		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG SKU", Enabled: true, FulfillmentMode: ShopAccountDelivery, DefaultSKUID: "week", SKUs: []ShopSKU{
+			{ID: "day", Attributes: map[string]string{"周期": "日卡"}, Price: 9.9, DurationValue: 1, DurationUnit: "day", Enabled: true},
+			{ID: "week", Attributes: map[string]string{"周期": "周卡"}, Price: 49.9, DurationValue: 7, DurationUnit: "day", Enabled: true},
+		}})
+		require.NoError(t, err)
+		loaded, err := s.Product(ctx, p.ID, true)
+		require.NoError(t, err)
+		require.Equal(t, p.SKUs, loaded.SKUs)
+		selected, err := selectShopSKU(*loaded, ShopSKUSelection{ID: "week"})
+		require.NoError(t, err)
+		tx, err := client.Tx(ctx)
+		require.NoError(t, err)
+		require.NoError(t, revalidateShopProductTx(ctx, tx.Client(), &selected))
+		require.NoError(t, tx.Commit())
+		o := createPaymentInvoicePostgresOrder(t, ctx, client, u, fmt.Sprintf("sku-%d", time.Now().UnixNano()))
+		o = client.PaymentOrder.UpdateOne(o).SetOrderType(payment.OrderTypeManualShop).SetAmount(0).SetPayAmount(49.9).SaveX(ctx)
+		require.NoError(t, createShopFulfillmentTx(ctx, client, o, selected))
+		frozen, err := shopSnapshot(client.ShopFulfillment.Query().Where(shopfulfillment.OrderIDEQ(o.ID)).OnlyX(ctx))
+		require.NoError(t, err)
+		require.Equal(t, "week", frozen.SKUID)
+		require.Len(t, frozen.SKUs, 1)
+		require.Equal(t, 49.9, frozen.Price)
+		loaded.SKUs[1].Price = 59.9
+		_, err = s.SaveProduct(ctx, loaded.ID, *loaded)
+		require.NoError(t, err)
+		require.Error(t, revalidateShopProductTx(ctx, client, &selected))
+		require.Equal(t, 49.9, frozen.Price)
+	})
 	makeOrder := func(mode string) (*dbent.PaymentOrder, *ShopOrderDetail) {
 		p, err := s.SaveProduct(ctx, 0, ShopProduct{Name: "PG 商品", Price: 108, Enabled: true, FulfillmentMode: mode})
 		require.NoError(t, err)

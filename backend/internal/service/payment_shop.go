@@ -99,8 +99,8 @@ func revalidateShopProductTx(ctx context.Context, client *dbent.Client, p *ShopP
 	if !row.Enabled || row.Revision != p.Revision {
 		return shopConflict()
 	}
-	resolved, err := selectShopSKU(shopProductDTO(row), shopProductSKU(*p).selection())
-	if err != nil || resolved.Price != p.Price || resolved.DurationValue != p.DurationValue || resolved.DurationUnit != p.DurationUnit {
+	resolved, err := selectShopSKU(shopProductDTO(row), purchasedShopSelection(*p))
+	if err != nil || resolved.SKUID != p.SKUID || resolved.Price != p.Price || resolved.DurationValue != p.DurationValue || resolved.DurationUnit != p.DurationUnit || resolved.Concurrency != p.Concurrency {
 		return shopConflict()
 	}
 	*p = resolved
@@ -130,9 +130,14 @@ func (s *PaymentService) replayShopOrderRecord(ctx context.Context, o *dbent.Pay
 	if p.ID != req.shopProduct.ID || p.Revision != req.shopProduct.Revision {
 		return nil, ErrIdempotencyKeyConflict
 	}
-	purchased := shopProductSKU(p).selection()
+	purchased := purchasedShopSelection(p)
 	selected := req.ShopSKU
-	if purchased != (ShopSKUSelection{}) {
+	if purchased.ID != "" {
+		if selected.Concurrency != 0 && selected.Concurrency != p.Concurrency || selected.DurationDays != 0 && (p.DurationUnit != "day" || selected.DurationDays != p.DurationValue) {
+			return nil, ErrIdempotencyKeyConflict
+		}
+		selected.Concurrency, selected.DurationDays = 0, 0
+	} else if purchased != (ShopSKUSelection{}) {
 		selected = selected.withNativeDefaults()
 	}
 	if selected != purchased {

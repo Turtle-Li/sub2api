@@ -33,6 +33,7 @@ func (ShopProduct) Fields() []ent.Field {
 		field.Text("input_instructions").Default(""),
 		field.String("guide_key").MaxLen(64).Default(""),
 		field.JSON("payment_actions", json.RawMessage{}).Optional(),
+		field.JSON("sku_config", json.RawMessage{}).Optional(),
 		field.Bool("enabled").Default(false),
 		field.Int("sort_order").Default(0),
 		field.Int("revision").Positive().Default(1),

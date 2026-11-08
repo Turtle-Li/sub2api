@@ -45,6 +45,8 @@ type ShopProduct struct {
 	GuideKey string `json:"guide_key,omitempty"`
 	// PaymentActions holds the value of the "payment_actions" field.
 	PaymentActions jsontext.Value `json:"payment_actions,omitempty"`
+	// SkuConfig holds the value of the "sku_config" field.
+	SkuConfig jsontext.Value `json:"sku_config,omitempty"`
 	// Enabled holds the value of the "enabled" field.
 	Enabled bool `json:"enabled,omitempty"`
 	// SortOrder holds the value of the "sort_order" field.
@@ -63,7 +65,7 @@ func (*ShopProduct) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case shopproduct.FieldPaymentActions:
+		case shopproduct.FieldPaymentActions, shopproduct.FieldSkuConfig:
 			values[i] = new([]byte)
 		case shopproduct.FieldEnabled:
 			values[i] = new(sql.NullBool)
@@ -174,6 +176,14 @@ func (_m *ShopProduct) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field payment_actions: %w", err)
 				}
 			}
+		case shopproduct.FieldSkuConfig:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field sku_config", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.SkuConfig); err != nil {
+					return fmt.Errorf("unmarshal field sku_config: %w", err)
+				}
+			}
 		case shopproduct.FieldEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field enabled", values[i])
@@ -278,6 +288,9 @@ func (_m *ShopProduct) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("payment_actions=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PaymentActions))
+	builder.WriteString(", ")
+	builder.WriteString("sku_config=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SkuConfig))
 	builder.WriteString(", ")
 	builder.WriteString("enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Enabled))

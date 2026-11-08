@@ -378,7 +378,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/shop/products',
     name: 'AdminShopProducts',
-    component: () => import('@/views/shop/AdminShopProductsView.vue'),
+    redirect: to => ({ path: '/admin/products', query: { ...to.query, tab: 'shop' } }),
     meta: { requiresAuth: true, requiresAdmin: true, title: '商城', requiresPayment: false }
   },
   {
@@ -823,7 +823,8 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/admin/orders/plans',
+    path: '/admin/products',
+    alias: '/admin/orders/plans',
     name: 'AdminPaymentPlans',
     component: () => import('@/views/admin/orders/AdminPaymentPlansView.vue'),
     meta: {
@@ -831,7 +832,7 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: true,
       title: 'Product Catalog',
       titleKey: 'nav.paymentPlans',
-      requiresPayment: true
+      requiresPayment: false
     }
   },
 

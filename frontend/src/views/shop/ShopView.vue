@@ -5,6 +5,7 @@ import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { shopAPI } from '@/api/shop'
 import { shopDuration, type ShopProduct } from '@/types/shop'
+import { shopPriceRange } from '@/utils/shopSku'
 import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 const products = ref<ShopProduct[]>([])
@@ -95,8 +96,8 @@ onMounted(load)
           <div class="mt-auto flex items-end justify-between gap-3 border-t border-gray-100 bg-gray-50/60 px-4 py-3 dark:border-dark-700 dark:bg-dark-900/30">
             <div class="min-w-0 pb-1">
               <div class="flex flex-wrap items-baseline gap-x-1 gap-y-1">
-                <strong class="text-2xl font-semibold leading-7 tabular-nums tracking-tight text-gray-900 dark:text-white">¥{{ product.price.toFixed(2) }}</strong>
-                <span v-if="product.concurrency_options?.some(option => option.weekly_price)" class="text-xs text-gray-500 dark:text-gray-400">起 · 可选周卡</span>
+                <strong class="text-2xl font-semibold leading-7 tabular-nums tracking-tight text-gray-900 dark:text-white">¥{{ shopPriceRange(product).price.toFixed(2) }}</strong>
+                <span v-if="shopPriceRange(product).multiple" class="text-xs text-gray-500 dark:text-gray-400">起 · 多规格可选</span>
                 <span v-else class="text-xs text-gray-500 dark:text-gray-400">/ {{ shopDuration(product) }}</span>
               </div>
             </div>

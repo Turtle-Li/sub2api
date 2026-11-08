@@ -230,6 +230,24 @@ func (_u *ShopProductUpdate) ClearPaymentActions() *ShopProductUpdate {
 	return _u
 }
 
+// SetSkuConfig sets the "sku_config" field.
+func (_u *ShopProductUpdate) SetSkuConfig(v jsontext.Value) *ShopProductUpdate {
+	_u.mutation.SetSkuConfig(v)
+	return _u
+}
+
+// AppendSkuConfig appends value to the "sku_config" field.
+func (_u *ShopProductUpdate) AppendSkuConfig(v jsontext.Value) *ShopProductUpdate {
+	_u.mutation.AppendSkuConfig(v)
+	return _u
+}
+
+// ClearSkuConfig clears the value of the "sku_config" field.
+func (_u *ShopProductUpdate) ClearSkuConfig() *ShopProductUpdate {
+	_u.mutation.ClearSkuConfig()
+	return _u
+}
+
 // SetEnabled sets the "enabled" field.
 func (_u *ShopProductUpdate) SetEnabled(v bool) *ShopProductUpdate {
 	_u.mutation.SetEnabled(v)
@@ -457,6 +475,17 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.PaymentActionsCleared() {
 		_spec.ClearField(shopproduct.FieldPaymentActions, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.SkuConfig(); ok {
+		_spec.SetField(shopproduct.FieldSkuConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedSkuConfig(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, shopproduct.FieldSkuConfig, value)
+		})
+	}
+	if _u.mutation.SkuConfigCleared() {
+		_spec.ClearField(shopproduct.FieldSkuConfig, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)
@@ -693,6 +722,24 @@ func (_u *ShopProductUpdateOne) AppendPaymentActions(v jsontext.Value) *ShopProd
 // ClearPaymentActions clears the value of the "payment_actions" field.
 func (_u *ShopProductUpdateOne) ClearPaymentActions() *ShopProductUpdateOne {
 	_u.mutation.ClearPaymentActions()
+	return _u
+}
+
+// SetSkuConfig sets the "sku_config" field.
+func (_u *ShopProductUpdateOne) SetSkuConfig(v jsontext.Value) *ShopProductUpdateOne {
+	_u.mutation.SetSkuConfig(v)
+	return _u
+}
+
+// AppendSkuConfig appends value to the "sku_config" field.
+func (_u *ShopProductUpdateOne) AppendSkuConfig(v jsontext.Value) *ShopProductUpdateOne {
+	_u.mutation.AppendSkuConfig(v)
+	return _u
+}
+
+// ClearSkuConfig clears the value of the "sku_config" field.
+func (_u *ShopProductUpdateOne) ClearSkuConfig() *ShopProductUpdateOne {
+	_u.mutation.ClearSkuConfig()
 	return _u
 }
 
@@ -953,6 +1000,17 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 	}
 	if _u.mutation.PaymentActionsCleared() {
 		_spec.ClearField(shopproduct.FieldPaymentActions, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.SkuConfig(); ok {
+		_spec.SetField(shopproduct.FieldSkuConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedSkuConfig(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, shopproduct.FieldSkuConfig, value)
+		})
+	}
+	if _u.mutation.SkuConfigCleared() {
+		_spec.ClearField(shopproduct.FieldSkuConfig, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(shopproduct.FieldEnabled, field.TypeBool, value)

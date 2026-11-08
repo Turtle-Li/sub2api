@@ -53,6 +53,15 @@ type Order struct {
 	AmountFen int64     `json:"amount_fen"`
 	Currency  string    `json:"currency"`
 	PaidAt    time.Time `json:"paid_at"`
+	SKU       *SKU      `json:"sku,omitempty"`
+}
+
+type SKU struct {
+	ID            string            `json:"id"`
+	Attributes    map[string]string `json:"attributes"`
+	DurationValue int               `json:"duration_value"`
+	DurationUnit  string            `json:"duration_unit"`
+	Concurrency   int               `json:"concurrency,omitempty"`
 }
 
 type Request struct {

@@ -14,6 +14,7 @@ type shopDaypassAdapter struct {
 	gateway      shopDaypassGateway
 	productID    int64
 	durationDays int
+	skuVersion   int
 }
 
 func validShopDaypassProduct(p ShopProduct) bool {
@@ -27,11 +28,25 @@ func validShopDaypassCatalog(p ShopProduct) bool {
 }
 
 func (a *shopDaypassAdapter) Ready(ctx context.Context) error {
+	if a.skuVersion == 2 {
+		gateway, ok := a.gateway.(interface {
+			ReadySKU(context.Context, int) error
+		})
+		if !ok {
+			return errShopDaypassUnavailable
+		}
+		return gateway.ReadySKU(ctx, a.durationDays)
+	}
 	return a.gateway.Ready(ctx, a.durationDays)
 }
 
 func daypassBinding(r shopaction.Request) shopDaypassBinding {
-	return shopDaypassBinding{Instance: r.Source, OrderID: r.Order.ID, ProductID: r.Order.ProductID, PriceFen: r.Order.AmountFen, Currency: r.Order.Currency, PaidAt: r.Order.PaidAt.Unix()}
+	binding := shopDaypassBinding{Instance: r.Source, OrderID: r.Order.ID, ProductID: r.Order.ProductID, PriceFen: r.Order.AmountFen, Currency: r.Order.Currency, PaidAt: r.Order.PaidAt.Unix()}
+	sku := shopNativeSKU(r.Params)
+	if sku.Version == 2 {
+		binding.SKUVersion, binding.DurationSeconds, binding.Concurrency = 2, sku.Duration, sku.Concurrency
+	}
+	return binding
 }
 
 func (a *shopDaypassAdapter) Execute(ctx context.Context, r shopaction.Request) (shopaction.Result, error) {

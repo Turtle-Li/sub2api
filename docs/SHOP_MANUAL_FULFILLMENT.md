@@ -1,5 +1,9 @@
 # 商城与人工交付
 
+统一商品管理、通用 SKU 与人工/自动交付的新契约见
+[`features/SHOP_UNIFIED_SKU_20261108.md`](features/SHOP_UNIFIED_SKU_20261108.md)。
+该改造目前仅完成本地验证，历史上线说明不代表新版已发布。
+
 DeepSeek 24 小时 API 日卡的自动交付实现见
 `operations/DEEPSEEK_DAYPASS_20261105.md`，已上线状态与恢复边界以
 `../deploy/SHOP_PAYMENT_ACTIONS_RELEASE_20261105.md` 为准。该商品复用商城资金栅栏、买家专属
@@ -10,8 +14,8 @@ SHOP-20261104；实现范围：可配置商品、统一收银台、人工代充�
 
 ## 商品配置与入口
 
-- 用户入口 `/shop`；后台商品配置 `/admin/shop/products`；人工队列 `/admin/shop/orders`。既有用户/管理员订单列表也可进入商城订单。
-- 商品可配置名称、自由分类、简介、Markdown 详情、人民币价格、期限数值/单位、交付模式、资料格式/获取地址/说明、教程、排序和上架状态。
+- 用户入口 `/shop`；后台商品配置 `/admin/products?tab=shop`，旧 `/admin/shop/products` 重定向；人工队列 `/admin/shop/orders`。订阅、按量充值和商城共用商品管理入口与 Tab。
+- 商品可配置名称、自由分类、简介、Markdown 详情、SKU 属性/价格/期限/上架/默认项、交付方式、资料格式/获取地址/说明、教程和排序。代充、成品号使用人工交付；DeepSeek 选择已登记服务自动交付。
 - 默认期限 1 个月、未上架、价格 0。没有预置公开商品、价格或库存；上架必须有有效价格。编辑使用 revision，历史订单保存独立商品快照。
 - 价格内部以人民币分保存；仅专用商城接口按服务端商品价格创建 `manual_shop` 订单。浏览器不提交金额、用户 ID 或交付状态。沿用支付宝/微信统一收银台及原订单恢复机制。
 - 支付方式以 checkout-info 实际返回的支付宝/微信键为准，`available` 是可选字段，仅明确 false 时禁用；商品金额还须符合该方式的人民币单笔范围。不得因字段缺失隐藏正常渠道，也不得凭空展示未配置渠道。案例见 `docs/bugs/frontend/BUG-20261104-shop-payment-methods.md`。

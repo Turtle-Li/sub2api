@@ -29,6 +29,26 @@ enableAutoUnmount(afterEach)
 beforeEach(() => { route.params.id = '42'; vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
 describe('automatic day-pass surfaces', () => {
   const daypass = { ...product, name: 'DeepSeek API 不限量订阅卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
+  it('prices configured attributes and submits the SKU identity without client amounts', async () => {
+    const skus = [
+      { id: 'day-2', attributes: { 周期: '日卡', 并发: '2 路' }, price: 9.9, duration_value: 1, duration_unit: 'day' as const, concurrency: 2, enabled: true },
+      { id: 'week-3', attributes: { 周期: '周卡', 并发: '3 路' }, price: 49.9, duration_value: 7, duration_unit: 'day' as const, concurrency: 3, enabled: true },
+      { id: 'disabled', attributes: { 周期: '月卡', 并发: '3 路' }, price: 99, duration_value: 30, duration_unit: 'day' as const, concurrency: 3, enabled: false },
+    ]
+    api.product.mockResolvedValue({ data: { ...daypass, skus, default_sku_id: 'day-2' } })
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', available: true } } } })
+    api.createOrder.mockRejectedValue(new Error('lost response'))
+    const wrapper = mount(ShopProductView, { global })
+    await flushPromises()
+    expect(wrapper.get('[aria-live="polite"]').text()).toBe('¥9.90')
+    expect(wrapper.find('input[value="月卡"]').exists()).toBe(false)
+    await wrapper.get('input[name="sku-周期"][value="周卡"]').setValue()
+    expect(wrapper.get('[aria-live="polite"]').text()).toBe('¥49.90')
+    expect((wrapper.get('input[name="sku-并发"][value="3 路"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.findAll('button').find(button => button.text() === '购买')!.trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[0][0]).toEqual({ product_id: 1, product_revision: 1, payment_type: 'alipay', sku_id: 'week-3' })
+  })
   it('rechecks payment method limits when the selected tier changes', async () => {
     api.product.mockResolvedValue({ data: { ...daypass, concurrency_options: [{ concurrency: 2, price: 6, weekly_price: 30 }, { concurrency: 3, price: 8, weekly_price: 40 }] } })
     checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', single_max: 6 }, wxpay: { currency: 'CNY', single_max: 10 } } } })
@@ -108,11 +128,12 @@ describe('automatic day-pass surfaces', () => {
     expect(wrapper.text()).not.toContain('成品号使用指南')
     expect(api.submitInput).not.toHaveBeenCalled()
   })
-  it('prefills the fixed product contract when the admin selects automatic day-pass delivery', async () => {
+  it('keeps price, duration and manual delivery independent of the selected guide', async () => {
     const wrapper = mount(ShopProductEditor, { props: { product: null, busy: false } })
+    await wrapper.get('#product-name').setValue('人工商品')
     await wrapper.get('#guide-key').setValue('deepseek-daypass')
     await wrapper.get('form').trigger('submit')
-    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ price: 6, duration_value: 1, duration_unit: 'day', fulfillment_mode: 'account_delivery', guide_key: 'deepseek-daypass', enabled: false })
+    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ price: 0, duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', guide_key: 'deepseek-daypass', enabled: false, payment_actions: [] })
   })
   it('renders working API guide anchors and the formal endpoint without account login steps', () => {
     route.path = '/shop/help/deepseek-daypass'
@@ -434,6 +455,7 @@ describe('manual shop surfaces', () => {
   })
   it('defaults new drafts to one month without an invented price', async () => {
     const wrapper = mount(ShopProductEditor, { props: { product: null, busy: false } })
+    await wrapper.get('#product-name').setValue('草稿商品')
     await wrapper.get('form').trigger('submit')
     expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ duration_value: 1, duration_unit: 'month', price: 0, enabled: false })
   })

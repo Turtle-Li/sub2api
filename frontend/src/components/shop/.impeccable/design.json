@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T00:00:00Z",
+  "title": "Design System: Sub2API Shop",
+  "extensions": {
+    "colorMeta": {
+      "primary-500": { "role": "primary", "displayName": "Application teal", "tonalRamp": ["#134e4a", "#115e59", "#0f766e", "#0d9488", "#14b8a6", "#2dd4bf", "#99f6e4", "#f0fdfa"] }
+    },
+    "motion": [{ "name": "shared-button-transition", "value": "all 200ms ease-out", "purpose": "Existing shared button state transition." }],
+    "shadows": [{ "name": "tab-secondary-small", "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)", "purpose": "Shared secondary button and active catalog tab." }],
+    "breakpoints": [{ "name": "sm", "value": "640px" }, { "name": "lg", "value": "1024px" }]
+  },
+  "components": [
+    {
+      "name": "Admin primary button",
+      "kind": "button",
+      "description": "Existing shared save action, light-theme preview.",
+      "html": "<button class=\"ds-primary\">保存商品</button>",
+      "css": ".ds-primary{border:0;border-radius:12px;padding:10px 16px;font:500 14px/20px system-ui;color:white;background:linear-gradient(to right,#14b8a6,#0d9488);box-shadow:0 4px 6px -1px rgb(20 184 166 / .25),0 2px 4px -2px rgb(20 184 166 / .25);transition:all 200ms ease-out}.ds-primary:hover{background:linear-gradient(to right,#0d9488,#0f766e)}.ds-primary:focus-visible{outline:2px solid #14b8a6;outline-offset:2px}.ds-primary:active{transform:scale(.98)}.ds-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Cancel and template actions.",
+      "html": "<button class=\"ds-secondary\">取消</button>",
+      "css": ".ds-secondary{border:1px solid #e5e7eb;border-radius:12px;padding:10px 16px;background:white;color:#374151;font:500 14px/20px system-ui;box-shadow:0 1px 2px rgb(0 0 0 / .05);transition:all 200ms ease-out}.ds-secondary:hover{background:#f9fafb;border-color:#d1d5db}.ds-secondary:focus-visible{outline:2px solid #14b8a6;outline-offset:2px}.ds-secondary:active{transform:scale(.98)}.ds-secondary:disabled{opacity:.5;cursor:not-allowed}"
+    },
+    {
+      "name": "SKU price input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Editable numeric price with an explicit currency label.",
+      "html": "<label class=\"ds-label\">售价（元）<input class=\"ds-input\" type=\"number\" value=\"9.9\" min=\"0\" step=\"0.01\"></label>",
+      "css": ".ds-label{display:grid;gap:4px;font:12px/16px system-ui;color:#6b7280}.ds-input{min-width:0;border:1px solid #e5e7eb;border-radius:12px;padding:10px 16px;background:white;color:#111827;font:14px/20px system-ui;font-variant-numeric:tabular-nums;transition:all 200ms}.ds-input:focus-visible{outline:2px solid rgb(20 184 166 / .3);border-color:#14b8a6}.ds-input:disabled{background:#f3f4f6;cursor:not-allowed}"
+    },
+    {
+      "name": "Catalog tabs",
+      "kind": "nav",
+      "refersTo": "catalog-tab-active",
+      "description": "Static visual preview; Vue component owns keyboard navigation and panel updates.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\" aria-label=\"商品配置\"><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">基础信息</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"true\">规格与价格</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">交付设置</button></div>",
+      "css": ".ds-tabs{display:inline-flex;white-space:nowrap;padding:4px;background:#f3f4f6;border-radius:8px;max-width:100%;overflow-x:auto}.ds-tab{border:0;min-height:40px;border-radius:6px;padding:8px 16px;font:500 14px/20px system-ui;background:transparent;color:#6b7280;transition:color 150ms}.ds-tab[aria-selected=true]{background:white;color:#111827;box-shadow:0 1px 2px rgb(0 0 0 / .05)}.ds-tab:hover{color:#111827}.ds-tab:focus-visible{outline:2px solid #14b8a6;outline-offset:-2px}"
+    },
+    {
+      "name": "Delivery badge",
+      "kind": "chip",
+      "description": "Informational badge; no hover action or focus target.",
+      "html": "<span class=\"ds-badge\">自动交付</span>",
+      "css": ".ds-badge{display:inline-flex;gap:4px;align-items:center;border-radius:9999px;padding:2px 10px;background:#ccfbf1;color:#0f766e;font:500 12px/16px system-ui}"
+    },
+    {
+      "name": "Buyer purchase container",
+      "kind": "card",
+      "description": "Narrow-screen card surface from ShopProductView; content is illustrative.",
+      "html": "<aside class=\"ds-card\" aria-label=\"购买商品\"><strong>¥49.90</strong><span>7 天</span></aside>",
+      "css": ".ds-card{display:flex;align-items:end;justify-content:space-between;gap:8px;padding:12px 16px;border:1px solid #e5e7eb;border-radius:12px;background:white;color:#111827;font:14px/20px system-ui}.ds-card strong{font-size:24px;line-height:24px;font-weight:600;font-variant-numeric:tabular-nums}"
+    }
+  ],
+  "narrative": {
+    "northStar": "既有商品工作台",
+    "overview": "This is a scoped record of the existing application world, not a replacement brand direction. Product administration uses compact, clearly labelled controls, restrained neutral surfaces and teal actions. Buyer pages prioritize the selected price, duration and purchase action. Chinese copy uses the application's system font stack.",
+    "keyCharacteristics": ["Existing teal actions and paired light/dark neutral surfaces.", "One SKU editor for single and multiple specifications.", "Explicit manual and automatic delivery choices.", "Responsive field rows with a persistent dialog action area."],
+    "rules": [],
+    "dos": ["Do reuse the shared CatalogTabs, BaseDialog, DataTable, buttons and inputs.", "Do preserve visible units, labelled selection states and readable dark secondary text.", "Do keep mobile fields above the nonshrinking dialog footer."],
+    "donts": ["Don't infer delivery mode or SKU pricing from the selected usage guide.", "Don't turn the shop layout into a new global design contract.", "Don't treat screenshot sample prices as product defaults."]
+  }
+}

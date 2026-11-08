@@ -879,6 +879,16 @@ func PaymentActionsNotNil() predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldNotNull(FieldPaymentActions))
 }
 
+// SkuConfigIsNil applies the IsNil predicate on the "sku_config" field.
+func SkuConfigIsNil() predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIsNull(FieldSkuConfig))
+}
+
+// SkuConfigNotNil applies the NotNil predicate on the "sku_config" field.
+func SkuConfigNotNil() predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotNull(FieldSkuConfig))
+}
+
 // EnabledEQ applies the EQ predicate on the "enabled" field.
 func EnabledEQ(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldEnabled, v))

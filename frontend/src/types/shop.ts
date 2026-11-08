@@ -23,7 +23,19 @@ export type ShopMode = 'session_topup' | 'account_delivery'
 export type ShopStatus = 'WAITING_PAYMENT' | 'WAITING_INPUT' | 'QUEUED' | 'PROCESSING' | 'NEEDS_INPUT' | 'COMPLETED' | 'CLOSED'
 export type ShopNotificationStatus = 'NOT_SENT' | 'PENDING' | 'SENDING' | 'SENT' | 'FAILED'
 export type ShopPassDurationDays = 1 | 7
+export interface ShopSKU {
+  id: string
+  attributes: Record<string, string>
+  price: number
+  duration_value: number
+  duration_unit: 'month' | 'day' | 'year'
+  concurrency: number
+  enabled: boolean
+}
 export interface ShopProduct {
+  skus?: ShopSKU[]
+  default_sku_id?: string
+  sku_id?: string
   concurrency?: number
   concurrency_options?: { readonly concurrency: number; readonly price: number; readonly weekly_price?: number }[]
   id: number
@@ -48,7 +60,7 @@ export interface ShopProduct {
   payment_actions?: ShopPaymentAction[]
   automatic_fulfillment?: boolean
 }
-export type ShopProductInput = Omit<ShopProduct, 'id' | 'currency' | 'created_at' | 'updated_at' | 'revision'> & { revision?: number }
+export type ShopProductInput = Omit<ShopProduct, 'id' | 'currency' | 'created_at' | 'updated_at' | 'revision' | 'sku_id' | 'concurrency' | 'concurrency_options' | 'automatic_fulfillment'> & { revision?: number }
 export interface ShopInputCheck {
   account: string
   plan_type: string
@@ -101,6 +113,6 @@ export const shopNotificationLabels: Record<ShopNotificationStatus, string> = {
 export const shopModeLabels: Record<ShopMode, string> = { session_topup: '提交资料 · 人工代充', account_delivery: '人工账号交付' }
 export function isShopDaypass(product: ShopProduct): boolean { return product.guide_key === 'deepseek-daypass' }
 export function shopDeliveryLabel(product: ShopProduct): string { return product.automatic_fulfillment ? (isShopDaypass(product) ? '付款后自动发放 API Key' : '付款后自动交付') : shopModeLabels[product.fulfillment_mode] }
-export function shopDuration(product: ShopProduct): string {
+export function shopDuration(product: Pick<ShopProduct, 'duration_value' | 'duration_unit'>): string {
   return `${product.duration_value} ${ { month: '个月', day: '天', year: '年' }[product.duration_unit] }`
 }

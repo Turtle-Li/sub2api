@@ -10,6 +10,7 @@ import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import ShopNotice from '@/components/shop/ShopNotice.vue'
 import ShopMarkdown from '@/components/shop/ShopMarkdown.vue'
 import ShopGuideContent from '@/components/shop/ShopGuideContent.vue'
+import ShopSKUSelector from '@/components/shop/ShopSKUSelector.vue'
 import { shopAPI } from '@/api/shop'
 import { paymentAPI } from '@/api/payment'
 import { clearPaymentRecoverySnapshot, getVisibleMethods, writePaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
@@ -29,10 +30,13 @@ const paymentLabels = {
 } as const
 const durationDays = ref<ShopPassDurationDays>(1)
 const concurrency = ref(2)
+const selectedId = ref('')
+const configuredSKUs = computed(() => product.value?.skus?.filter(sku => sku.enabled) ?? [])
+const selectedSKU = computed(() => configuredSKUs.value.find(sku => sku.id === selectedId.value))
 const options = computed(() => product.value?.concurrency_options ?? [])
 const hasWeekly = computed(() => options.value.length > 0 && options.value.every(option => (option.weekly_price ?? 0) > 0))
 const selectedOption = computed(() => options.value.find(option => option.concurrency === concurrency.value))
-const selectedPrice = computed(() => durationDays.value === 7
+const selectedPrice = computed(() => product.value?.skus?.length ? selectedSKU.value?.price ?? 0 : durationDays.value === 7
   ? selectedOption.value?.weekly_price ?? 0
   : selectedOption.value?.price ?? product.value?.price ?? 0)
 const methodLimits = ref<ReturnType<typeof getVisibleMethods>>({})
@@ -54,6 +58,7 @@ async function load() {
   try {
     const [item, config] = await Promise.all([shopAPI.product(Number(route.params.id)), paymentAPI.getCheckoutInfo()])
     product.value = item.data
+    selectedId.value = configuredSKUs.value.find(sku => sku.id === item.data.default_sku_id)?.id ?? configuredSKUs.value[0]?.id ?? ''
     durationDays.value = 1
     concurrency.value = item.data.concurrency ?? 2
     methodLimits.value = getVisibleMethods(config.data.methods)
@@ -66,14 +71,16 @@ async function buy() {
   busy.value = true
   error.value = ''
   try {
-    const selection = `${method.value}/${options.value.length ? concurrency.value : 0}/${durationDays.value}`
+    const selection = `${method.value}/${selectedId.value}/${options.value.length ? concurrency.value : 0}/${durationDays.value}`
     if (!attemptKey || attemptMethod !== selection) { attemptKey = createIdempotencyKey('shop-order'); attemptMethod = selection }
     const result = (await shopAPI.createOrder({
       product_id: product.value.id,
       product_revision: product.value.revision,
       payment_type: method.value,
-      ...(options.value.length ? { concurrency: concurrency.value } : {}),
-      ...(durationDays.value === 7 ? { duration_days: durationDays.value } : {})
+      ...(product.value.skus?.length ? { sku_id: selectedId.value } : {
+        ...(options.value.length ? { concurrency: concurrency.value } : {}),
+        ...(durationDays.value === 7 ? { duration_days: durationDays.value } : {})
+      })
     }, attemptKey)).data
     try {
       writePaymentRecoverySnapshot(window.localStorage, {
@@ -154,11 +161,12 @@ watch(methods, available => { if (!available.includes(method.value)) method.valu
             </div>
             <div class="text-right">
               <dt class="sr-only text-xs text-gray-500 dark:text-gray-400 sm:not-sr-only">时长</dt>
-              <dd class="text-sm font-medium text-gray-800 dark:text-gray-200 sm:mt-1">{{ options.length ? (durationDays === 7 ? '7 天' : '24 小时') : shopDuration(product) }}</dd>
+              <dd class="text-sm font-medium text-gray-800 dark:text-gray-200 sm:mt-1">{{ selectedSKU ? shopDuration({ ...product, ...selectedSKU }) : options.length ? (durationDays === 7 ? '7 天' : '24 小时') : shopDuration(product) }}</dd>
             </div>
           </dl>
 
-          <fieldset v-if="hasWeekly" class="min-w-0" :disabled="busy || !!checkout">
+          <ShopSKUSelector v-if="configuredSKUs.length" v-model="selectedId" :skus="configuredSKUs" :disabled="busy || !!checkout" />
+          <fieldset v-if="!configuredSKUs.length && hasWeekly" class="min-w-0" :disabled="busy || !!checkout">
             <legend class="text-sm font-medium text-gray-900 dark:text-gray-100">有效期</legend>
             <div class="mt-1 grid grid-cols-2 gap-2">
               <label v-for="period in periods" :key="period.days" class="sku-choice" :class="{ 'sku-choice--selected': durationDays === period.days }">
@@ -171,7 +179,7 @@ watch(methods, available => { if (!available.includes(method.value)) method.valu
             </div>
           </fieldset>
 
-          <fieldset v-if="options.length" class="min-w-0" :disabled="busy || !!checkout">
+          <fieldset v-if="!configuredSKUs.length && options.length" class="min-w-0" :disabled="busy || !!checkout">
             <legend class="text-sm font-medium text-gray-900 dark:text-gray-100">
               并发数量 <span class="ml-1 text-xs font-normal text-gray-500 dark:text-gray-400">同一 Key 的同时请求数</span>
             </legend>
@@ -211,7 +219,7 @@ watch(methods, available => { if (!available.includes(method.value)) method.valu
             <ShopMarkdown :content="product.description" />
           </div>
           <p v-else-if="!product.summary" class="mt-3 text-sm text-gray-500 dark:text-gray-400">暂无更多商品说明。</p>
-          <ShopNotice class="mt-4 border-t border-gray-200 pt-3 dark:border-gray-800" :show-delivery-time="!hasDeliveryTime" :automatic="product.automatic_fulfillment" :daypass="isShopDaypass(product)" :concurrency="options.length ? concurrency : undefined" :duration-days="durationDays" />
+          <ShopNotice class="mt-4 border-t border-gray-200 pt-3 dark:border-gray-800" :show-delivery-time="!hasDeliveryTime" :automatic="product.automatic_fulfillment" :daypass="isShopDaypass(product)" :concurrency="selectedSKU?.concurrency || (options.length ? concurrency : undefined)" :duration-days="selectedSKU?.duration_unit === 'day' && selectedSKU.duration_value === 7 ? 7 : durationDays" />
           <section v-if="product.guide_key" class="mt-4 border-t border-gray-200 pt-4 dark:border-gray-800" aria-labelledby="product-guide-title">
             <h3 id="product-guide-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">使用指南</h3>
             <ShopGuideContent v-if="isShopDaypass(product)" :guide-key="product.guide_key" embedded class="mt-3" />

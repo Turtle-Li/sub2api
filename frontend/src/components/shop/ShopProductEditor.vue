@@ -1,146 +1,105 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import CatalogTabs from '@/components/common/CatalogTabs.vue'
+import ShopSKUConfig from './ShopSKUConfig.vue'
+import { editableShopSKUs, newShopSKU, skuAttributeKey } from '@/utils/shopSku'
 import type { ShopIntegrationOption, ShopProduct, ShopProductInput } from '@/types/shop'
 const props = withDefaults(defineProps<{ product: ShopProduct | null; busy: boolean; integrations?: ShopIntegrationOption[] }>(), { integrations: () => [] })
 const emit = defineEmits<{ save: [input: ShopProductInput] }>()
-const defaults = (): ShopProductInput => ({ name: '', category: '', summary: '', description: '', price: 0, duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', input_format: 'session_json', input_url: '', input_instructions: '', guide_key: '', enabled: false, sort_order: 0 })
+const defaults = (): ShopProductInput => ({ name: '', category: '', summary: '', description: '', price: 0, duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', input_format: 'session_json', input_url: '', input_instructions: '', guide_key: '', enabled: false, sort_order: 0, skus: [], default_sku_id: '', payment_actions: [] })
 const draft = reactive(defaults())
+const tab = ref('basic')
+const tabs = [{ value: 'basic', label: '基本信息' }, { value: 'sku', label: '规格与价格' }, { value: 'delivery', label: '交付设置' }]
+const delivery = ref<'manual' | 'automatic'>('manual')
 const paramsText = ref('{}')
-const actionError = ref('')
+const error = ref('')
+const native = computed(() => delivery.value === 'automatic' && draft.payment_actions?.[0]?.adapter === 'newapi.daypass.v1')
 const selectedIntegration = computed({
   get: () => draft.payment_actions?.[0] ? `${draft.payment_actions[0].integration_ref}@${draft.payment_actions[0].integration_version}` : '',
   set: (key: string) => {
     const integration = props.integrations.find(item => `${item.id}@${item.version}` === key)
     draft.payment_actions = integration ? [{ binding_key: 'primary-delivery', adapter: integration.adapter, integration_ref: integration.id, integration_version: integration.version, params: {} }] : []
-    paramsText.value = '{}'; actionError.value = ''
-    if (integration) draft.fulfillment_mode = 'account_delivery'
-    if (integration?.adapter === 'newapi.daypass.v1') Object.assign(draft, { price: 6, duration_value: 1, duration_unit: 'day', guide_key: 'deepseek-daypass' })
+    paramsText.value = '{}'
   }
 })
-watch(() => draft.guide_key, (key) => {
-  if (key === 'deepseek-daypass') Object.assign(draft, { fulfillment_mode: 'account_delivery', price: 6, duration_value: 1, duration_unit: 'day', input_format: 'text', input_url: '', input_instructions: '' })
-})
-watch(() => props.product, product => { Object.assign(draft, defaults(), { payment_actions: [] }, product ?? {}); draft.revision = product?.revision; paramsText.value = JSON.stringify(product?.payment_actions?.[0]?.params ?? {}, null, 2); actionError.value = '' }, { immediate: true })
-function isParams(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
+const missingIntegration = computed(() => selectedIntegration.value && !props.integrations.some(item => `${item.id}@${item.version}` === selectedIntegration.value))
+watch(() => props.product, product => {
+  const source = product ? JSON.parse(JSON.stringify(product)) as ShopProduct : null
+  Object.assign(draft, defaults(), source ?? {})
+  draft.revision = product?.revision
+  draft.skus = source ? editableShopSKUs(source) : [newShopSKU(draft)]
+  draft.default_sku_id = source?.default_sku_id || draft.skus[0].id
+  delivery.value = source?.payment_actions?.length ? 'automatic' : 'manual'
+  paramsText.value = JSON.stringify(source?.payment_actions?.[0]?.params ?? {}, null, 2)
+  error.value = ''; tab.value = 'basic'
+}, { immediate: true })
+function invalid(message: string, panel: string) { error.value = message; tab.value = panel }
 function save() {
-  actionError.value = ''
-  if (draft.payment_actions?.[0]) {
+  error.value = ''
+  if (!draft.name.trim()) { invalid('请填写商品名称。', 'basic'); return }
+  const skus = draft.skus ?? []
+  const defaultSKU = skus.find(sku => sku.id === draft.default_sku_id)
+  if (!skus.length || !defaultSKU || (draft.enabled && !defaultSKU.enabled)) { invalid('请选择一个已上架的默认规格。', 'sku'); return }
+  if (new Set(skus.map(sku => skuAttributeKey(sku.attributes))).size !== skus.length) { invalid('规格属性组合重复，请重新生成规格表。', 'sku'); return }
+  if (skus.some(sku => !Number.isFinite(sku.price) || sku.price < 0 || sku.price > 1000000 || Math.abs(sku.price * 100 - Math.round(sku.price * 100)) > 0.000001 || (draft.enabled && sku.enabled && sku.price <= 0) || !Number.isInteger(sku.duration_value) || sku.duration_value < 1 || sku.duration_value > 3650)) { invalid('请检查各规格价格与有效期。已上架规格价格须大于 0，最多保留两位小数。', 'sku'); return }
+  if (native.value && skus.some(sku => sku.duration_unit !== 'day' || ![1, 7].includes(sku.duration_value) || ![2, 3].includes(sku.concurrency))) { invalid('DeepSeek 规格请选择 1 天或 7 天有效期，以及 2 路或 3 路并发。可使用规格模板创建。', 'sku'); return }
+  if (delivery.value === 'automatic' && !draft.payment_actions?.length) { invalid('请选择自动交付服务。', 'delivery'); return }
+  if (delivery.value === 'automatic' && !native.value && draft.payment_actions?.[0]) {
     try {
       const params: unknown = JSON.parse(paramsText.value)
-      if (!isParams(params) || new TextEncoder().encode(paramsText.value).length > 4096) throw new Error('invalid params')
-      draft.payment_actions = [{ ...draft.payment_actions[0], params }]
-    } catch { actionError.value = '请输入 4KB 以内的 JSON 对象参数。'; return }
+      if (!params || typeof params !== 'object' || Array.isArray(params) || new TextEncoder().encode(paramsText.value).length > 4096) throw new Error('invalid params')
+      draft.payment_actions = [{ ...draft.payment_actions[0], params: params as Record<string, unknown> }]
+    } catch { invalid('请输入 4KB 以内的 JSON 对象参数。', 'delivery'); return }
   }
-  emit('save', { name: draft.name, category: draft.category, summary: draft.summary, description: draft.description, price: draft.price, duration_value: draft.duration_value, duration_unit: draft.duration_unit, fulfillment_mode: draft.fulfillment_mode, input_format: draft.input_format, input_url: draft.input_url, input_instructions: draft.input_instructions, guide_key: draft.guide_key, enabled: draft.enabled, sort_order: draft.sort_order, revision: draft.revision, payment_actions: draft.payment_actions ?? [] })
+  emit('save', {
+    name: draft.name.trim(), category: draft.category.trim(), summary: draft.summary, description: draft.description,
+    price: defaultSKU.price, duration_value: defaultSKU.duration_value, duration_unit: defaultSKU.duration_unit,
+    skus: skus.map(sku => ({ ...sku, attributes: { ...sku.attributes }, concurrency: native.value ? sku.concurrency : 0 })), default_sku_id: defaultSKU.id,
+    fulfillment_mode: delivery.value === 'automatic' ? 'account_delivery' : draft.fulfillment_mode,
+    input_format: draft.input_format, input_url: draft.input_url, input_instructions: draft.input_instructions,
+    guide_key: draft.guide_key, enabled: draft.enabled, sort_order: draft.sort_order, revision: draft.revision,
+    payment_actions: delivery.value === 'automatic' ? draft.payment_actions ?? [] : []
+  })
 }
 </script>
 <template>
-  <form id="shop-product-editor" class="space-y-4" @submit.prevent="save">
-    <fieldset :disabled="busy" class="min-w-0 space-y-4">
-      <section aria-labelledby="editor-basic" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
-        <div class="mb-4">
-          <h2 id="editor-basic" class="text-base font-semibold text-gray-900 dark:text-gray-100">基础信息</h2>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">用于商品列表与详情页展示，详情支持 Markdown。</p>
+  <form id="shop-product-editor" novalidate @submit.prevent="save">
+    <fieldset :disabled="busy" class="min-w-0 space-y-5 text-gray-900 dark:text-gray-100">
+      <CatalogTabs v-model="tab" id="product-editor" label="商品配置" :options="tabs" />
+      <p v-if="error" role="alert" class="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{{ error }}</p>
+      <section v-show="tab === 'basic'" id="product-editor-panel-basic" role="tabpanel" aria-labelledby="product-editor-basic" class="space-y-5">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <label class="text-sm font-medium">商品名称 <span class="text-red-500">*</span><input id="product-name" v-model="draft.name" class="input mt-1.5" maxlength="160" placeholder="如：DeepSeek API 订阅卡" /></label>
+          <label class="text-sm font-medium">商品分类<input id="product-category" v-model="draft.category" class="input mt-1.5" maxlength="80" placeholder="如：API 服务、账号、代充" /></label>
         </div>
-        <div class="grid gap-4 md:grid-cols-2">
-          <div>
-            <div class="flex items-center justify-between gap-3"><label for="product-name" class="text-sm font-medium text-gray-700 dark:text-gray-200">商品名称 <span class="text-red-600" aria-hidden="true">*</span></label><span id="product-name-count" class="text-xs text-gray-400">{{ draft.name.length }}/160</span></div>
-            <input id="product-name" aria-describedby="product-name-count" v-model="draft.name" type="text" required maxlength="160" autocomplete="off" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-          </div>
-          <div>
-            <div class="flex items-center justify-between gap-3"><label for="product-category" class="text-sm font-medium text-gray-700 dark:text-gray-200">分类</label><span id="product-category-count" class="text-xs text-gray-400">{{ draft.category.length }}/80</span></div>
-            <input id="product-category" aria-describedby="product-category-count" v-model="draft.category" type="text" maxlength="80" autocomplete="off" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-          </div>
+        <label class="block text-sm font-medium">商品简介<textarea id="product-summary" v-model="draft.summary" class="input mt-1.5" rows="2" maxlength="600" placeholder="一句话介绍商品，展示在商城列表中"></textarea></label>
+        <label class="block text-sm font-medium">商品详情<textarea id="product-description" v-model="draft.description" class="input mt-1.5" rows="6" maxlength="50000" placeholder="介绍商品权益、适用范围和购买须知，支持 Markdown"></textarea></label>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <label class="text-sm font-medium">使用指南<select id="guide-key" v-model="draft.guide_key" class="input mt-1.5"><option value="">不附加指南</option><option value="chatgpt-plus-account">ChatGPT Plus 账号指南</option><option value="deepseek-daypass">DeepSeek API 使用指南</option></select><span class="mt-1 block text-xs font-normal leading-5 text-gray-500">指南仅控制说明内容，价格与交付方式单独设置。</span></label>
+          <label class="text-sm font-medium">排序值<input id="sort-order" v-model.number="draft.sort_order" type="number" step="1" class="input mt-1.5" /><span class="mt-1 block text-xs font-normal text-gray-500">数值越小，展示越靠前。</span></label>
         </div>
-        <div class="mt-4">
-          <div class="flex items-center justify-between gap-3"><label for="product-summary" class="text-sm font-medium text-gray-700 dark:text-gray-200">摘要</label><span id="product-summary-count" class="text-xs text-gray-400">{{ draft.summary.length }}/1000</span></div>
-          <textarea id="product-summary" aria-describedby="product-summary-count" v-model="draft.summary" rows="2" maxlength="1000" class="mt-1.5 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm leading-6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"></textarea>
-        </div>
-        <div class="mt-4">
-          <div class="flex items-center justify-between gap-3"><label for="product-description" class="text-sm font-medium text-gray-700 dark:text-gray-200">Markdown 详情</label><span id="product-description-count" class="text-xs text-gray-400">{{ draft.description.length }}/50000</span></div>
-          <textarea id="product-description" aria-describedby="product-description-count" v-model="draft.description" rows="5" maxlength="50000" class="mt-1.5 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm leading-6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" placeholder="输入商品说明、适用范围和必要注意事项"></textarea>
-        </div>
+        <label class="flex min-h-11 items-center gap-3 border-t border-gray-100 pt-4 text-sm dark:border-dark-700"><input id="product-enabled" v-model="draft.enabled" type="checkbox" class="h-4 w-4 rounded" /><span><span class="block font-medium">上架商品</span><span class="mt-0.5 block text-xs text-gray-500">关闭后保留配置，买家无法下单。</span></span></label>
       </section>
-
-      <section aria-labelledby="editor-payment-action" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
-        <h2 id="editor-payment-action" class="text-base font-semibold text-gray-900 dark:text-gray-100">付款后操作</h2>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">选择人工交付或已登记的自动服务。修改配置只影响新订单。</p>
-        <label for="payment-action" class="mt-4 block text-sm font-medium text-gray-700 dark:text-gray-200">处理方式</label>
-        <select id="payment-action" v-model="selectedIntegration" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
-          <option value="">人工处理</option>
-          <option v-for="item in integrations" :key="`${item.id}@${item.version}`" :value="`${item.id}@${item.version}`">{{ item.adapter === 'newapi.daypass.v1' ? 'DeepSeek 自动发 Key' : 'HTTP 钩子' }} · {{ item.id }} v{{ item.version }}{{ item.enabled ? '' : '（尚未启用）' }}</option>
-          <option v-if="selectedIntegration && !integrations.some(item => `${item.id}@${item.version}` === selectedIntegration)" :value="selectedIntegration">原配置 {{ selectedIntegration }}（当前未登记）</option>
-        </select>
-        <template v-if="draft.payment_actions?.length">
-          <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">自动交付仅支持无需买家补充资料的商品。接口与签名凭据由部署配置管理，本页只填业务参数。</p>
-          <label for="payment-action-params" class="mt-4 block text-sm font-medium text-gray-700 dark:text-gray-200">业务参数（JSON）</label>
-          <textarea id="payment-action-params" v-model="paramsText" rows="4" spellcheck="false" :aria-invalid="!!actionError" aria-describedby="payment-action-help" class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white p-3 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"></textarea>
-          <p id="payment-action-help" class="mt-1 text-xs text-gray-500 dark:text-gray-400">例如 SKU 或服务规格。不要填写 API Key、密码或签名密钥。</p>
+      <section v-show="tab === 'sku'" id="product-editor-panel-sku" role="tabpanel" aria-labelledby="product-editor-sku">
+        <ShopSKUConfig :model-value="draft.skus ?? []" :default-id="draft.default_sku_id ?? ''" :native="native" @update:model-value="draft.skus = $event" @update:default-id="draft.default_sku_id = $event" />
+      </section>
+      <section v-show="tab === 'delivery'" id="product-editor-panel-delivery" role="tabpanel" aria-labelledby="product-editor-delivery" class="space-y-5">
+        <fieldset><legend class="mb-2 text-sm font-medium">交付方式</legend><div class="grid gap-3 sm:grid-cols-2"><label :class="['flex cursor-pointer items-start gap-3 rounded-lg border p-4', delivery === 'manual' ? 'border-primary-500 bg-primary-50/50 dark:bg-primary-900/10' : 'border-gray-200 dark:border-dark-700']"><input v-model="delivery" type="radio" name="delivery-mode" value="manual" class="mt-1" /><span><span class="block text-sm font-medium">人工交付</span><span class="mt-1 block text-xs leading-5 text-gray-500">代充、成品号。收款后进入处理队列。</span></span></label><label :class="['flex cursor-pointer items-start gap-3 rounded-lg border p-4', delivery === 'automatic' ? 'border-primary-500 bg-primary-50/50 dark:bg-primary-900/10' : 'border-gray-200 dark:border-dark-700']"><input v-model="delivery" type="radio" name="delivery-mode" value="automatic" class="mt-1" /><span><span class="block text-sm font-medium">自动交付</span><span class="mt-1 block text-xs leading-5 text-gray-500">付款后调用服务，由回调返回交付结果。</span></span></label></div></fieldset>
+        <template v-if="delivery === 'manual'">
+          <label class="block text-sm font-medium">人工处理类型<select id="fulfillment-mode" v-model="draft.fulfillment_mode" class="input mt-1.5"><option value="session_topup">代充 · 买家提交资料</option><option value="account_delivery">成品号 · 管理员交付账号</option></select></label>
+          <template v-if="draft.fulfillment_mode === 'session_topup'">
+            <div class="grid gap-4 sm:grid-cols-2"><label class="text-sm font-medium">资料格式<select id="input-format" v-model="draft.input_format" class="input mt-1.5"><option value="session_json">Session JSON</option><option value="text">原始文本</option></select></label><label class="text-sm font-medium">资料来源链接<input id="input-url" v-model="draft.input_url" type="url" class="input mt-1.5" placeholder="https://chatgpt.com/api/auth/session" /></label></div>
+            <label class="block text-sm font-medium">买家提交说明<textarea id="input-instructions" v-model="draft.input_instructions" rows="4" maxlength="5000" class="input mt-1.5" placeholder="说明买家需提交哪些资料，以及如何获取"></textarea></label>
+          </template>
+          <p v-else class="rounded-lg bg-gray-50 p-4 text-sm leading-6 text-gray-500 dark:bg-dark-800">付款后进入人工处理队列。管理员处理订单时填写账号与使用说明，买家在订单中查看交付内容。</p>
         </template>
-        <p v-if="actionError" role="alert" class="mt-2 text-sm text-red-700 dark:text-red-300">{{ actionError }}</p>
-      </section>
-
-      <section aria-labelledby="editor-sales" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
-        <div class="mb-4"><h2 id="editor-sales" class="text-base font-semibold text-gray-900 dark:text-gray-100">销售设置</h2><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">价格单位为人民币；启用商品时价格不得低于 0.01。</p></div>
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <label for="product-price" class="text-sm font-medium text-gray-700 dark:text-gray-200">价格（CNY）</label>
-            <div class="relative mt-1.5"><span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-gray-500" aria-hidden="true">¥</span><input id="product-price" v-model.number="draft.price" type="number" required :min="draft.enabled ? 0.01 : 0" step="0.01" class="min-h-11 w-full rounded-lg border border-gray-300 bg-white py-2 pl-8 pr-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" /></div>
-          </div>
-          <div>
-            <label for="duration-value" class="text-sm font-medium text-gray-700 dark:text-gray-200">时长数值</label>
-            <input id="duration-value" v-model.number="draft.duration_value" type="number" required min="1" step="1" inputmode="numeric" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-          </div>
-          <div>
-            <label for="duration-unit" class="text-sm font-medium text-gray-700 dark:text-gray-200">时长单位</label>
-            <select id="duration-unit" v-model="draft.duration_unit" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="month">个月</option><option value="day">天</option><option value="year">年</option></select>
-          </div>
-        </div>
-      </section>
-
-      <section v-if="!draft.payment_actions?.length" aria-labelledby="editor-fulfillment" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
-        <div class="mb-4"><h2 id="editor-fulfillment" class="text-base font-semibold text-gray-900 dark:text-gray-100">履约设置</h2><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">切换模式不会清空其他字段。资料来源仅接受 HTTPS 地址。</p></div>
-        <div class="grid gap-4 md:grid-cols-2">
-          <div>
-            <label for="fulfillment-mode" class="text-sm font-medium text-gray-700 dark:text-gray-200">履约模式</label>
-            <select id="fulfillment-mode" v-model="draft.fulfillment_mode" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="session_topup">提交资料 · 人工代充</option><option value="account_delivery">人工账号交付</option></select>
-          </div>
-          <div>
-            <label for="input-format" class="text-sm font-medium text-gray-700 dark:text-gray-200">输入格式</label>
-            <select id="input-format" v-model="draft.input_format" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="session_json">Session JSON</option><option value="text">原始文本</option></select>
-          </div>
-        </div>
-        <div class="mt-4">
-          <label for="input-url" class="text-sm font-medium text-gray-700 dark:text-gray-200">HTTPS 资料来源</label>
-          <input id="input-url" v-model="draft.input_url" type="url" pattern="https://.*" autocomplete="off" placeholder="https://chatgpt.com/api/auth/session" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">代充默认使用 ChatGPT 会话页面，其他来源请填写 HTTPS 地址。</p>
-        </div>
-        <div class="mt-4">
-          <div class="flex items-center justify-between gap-3"><label for="input-instructions" class="text-sm font-medium text-gray-700 dark:text-gray-200">买家输入说明</label><span id="input-instructions-count" class="text-xs text-gray-400">{{ draft.input_instructions.length }}/5000</span></div>
-          <textarea id="input-instructions" aria-describedby="input-instructions-count" v-model="draft.input_instructions" rows="3" maxlength="5000" class="mt-1.5 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm leading-6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" placeholder="说明如何打开来源页面并复制全部原始内容"></textarea>
-        </div>
-      </section>
-
-      <section aria-labelledby="editor-display" class="rounded-xl border border-gray-200 p-4 md:p-5 dark:border-gray-700">
-        <div class="mb-4"><h2 id="editor-display" class="text-base font-semibold text-gray-900 dark:text-gray-100">展示与指南</h2><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">控制指南入口、列表顺序和商品是否可用。</p></div>
-        <div class="grid gap-4 md:grid-cols-2">
-          <div>
-            <label for="guide-key" class="text-sm font-medium text-gray-700 dark:text-gray-200">使用指南</label>
-            <select id="guide-key" v-model="draft.guide_key" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"><option value="">不使用指南</option><option value="chatgpt-plus-account">ChatGPT Plus 账号使用指南</option><option value="deepseek-daypass">DeepSeek API 使用指南</option></select>
-            <p v-if="draft.guide_key === 'deepseek-daypass' && !draft.payment_actions?.length" class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">指南仅用于说明。自动发 Key 还需在“付款后操作”中选择 DeepSeek 集成。</p>
-          </div>
-          <div>
-            <label for="sort-order" class="text-sm font-medium text-gray-700 dark:text-gray-200">排序值</label>
-            <input id="sort-order" v-model.number="draft.sort_order" type="number" required step="1" class="mt-1.5 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-          </div>
-        </div>
-        <label for="product-enabled" class="mt-4 flex min-h-11 cursor-pointer items-start gap-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-950">
-          <input id="product-enabled" v-model="draft.enabled" type="checkbox" class="mt-0.5 h-5 w-5 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600" />
-          <span><span class="block text-sm font-medium text-gray-800 dark:text-gray-100">启用并上线商品</span><span class="mt-0.5 block text-xs leading-5 text-gray-500 dark:text-gray-400">关闭时保留为草稿或停用状态；启用前请核对价格、时长与履约配置。</span></span>
-        </label>
-        <p v-if="draft.revision !== undefined" class="mt-3 text-xs text-gray-500 dark:text-gray-400">当前编辑版本：{{ draft.revision }}</p>
+        <template v-else>
+          <label class="block text-sm font-medium">自动交付服务<select id="payment-action" v-model="selectedIntegration" class="input mt-1.5"><option value="">请选择服务</option><option v-if="missingIntegration" :value="selectedIntegration">{{ selectedIntegration }}（当前不可用）</option><option v-for="integration in integrations" :key="`${integration.id}@${integration.version}`" :value="`${integration.id}@${integration.version}`" :disabled="!integration.enabled">{{ integration.adapter === 'newapi.daypass.v1' ? 'DeepSeek API Key' : '链接 / 回调交付' }} · {{ integration.id }} v{{ integration.version }}{{ integration.enabled ? '' : '（停用）' }}</option></select></label>
+          <p v-if="!integrations.length" class="text-sm text-amber-700 dark:text-amber-300">尚无可用的自动交付服务。请先配置服务集成，再上架自动交付商品。</p>
+          <div v-if="native" class="rounded-lg bg-gray-50 p-4 text-sm leading-6 text-gray-600 dark:bg-dark-800 dark:text-gray-300">从所选 SKU 读取有效期、并发与价格，调用 DeepSeek 服务获取 API Key。请到「规格与价格」配置日卡、周卡及对应售价。</div>
+          <details v-else-if="selectedIntegration" class="rounded-lg border border-gray-200 p-4 dark:border-dark-700"><summary class="cursor-pointer text-sm font-medium">高级服务参数</summary><label class="mt-3 block text-sm">商品参数（JSON）<textarea id="payment-action-params" v-model="paramsText" rows="4" spellcheck="false" class="input mt-1.5 font-mono text-xs"></textarea></label><p class="mt-2 text-xs leading-5 text-gray-500">SKU 与订单金额随请求发送。此处仅填写服务需要的商品参数，不填写密码或密钥。</p></details>
+        </template>
       </section>
     </fieldset>
-
   </form>
 </template>

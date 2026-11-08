@@ -1,5 +1,13 @@
 # Sub2API project operations
 
+## Shop product catalog and SKU
+
+- Read `docs/features/SHOP_UNIFIED_SKU_20261108.md` before changing shop product
+  configuration, SKU selection/pricing or automatic delivery. It records pinned
+  references, migration 274 and the paired DeepSeek receiver protocol. Preserve
+  historical snapshots and version-zero binding digests. Configured checkouts
+  require a server-resolved SKU ID; prices and entitlements come from the catalog.
+
 ## Model availability status
 
 - Before changing public/model availability, component history, incidents or

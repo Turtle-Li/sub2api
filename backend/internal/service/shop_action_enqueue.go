@@ -36,6 +36,10 @@ func enqueueShopOrderActionTx(ctx context.Context, client *dbent.Client, o *dben
 	}
 	snapshot := shopaction.Snapshot{Request: shopaction.Request{Version: 1, Event: shopaction.Paid, ActionID: key, Source: shopDaypassInstance,
 		Order: shopaction.Order{ID: o.ID, ProductID: f.ProductID, AmountFen: int64(math.Round(o.PayAmount * 100)), Currency: "CNY", PaidAt: paid}}}
+	if p.SKUID != "" && len(p.SKUs) == 1 && p.SKUs[0].ID == p.SKUID {
+		sku := p.SKUs[0]
+		snapshot.Request.Order.SKU = &shopaction.SKU{ID: sku.ID, Attributes: sku.Attributes, DurationValue: sku.DurationValue, DurationUnit: sku.DurationUnit, Concurrency: sku.Concurrency}
+	}
 	if snapshotErr != nil || len(p.PaymentActions) != 1 || p.FulfillmentMode != ShopAccountDelivery {
 		state, kind = shopaction.Review, "SNAPSHOT_INVALID"
 	} else {

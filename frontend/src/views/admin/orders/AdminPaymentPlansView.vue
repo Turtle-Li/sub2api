@@ -1,27 +1,10 @@
 <template>
   <AppLayout>
     <div class="space-y-4">
-      <RouterLink to="/admin/shop/products" class="btn btn-secondary">商城人工服务商品配置</RouterLink>
-      <div class="inline-flex rounded-lg bg-gray-100 p-1 dark:bg-dark-800" role="tablist" :aria-label="t('payment.admin.productConfig')">
-        <button
-          v-for="tab in catalogTabs"
-          :key="tab.value"
-          type="button"
-          role="tab"
-          :aria-selected="activeCatalog === tab.value"
-          :class="[
-            'rounded-md px-4 py-2 text-sm font-medium transition-colors',
-            activeCatalog === tab.value
-              ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
-              : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white',
-          ]"
-          @click="activeCatalog = tab.value"
-        >
-          {{ tab.label }}
-        </button>
-      </div>
+      <header><h1 class="text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">商品配置</h1><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">管理订阅、按量充值与商城商品。</p></header>
+      <CatalogTabs v-model="activeCatalog" id="product-catalog" :label="t('payment.admin.productConfig')" :options="catalogTabs" />
 
-      <template v-if="activeCatalog === 'subscription'">
+      <section v-if="activeCatalog === 'subscription'" id="product-catalog-panel-subscription" role="tabpanel" aria-labelledby="product-catalog-subscription" class="space-y-4">
       <!-- Actions -->
       <div class="flex items-center justify-end gap-2">
         <button @click="loadPlans" :disabled="plansLoading" class="btn btn-secondary" :title="t('common.refresh')">
@@ -92,9 +75,10 @@
           </div>
         </template>
       </DataTable>
-      </template>
+      </section>
 
-      <AdminRechargeCatalogPanel v-else />
+      <section v-else-if="activeCatalog === 'recharge'" id="product-catalog-panel-recharge" role="tabpanel" aria-labelledby="product-catalog-recharge"><AdminRechargeCatalogPanel /></section>
+      <section v-else id="product-catalog-panel-shop" role="tabpanel" aria-labelledby="product-catalog-shop"><AdminShopProductsPanel /></section>
     </div>
 
     <!-- Plan Edit Dialog -->
@@ -105,7 +89,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
@@ -125,13 +110,20 @@ import { currencySymbol } from '@/components/payment/currency'
 import { platformTextClass } from '@/utils/platformColors'
 import { monthlyResetCardDeliveryLabel as formatMonthlyResetCardDelivery, planValidityLabel } from '@/components/payment/validity'
 import AdminRechargeCatalogPanel from './AdminRechargeCatalogPanel.vue'
+import CatalogTabs from '@/components/common/CatalogTabs.vue'
+import AdminShopProductsPanel from '@/components/shop/AdminShopProductsPanel.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const activeCatalog = ref<'subscription' | 'recharge'>('subscription')
+const route = useRoute()
+const router = useRouter()
+const activeCatalog = ref(typeof route?.query.tab === 'string' && ['shop', 'recharge'].includes(route.query.tab) ? route.query.tab : 'subscription')
+watch(activeCatalog, tab => { if (router) void router.replace({ query: { ...route.query, tab } }) })
+watch(() => route?.query.tab, tab => { activeCatalog.value = typeof tab === 'string' && ['shop', 'recharge'].includes(tab) ? tab : 'subscription' })
 const catalogTabs = computed(() => [
   { value: 'subscription' as const, label: t('payment.admin.subscriptionProducts') },
   { value: 'recharge' as const, label: t('payment.admin.balanceProducts') },
+  { value: 'shop' as const, label: '商城商品' },
 ])
 
 function planCurrencySymbol(currency?: string): string {

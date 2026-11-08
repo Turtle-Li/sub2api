@@ -42,12 +42,15 @@ type daypassTestGateway struct {
 	afterProvision          func()
 }
 
-func (*daypassTestGateway) Ready(context.Context, int) error { return nil }
+func (*daypassTestGateway) Ready(context.Context, int) error    { return nil }
+func (*daypassTestGateway) ReadySKU(context.Context, int) error { return nil }
 func (g *daypassTestGateway) Provision(_ context.Context, b shopDaypassBinding) (*shopDaypassGrant, error) {
 	g.provisions++
 	if g.grant == nil {
 		duration := int64(86400)
-		if b.PriceFen == 3000 || b.PriceFen == 4000 {
+		if b.SKUVersion == 2 {
+			duration = int64(b.DurationSeconds)
+		} else if b.PriceFen == 3000 || b.PriceFen == 4000 {
 			duration *= 7
 		}
 		g.grant = &shopDaypassGrant{Instance: b.Instance, OrderID: b.OrderID, ProductID: b.ProductID, PaidAt: b.PaidAt, ExpiresAt: b.PaidAt + duration, TokenID: 71, Status: "active", Key: "sk-" + strings.Repeat("d", 48)}

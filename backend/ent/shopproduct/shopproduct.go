@@ -39,6 +39,8 @@ const (
 	FieldGuideKey = "guide_key"
 	// FieldPaymentActions holds the string denoting the payment_actions field in the database.
 	FieldPaymentActions = "payment_actions"
+	// FieldSkuConfig holds the string denoting the sku_config field in the database.
+	FieldSkuConfig = "sku_config"
 	// FieldEnabled holds the string denoting the enabled field in the database.
 	FieldEnabled = "enabled"
 	// FieldSortOrder holds the string denoting the sort_order field in the database.
@@ -69,6 +71,7 @@ var Columns = []string{
 	FieldInputInstructions,
 	FieldGuideKey,
 	FieldPaymentActions,
+	FieldSkuConfig,
 	FieldEnabled,
 	FieldSortOrder,
 	FieldRevision,
