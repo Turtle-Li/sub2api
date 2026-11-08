@@ -521,11 +521,30 @@ func (p *OpenAIImagesBatchProvider) putResultLine(ctx context.Context, key strin
 	if len(line) <= 1 || len(line) > batchImageOpenAIResultMaxBytes {
 		return false, ErrBatchImageProviderInvalidInput
 	}
-	created, err := p.store.PutIfAbsent(ctx, key, "application/x-ndjson", bytes.NewReader(line), int64(len(line)))
-	if err != nil {
-		return false, ErrBatchImageProviderStorageUnavailable.WithCause(err)
+	var err error
+	// Retain completed bytes while retrying only the conditional result write.
+	// The upstream-attempt claim and generation call must never be replayed.
+	for attempt := range 3 {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		var created bool
+		created, err = p.store.PutIfAbsent(ctx, key, "application/x-ndjson", bytes.NewReader(line), int64(len(line)))
+		if err == nil {
+			return created, nil
+		}
+		if attempt == 2 {
+			break
+		}
+		timer := time.NewTimer(250 * time.Millisecond * time.Duration(1<<attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	return created, nil
+	return false, ErrBatchImageProviderStorageUnavailable.WithCause(err)
 }
 
 func (p *OpenAIImagesBatchProvider) combineResults(ctx context.Context, batchID string, items []BatchImageInputItem, outputKey string) error {

@@ -387,7 +387,7 @@ func (s *batchImageCOSDeliveryStore) PutIfAbsent(ctx context.Context, key, conte
 	}
 	// The caller must treat an error as an uncertain claim and must never issue
 	// the upstream request from this attempt.
-	return false, errors.New("conditionally put COS delivery object failed")
+	return false, batchImageCOSOperationError("conditionally put COS delivery object", err)
 }
 
 func (s *batchImageCOSDeliveryStore) requireNeverVersionedBucket(ctx context.Context) error {

@@ -137,3 +137,18 @@ Independent Claude review is unavailable: the official CLI returned HTTP503
 updated the unavailable-model rule; no further Claude calls or substitute model
 API calls are made. This is not recorded as a passed independent review. Codex
 continues the remaining checks and release under the owner's explicit instruction.
+
+## Native acceptance storage follow-up
+
+Controlled acceptance exposed storage errors and a Seedream Pro attempt with
+unknown outcome. The existing log cannot distinguish a lost initial claim
+acknowledgement from a result-save failure. A targeted regression separately
+reproduced result loss after a failed save. The common provider retains its result bytes for up to
+three conditional object writes with cancellation-aware250/500ms delays. Each
+write uses the same key and a fresh in-memory reader; an already committed object
+still wins. Upstream attempt claims and generation POSTs are unchanged and never
+replayed. Conditional COS errors reuse the existing sanitized diagnostics.
+Evidence, the unrecoverable first canary and regression scope are documented in
+`../bugs/backend/BUG-20261108-native-result-persistence.md`. Final live outcomes
+and actual browser timings belong in
+`../operations/IMAGE_STUDIO_LOAD_NATIVE_RELEASE_20261108.md`.

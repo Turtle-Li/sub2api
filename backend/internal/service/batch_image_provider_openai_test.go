@@ -419,6 +419,81 @@ func TestOpenAIImagesBatchProviderItemResultFirstWriterWins(t *testing.T) {
 	require.Equal(t, append(bytes.TrimSpace(first), '\n'), persisted)
 }
 
+type transientItemResultStore struct {
+	*fakeOpenAIImageBatchStore
+	key       string
+	failures  int
+	calls     int
+	committed bool
+	cancel    context.CancelFunc
+}
+
+func (s *transientItemResultStore) PutIfAbsent(ctx context.Context, key, contentType string, body io.Reader, size int64) (bool, error) {
+	if key != s.key {
+		return s.fakeOpenAIImageBatchStore.PutIfAbsent(ctx, key, contentType, body, size)
+	}
+	s.calls++
+	if s.calls <= s.failures {
+		if s.committed {
+			if _, err := s.fakeOpenAIImageBatchStore.PutIfAbsent(ctx, key, contentType, body, size); err != nil {
+				return false, err
+			}
+		} else {
+			_, _ = io.Copy(io.Discard, body)
+		}
+		if s.cancel != nil {
+			s.cancel()
+		}
+		return false, errors.New("temporary result storage failure")
+	}
+	return s.fakeOpenAIImageBatchStore.PutIfAbsent(ctx, key, contentType, body, size)
+}
+
+func TestOpenAIImagesBatchProviderRetriesResultStorageWithoutRegeneration(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(strconv.FormatBool(committed), func(t *testing.T) {
+			ctx := context.Background()
+			store := &transientItemResultStore{fakeOpenAIImageBatchStore: newFakeOpenAIImageBatchStore(), failures: 2, committed: committed}
+			executor := &fakeOpenAIImageBatchExecutor{}
+			provider := NewOpenAIImagesBatchProvider(store, executor, testOpenAIImageBatchObjectPrefix)
+			batchID := "imgbatch_39393939393939393939393939393939"
+			store.key = provider.itemResultKey(batchID, 0)
+			account := &Account{ID: 91, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			created, err := provider.Submit(ctx, &BatchImageJob{BatchID: batchID}, account, BatchImageInput{BatchID: batchID, Model: "gpt-image-2.5-sunburst", Items: []BatchImageInputItem{{CustomID: "one", Prompt: "one image"}}})
+			require.NoError(t, err)
+			job := &BatchImageJob{BatchID: batchID, ProviderJobName: batchImageStringPtr(created.ProviderJobName), ProviderInputRef: batchImageStringPtr(created.ProviderInputRef), ItemCount: 1}
+			status, err := provider.Advance(ctx, job, account)
+			require.NoError(t, err)
+			require.Equal(t, BatchProviderStateRunning, status.InternalState)
+			status, err = provider.Advance(ctx, job, account)
+			require.NoError(t, err)
+			require.Equal(t, BatchProviderStateSucceeded, status.InternalState)
+			require.Equal(t, 3, store.calls)
+			executor.mu.Lock()
+			require.Equal(t, 1, executor.upstreamStarts)
+			executor.mu.Unlock()
+		})
+	}
+}
+
+func TestOpenAIImagesBatchResultStorageRetryStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &transientItemResultStore{fakeOpenAIImageBatchStore: newFakeOpenAIImageBatchStore(), key: "result", failures: 3, cancel: cancel}
+	provider := NewOpenAIImagesBatchProvider(store, nil, testOpenAIImageBatchObjectPrefix)
+	_, err := provider.putResultLine(ctx, store.key, batchImageOpenAIFailureLine("one", "FAILED", "failure"))
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, store.calls)
+}
+
+func TestOpenAIImagesBatchResultStorageRetryIsBounded(t *testing.T) {
+	store := &transientItemResultStore{fakeOpenAIImageBatchStore: newFakeOpenAIImageBatchStore(), key: "result", failures: 100}
+	provider := NewOpenAIImagesBatchProvider(store, nil, testOpenAIImageBatchObjectPrefix)
+	_, err := provider.putResultLine(context.Background(), store.key, batchImageOpenAIFailureLine("one", "FAILED", "failure"))
+	require.ErrorIs(t, err, ErrBatchImageProviderStorageUnavailable)
+	require.Equal(t, 3, store.calls)
+}
+
 func TestOpenAIImagesBatchProviderBusyAccountDoesNotStartAttempt(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeOpenAIImageBatchStore()

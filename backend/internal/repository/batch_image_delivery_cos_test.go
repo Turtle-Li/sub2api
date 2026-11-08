@@ -168,6 +168,28 @@ func TestBatchImageCOSPutIfAbsentUsesAtomicPrecondition(t *testing.T) {
 	require.Equal(t, 2, requestCount)
 }
 
+func TestBatchImageCOSPutIfAbsentReportsSanitizedServiceDiagnostics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.Method == http.MethodGet && r.URL.Query().Has("versioning") {
+			_, _ = io.WriteString(w, `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `<Error><Code>InvalidRequest</Code><Message>private https://secret.example/token</Message></Error>`)
+	}))
+	t.Cleanup(server.Close)
+	providerStore := testBatchImageCOSStore(t, server.URL)
+	created, err := providerStore.PutIfAbsent(context.Background(), "provider/openai/result", "text/plain", bytes.NewReader([]byte("result")), 6)
+	require.False(t, created)
+	require.ErrorContains(t, err, "status=400")
+	require.ErrorContains(t, err, "code=InvalidRequest")
+	require.ErrorContains(t, err, "category=service_api")
+	require.NotContains(t, err.Error(), "secret.example")
+	require.NotContains(t, err.Error(), "private")
+}
+
 func TestBatchImageCOSPutReportsSanitizedServiceDiagnostics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPut, r.Method)
