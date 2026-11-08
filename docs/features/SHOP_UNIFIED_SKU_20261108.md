@@ -152,5 +152,6 @@ active，blue同一源码/镜像作为兼容排空或历史恢复槽，后台sta
 数据卷保留。证据 `retired-incompatible-slot.json` 位于此次恢复槽日志目录。
 后续只允许本次SKU协议兼容程序，保留JSONB、订单快照、回执与全部资金记录；禁止旧DB。
 最终API/www健康均ok，green健康/active、blue健康/只读standby继续自然排空，二者零重启；
+后续规范监控确认blue连接数为0，并于11:07UTC确认其已自然停止，保留同版兼容恢复槽。
 旧legacy槽已不存在。运行保护timer的既有disabled/inactive状态保持，没有在本次功能发布
 中修改保护程序、重启策略或启用开关；上述两个槽为规范手动/应急恢复提供兼容镜像。
