@@ -735,8 +735,10 @@ func ProvideScheduledTestRunnerService(
 	cfg *config.Config,
 	lockCache LeaderLockCache,
 	db *sql.DB,
+	concurrencySvc *ConcurrencyService,
 ) *ScheduledTestRunnerService {
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
+	svc.accountSlots = concurrencySvc
 	svc.leaderLock = newSingletonJobLock(lockCache, db, "scheduled-test-runner", 2*time.Minute)
 	svc.Start()
 	return svc
@@ -1275,7 +1277,8 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 }
 
 func ProvideChannelMonitorV3GroupProber(repo ChannelMonitorV3Repository, groups GroupRepository, settings *SettingService,
-	gateway *GatewayService, openai *OpenAIGatewayService, concurrency *ConcurrencyService, db *sql.DB, ops *OpsService, email *NotificationEmailService) *ChannelMonitorV3GroupProber {
+	gateway *GatewayService, openai *OpenAIGatewayService, concurrency *ConcurrencyService, db *sql.DB, ops *OpsService, email *NotificationEmailService,
+) *ChannelMonitorV3GroupProber {
 	prober := NewChannelMonitorV3GroupProber(repo, groups, settings, gateway, openai, concurrency, db, ops, email)
 	prober.Start()
 	return prober

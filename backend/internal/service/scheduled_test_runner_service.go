@@ -12,11 +12,27 @@ import (
 
 const scheduledTestDefaultMaxWorkers = 10
 
+const scheduledKeepAliveCooldown = 6 * time.Hour
+
+type scheduledAccountTester interface {
+	RunTestBackground(context.Context, int64, string) (*ScheduledTestResult, error)
+}
+
+type scheduledAccountReader interface {
+	GetByID(context.Context, int64) (*Account, error)
+}
+
+type scheduledAccountSlots interface {
+	AcquireAccountSlot(context.Context, int64, int) (*AcquireResult, error)
+}
+
 // ScheduledTestRunnerService periodically scans due test plans and executes them.
 type ScheduledTestRunnerService struct {
 	planRepo       ScheduledTestPlanRepository
 	scheduledSvc   *ScheduledTestService
-	accountTestSvc *AccountTestService
+	accountTestSvc scheduledAccountTester
+	accountRepo    scheduledAccountReader
+	accountSlots   scheduledAccountSlots
 	rateLimitSvc   *RateLimitService
 	cfg            *config.Config
 	leaderLock     *singletonJobLock
@@ -38,6 +54,7 @@ func NewScheduledTestRunnerService(
 		planRepo:       planRepo,
 		scheduledSvc:   scheduledSvc,
 		accountTestSvc: accountTestSvc,
+		accountRepo:    accountTestSvc.accountRepo,
 		rateLimitSvc:   rateLimitSvc,
 		cfg:            cfg,
 	}
@@ -127,10 +144,58 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 }
 
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
-	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
+	startedAt := time.Now().Truncate(time.Microsecond)
+	testCtx := ctx
+	nextRun, err := computeNextRun(plan.CronExpression, startedAt)
+	if err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d computeNextRun error: %v", plan.ID, err)
+		return
+	}
+	if plan.IdleHours > 0 {
+		// Keep-alive respects normal account availability and shared concurrency.
+		// Persist a claim before the outbound test so crashes cannot replay it next minute.
+		if s.accountRepo == nil || s.accountSlots == nil {
+			return
+		}
+		account, err := s.accountRepo.GetByID(ctx, plan.AccountID)
+		if err != nil || !scheduledKeepAliveReady(account, plan, startedAt) {
+			s.advanceSkippedPlan(ctx, plan, nextRun)
+			return
+		}
+		slot, err := s.accountSlots.AcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		if err != nil || slot == nil || !slot.Acquired {
+			s.advanceSkippedPlan(ctx, plan, nextRun)
+			return
+		}
+		defer slot.ReleaseFunc()
+		if earliest := startedAt.Add(scheduledKeepAliveCooldown); nextRun.Before(earliest) {
+			nextRun = earliest
+		}
+		claimed, err := s.planRepo.ClaimIdleRun(ctx, plan, startedAt, nextRun)
+		if err != nil || !claimed {
+			if err != nil {
+				logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d claim error: %v", plan.ID, err)
+			}
+			return
+		}
+		executed := *plan
+		executed.UpdatedAt = startedAt
+		plan = &executed
+		var cancel context.CancelFunc
+		testCtx, cancel = context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
+	}
+	result, err := s.accountTestSvc.RunTestBackground(testCtx, plan.AccountID, plan.ModelID)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
-		return
+		if plan.IdleHours == 0 {
+			return
+		}
+		finishedAt := time.Now()
+		result = &ScheduledTestResult{
+			Status: "failed", ErrorMessage: err.Error(), StartedAt: startedAt,
+			FinishedAt: finishedAt, LatencyMs: finishedAt.Sub(startedAt).Milliseconds(),
+		}
 	}
 
 	if err := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, result); err != nil {
@@ -142,15 +207,34 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
 	}
 
-	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
-	if err != nil {
-		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d computeNextRun error: %v", plan.ID, err)
-		return
+	if afterCompletion, err := computeNextRun(plan.CronExpression, time.Now()); err == nil && afterCompletion.After(nextRun) {
+		nextRun = afterCompletion
 	}
-
-	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
+	if err := s.planRepo.UpdateAfterRun(ctx, plan, startedAt, nextRun, result.Status == "success"); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
+}
+
+func (s *ScheduledTestRunnerService) advanceSkippedPlan(ctx context.Context, plan *ScheduledTestPlan, nextRun time.Time) {
+	if err := s.planRepo.AdvanceNextRun(ctx, plan.ID, plan.NextRunAt, nextRun); err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d advance error: %v", plan.ID, err)
+	}
+}
+
+func scheduledKeepAliveReady(account *Account, plan *ScheduledTestPlan, now time.Time) bool {
+	if account == nil || !account.IsSchedulable() {
+		return false
+	}
+	lastActivity := account.CreatedAt
+	for _, value := range []*time.Time{account.LastUsedAt, plan.LastActivityAt, plan.LastSuccessAt} {
+		if value != nil && value.After(lastActivity) {
+			lastActivity = *value
+		}
+	}
+	if now.Before(lastActivity.Add(time.Duration(plan.IdleHours) * time.Hour)) {
+		return false
+	}
+	return plan.LastRunAt == nil || !now.Before(plan.LastRunAt.Add(scheduledKeepAliveCooldown))
 }
 
 // tryRecoverAccount attempts to recover an account from recoverable runtime state.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -29,6 +30,9 @@ func NewScheduledTestService(
 
 // CreatePlan validates the cron expression, computes next_run_at, and persists the plan.
 func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if err := s.validateIdlePlan(ctx, plan); err != nil {
+		return nil, err
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -54,6 +58,9 @@ func (s *ScheduledTestService) ListPlansByAccount(ctx context.Context, accountID
 
 // UpdatePlan validates cron and updates the plan.
 func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if err := s.validateIdlePlan(ctx, plan); err != nil {
+		return nil, err
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -61,6 +68,30 @@ func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTe
 	plan.NextRunAt = &nextRun
 
 	return s.planRepo.Update(ctx, plan)
+}
+
+func (s *ScheduledTestService) validateIdlePlan(ctx context.Context, plan *ScheduledTestPlan) error {
+	if plan.IdleHours < 0 || plan.IdleHours > 8760 {
+		return fmt.Errorf("idle_hours must be between 0 and 8760")
+	}
+	if plan.IdleHours == 0 {
+		return nil
+	}
+	if strings.TrimSpace(plan.ModelID) == "" {
+		return fmt.Errorf("an explicit model is required for idle keep-alive")
+	}
+	if plan.Enabled {
+		plans, err := s.planRepo.ListByAccountID(ctx, plan.AccountID)
+		if err != nil {
+			return err
+		}
+		for _, existing := range plans {
+			if existing.ID != plan.ID && existing.Enabled && existing.IdleHours > 0 {
+				return fmt.Errorf("only one enabled idle keep-alive plan is allowed per account")
+			}
+		}
+	}
+	return nil
 }
 
 // DeletePlan removes a plan and its results (via CASCADE).

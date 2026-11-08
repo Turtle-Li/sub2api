@@ -202,6 +202,8 @@ docs/features/*
 !docs/features/IMAGE_STUDIO_REDESIGN_20261108.md
 !docs/features/SHOP_UNIFIED_SKU_20261108.md
 !docs/features/ACCOUNT_DAILY_REQUEST_LIMIT.md
+!docs/features/ACCOUNT_IDLE_KEEPALIVE.md
 !docs/features/evidence/
 docs/features/evidence/*
 !docs/features/evidence/daily-request-quota/
+!docs/features/evidence/account-idle-keepalive/
