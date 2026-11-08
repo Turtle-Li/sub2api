@@ -8,7 +8,7 @@
   <link rel="modulepreload" href="/helpcenter/turtleroute-20261106-v5/shared.js"><link rel="modulepreload" href="/helpcenter/turtleroute-20261106-v5/catalog-pricing.mjs">
   <link rel="icon" href="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/shared.css"><link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/ai.css">
   <link rel="stylesheet" href="/helpcenter/turtleroute-20261106-v5/home-status-nav.css">
-  <link rel="stylesheet" href="/helpcenter/turtleroute-status-20261108-v8/group-availability.css">
+  <link rel="stylesheet" href="/helpcenter/turtleroute-status-20261109-v9/group-availability.css">
 </head>
 <body data-variant="ai">
   <a class="skip-link" href="#main">跳至主要内容</a>
@@ -49,7 +49,7 @@
       <div class="section-top"><div><h2 id="status-title">模型状态</h2><p class="status-intro">公开分组 · 连通检测与真实请求</p></div><a href="https://www.turtleligpt.com/status">查看完整状态页 ↗</a></div>
       <div class="status-toolbar"><label><span class="sr-only">搜索状态分组</span><input type="search" class="catalog-search" data-status-search placeholder="搜索状态分组"></label><button type="button" data-status-refresh>刷新状态</button><span data-status-message role="status">正在读取状态…</span></div>
       <div class="status-groups" data-status-groups></div>
-      <p class="status-explanation">近 3 小时的成功率和首 Token 优先统计本分组真实请求，至少需 20 条有效请求或更高配置门槛；不足的指标由定时检测补充并标注来源。检测成功率至少需 6 轮完成结果，P50 至少需 6 轮成功的有效计时，最近一轮须在 15 分钟内。历史检测只有整次耗时，显示为“检测耗时”；新检测单独记录实际首 Token。检测失败最多尝试 3 次，成功即停止，仅计最终结果，与真实请求不混合分母。最佳小时缓存取同账号池近 24 个完整小时中、样本充足小时的最高缓存读取占比，每小时按 Token 加权并标注统计时间；这是近期最佳表现。每小时至少 20 条有效请求或更高配置门槛，未完成小时、小样本和无效记录不参选，原始用量不变。没有合格的真实请求缓存时，可由单独标注的“检测缓存占比”补充：取本组近 3 小时至少 6 轮有效缓存回执，按输入 Token 加权；明确为零的冷缓存保留，未返回字段保持未知，不与真实请求最佳小时混算。灰色表示没有结果。</p>
+      <p class="status-explanation">历史时间条覆盖近 12 小时，每格 10 分钟；成功率和首 Token 仍使用近 3 小时的全组请求。用户中断、余额不足等不计失败，重试按最终结果统计。成功率至少需 20 条有效真实请求（或更高配置门槛），首 Token P50 还需足够的延迟样本；不足的指标由单独标注的定时检测补充，至少需 6 轮完成结果，计时至少需 6 轮成功样本，最近一轮须在 15 分钟内。检测失败最多尝试 3 次，只按最终结果统计，与真实请求不合并分母。最佳小时缓存汇总同账号池近 24 个完整小时的真实用量，按每小时缓存读取 Token / 总输入 Token 计算，展示样本充足小时中的最高值及时间；每小时至少 20 条有效请求，正常低值保留。没有合格真实请求小时，仅展示缓存能力：本组当前检测模型在近 24 小时收到有效原生缓存命中回执时为“缓存已验证”，否则为“待验证”；它不代表日常对话缓存率，也不通过额外请求预热。原始检测缓存统计保留。额度提示只根据当前已启用账号的明确 Claude 全局额度窗口，区分部分受限和全池不足；倒计时为已知额度窗口的预计最早恢复，不保证线路届时可用。无可靠时间不估算，恢复后仍待检测确认。灰色表示没有结果，无数据不计失败。</p>
     </section>
     <section class="ai-catalog shell" id="models" aria-labelledby="models-title">
       <div class="section-top"><div><p class="eyebrow">MODEL EXPLORER</p><h2 id="models-title">先选模型 再看价格 </h2></div><div class="catalog-intro"><p>倍率与价格直接对比<br>与模型广场保持同步</p><a href="https://www.turtleligpt.com/model-plaza" target="_blank" rel="noopener">进入完整模型广场 <span>↗</span></a></div></div>
@@ -71,6 +71,6 @@
   <footer class="ai-footer shell"><a class="ai-brand" href="/"><img src="/helpcenter/turtleroute-20261106-v5/turtleroute-mark.svg" width="28" height="28" alt=""><span>Turtle<b>Route</b></span></a><p>模型 分组 接入 一处连接 </p><a href="https://www.turtleligpt.com/login" target="_blank" rel="noopener">进入控制台 ↗</a></footer>
 
   <script type="module" src="/helpcenter/turtleroute-20261106-v5/ai.js"></script>
-  <script type="module" src="/helpcenter/turtleroute-status-20261108-v8/group-availability.mjs"></script>
+  <script type="module" src="/helpcenter/turtleroute-status-20261109-v9/group-availability.mjs"></script>
 </body>
 </html>

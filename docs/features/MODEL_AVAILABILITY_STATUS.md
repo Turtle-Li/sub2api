@@ -1,24 +1,26 @@
 # Model availability status
 
-Current owner correction (2026-11-08): read
+Current owner correction (2026-11-09): read
 [MODEL_AVAILABILITY_GROUPS.md](MODEL_AVAILABILITY_GROUPS.md) before further
 changes. The dedicated price-free `/status` and `/monitor` module is visible to
 all users, with an administrator-only editor on that module. The homepage has
 an independent `#status` section; model plaza contains prices only. Active public
 groups are shared across viewers, independently of plaza or binding eligibility.
-Sample thresholds, 18 ten-minute cells, custom display names, cache share and
+Sample thresholds,72 ten-minute history cells (12h, independent of3h metrics), custom display names, cache share and
 TTFT rules are in that document. The owner authorized opt-in checks every ten
 minutes using an inexpensive model and minimal output. Synthetic results have their own denominator and
 notification path; they never become user request facts. This supersedes the
 initial passive-only implementation scope and quota guidance below, which
 describe the earlier release.
 
-Scheduled cache fallback (November8): native check receipts can supply a
-separate three-hour token-weighted cache share after six valid successful
-samples when real pool cache is unavailable. Preserve explicit zero versus
-unknown, final-attempt cache versus cumulative paid retry usage, and native
-versus converted receipt boundaries. Read the current group contract and
-`docs/operations/MODEL_STATUS_PROBE_CACHE_20261108.md` before changing this path.
+Current cache/quota presentation (November9): native check receipts preserve
+raw three-hour ratios but public cards use them only to verify cache capability
+from a dated positive receipt in the last24h. Qualified real pool best-hour
+cache remains the numeric rate. Explicit Claude global quota windows can add
+sanitized full/partial quota notices and a known reset countdown. No inferred
+reset, extra calls, hidden valid lows or owner configuration changes.
+Read the group contract and
+`docs/operations/MODEL_STATUS_REFINEMENT_20261109.md`.
 
 Implementation contract (2026-11-07). User requested reuse of the researched
 Sub2 status logic and good design, with anonymous public status and logged-in

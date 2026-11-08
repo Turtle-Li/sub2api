@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
 import { listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type ItemContinuation } from './api'
 import { modelIdentity, workspaceAPI } from './workspaceAPI'
+import { cachedStudioKeys, cacheStudioKeys } from './cache'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from './upstream/hooks/usePreventBackgroundScroll'
 import TaskCard from './upstream/components/TaskCard'
@@ -60,21 +61,29 @@ function DetailModal({ task, api, close, edit, cancel }: { task: StudioTask; api
 }
 
 export function Studio({ userId }: { readonly userId: number }) {
+  return <StudioSession key={userId} userId={userId} />
+}
+
+function StudioSession({ userId }: { readonly userId: number }) {
   useGlobalClickSuppression()
-  const [keys, setKeys] = useState<StudioKey[] | null>(null)
+  const [keys, setKeys] = useState<StudioKey[] | null>(() => cachedStudioKeys(userId) || null)
   const [error, setError] = useState('')
   useEffect(() => {
     const controller = new AbortController()
-    listKeys(controller.signal).then(items => { if (!controller.signal.aborted) setKeys(items.filter(item => item.status === 'active' && !item.expired && !item.quota_exhausted && (item.can_generate !== false || item.has_history !== false))) }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
+    listKeys(controller.signal).then(items => {
+      if (controller.signal.aborted) return
+      const eligible = items.filter(item => item.status === 'active' && !item.expired && !item.quota_exhausted && (item.can_generate !== false || item.has_history !== false))
+      cacheStudioKeys(userId, eligible); setKeys(eligible)
+    }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
     return () => controller.abort()
   }, [userId])
   return <div className="image-studio">
-    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.map(key => key.id).join(',')}`} keys={keys} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : '暂无可用的生图权限，请联系管理员开通。'}</div>}
+    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} userId={userId} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : '暂无可用的生图权限，请联系管理员开通。'}</div>}
   </div>
 }
 
-function Workspace({ keys }: { readonly keys: readonly StudioKey[] }) {
-  const [api] = useState(() => { const controller = new AbortController(); return { client: workspaceAPI(keys.map(key => key.id), controller.signal, { modelKeys: keys.filter(key => key.can_generate !== false).map(key => key.id), historyKeys: keys.filter(key => key.has_history !== false).map(key => key.id) }), controller } })
+function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; readonly userId: number }) {
+  const [api] = useState(() => { const controller = new AbortController(); return { client: workspaceAPI(keys.map(key => key.id), controller.signal, { modelKeys: keys.filter(key => key.can_generate !== false).map(key => key.id), historyKeys: keys.filter(key => key.has_history !== false).map(key => key.id), userId }), controller } })
   const composer = useRef<HTMLDialogElement>(null)
   const [mobile, setMobile] = useState(() => Boolean(window.matchMedia?.('(max-width: 760px)').matches))
   const [batchMode, setBatchMode] = useState(false)
@@ -94,8 +103,11 @@ function Workspace({ keys }: { readonly keys: readonly StudioKey[] }) {
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const loadedPages = useRef(1)
   const [itemContinuations, setItemContinuations] = useState<ItemContinuation[]>([])
-  const [models, setModels] = useState<BatchImageModel[]>([])
-  const [model, setModel] = useState('')
+  const [models, setModels] = useState<BatchImageModel[]>(api.client.cachedModels)
+  const [model, setModel] = useState(() => { const first = api.client.cachedModels()[0]; return first ? modelIdentity(first) : '' })
+  const [modelsUpdating, setModelsUpdating] = useState(true)
+  const [catalogueRefresh, setCatalogueRefresh] = useState(0)
+  const lastCatalogueCheck = useRef(0)
   const [refs, setRefs] = useState<string[]>([])
   const [imageSize, setImageSize] = useState('')
   const [aspectRatio, setAspectRatio] = useState('')
@@ -127,16 +139,31 @@ function Workspace({ keys }: { readonly keys: readonly StudioKey[] }) {
   const [refresh, setRefresh] = useState(0)
   useEffect(() => {
     let active = true
+    setModelsUpdating(true)
+    lastCatalogueCheck.current = Date.now()
     api.client.refreshDirectory()
-    void api.client.models().then(catalog => {
+    const update = (catalog: BatchImageModel[]) => {
       if (!active) return
-      setModels(catalog)
+      setModels(previous => JSON.stringify(previous) === JSON.stringify(catalog) ? previous : catalog)
       setModel(previous => catalog.some(item => modelIdentity(item) === previous) ? previous : catalog[0] ? modelIdentity(catalog[0]) : '')
+    }
+    void api.client.models(update).then(catalog => {
+      update(catalog)
       const warning = api.client.warnings().join(' ')
       if (warning) setError(warning)
-    }).catch(error => { if (active) setError(errorMessage(error)) })
+    }).catch(error => { if (active) setError(errorMessage(error)) }).finally(() => { if (active) setModelsUpdating(false) })
     return () => { active = false }
-  }, [api, refresh])
+  }, [api, refresh, catalogueRefresh])
+  useEffect(() => {
+    const revalidate = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastCatalogueCheck.current >= 60000) {
+        lastCatalogueCheck.current = Date.now(); setCatalogueRefresh(value => value + 1)
+      }
+    }
+    window.addEventListener('focus', revalidate)
+    document.addEventListener('visibilitychange', revalidate)
+    return () => { window.removeEventListener('focus', revalidate); document.removeEventListener('visibilitychange', revalidate) }
+  }, [])
   useEffect(() => {
     readVersion.current++; loadedPages.current = 1; setTasks([]); setNextCursor(null)
   }, [filter, query, rootBatch])
@@ -147,7 +174,10 @@ function Workspace({ keys }: { readonly keys: readonly StudioKey[] }) {
       const version = readVersion.current
       try {
         const filters = { status: filter, search: query, root: rootBatch }
-        const first = await api.client.tasks('', filters)
+        const incremental = tasksRef.current.length === 0 && loadedPages.current === 1
+        const first = await api.client.tasks('', filters, rows => {
+          if (incremental && active && version === readVersion.current) setTasks(rows)
+        })
         let cursor = first.nextCursor
         const rows = [...first.tasks]
         const continuations = [...first.itemContinuations]
@@ -262,7 +292,7 @@ function Workspace({ keys }: { readonly keys: readonly StudioKey[] }) {
       <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
       {parent && <p className="studio-edit-source studio-muted">基于当前参考图续改 · {parent.job.model}</p>}
       {mobile && error && <p className="studio-error" role="alert">{error}</p>}
-      <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} model={model} setModel={value => void changeModel(value)} busy={busy} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
+      <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} modelLoading={modelsUpdating} model={model} setModel={value => void changeModel(value)} busy={busy} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
     </dialog>
     <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-gallery-count" aria-label={`已加载 ${tasks.length} 个图片任务`}>{tasks.length}</span></div>
       <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{[['all', '全部'], ['pending', '生成中'], ['completed', '已完成'], ['failed', '失败']].map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>

@@ -112,6 +112,13 @@ export interface PlazaGroupAvailability {
 	probe_cache_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled' | 'stale'
 	probe_cache_scope?: 'group_probe'
 	probe_cache_statistic?: 'weighted_tokens'
+	probe_cache_verified_at?: string | null
+	probe_cache_verification_version?: number
+	probe_cache_verification_window_hours?: number
+	pool_quota_state?: 'limited' | 'exhausted'
+	pool_quota_resets_at?: string | null
+	pool_quota_observed_at?: string | null
+	history_window_minutes?: number
 	window_minutes?: number
 	min_requests?: number
   status: 'operational' | 'degraded' | 'down' | 'unknown' | 'observed' | 'errors_observed' | 'collecting'

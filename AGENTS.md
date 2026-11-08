@@ -69,6 +69,10 @@
   Persistent previews and historical backfill additionally follow
   `docs/features/IMAGE_STUDIO_PERSISTENT_THUMBNAILS_20261108.md`: reuse existing
   job/item rows, fence writes before deletion, and never replay generation.
+  Entry metadata cache, incremental reads, equivalent Gemini aliases and restored
+  group-priced Image admission follow
+  `docs/features/IMAGE_STUDIO_CATALOGUE_CACHE_20261109.md`; cached display never
+  authorizes generation and conditional reads must recheck current admission.
   For eligible-key loading, Gemini output-token conversion and native per-model
   CNY tariffs/activation, read
   `docs/features/IMAGE_STUDIO_LOAD_AND_NATIVE_PRICES_20261108.md`.

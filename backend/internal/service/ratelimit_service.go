@@ -1026,6 +1026,19 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 		return false
 	}
 
+	// 客户端策略拒绝（分组只允许官方客户端）是请求级信号：换客户端就能过，
+	// 账号凭据没有失效。按 Cloudflare 1010 同口径处理，避免一个非官方客户端
+	// 的请求把账号永久 SetError、连带打死整组正常调用。
+	if isUpstreamClientPolicyDenied(upstreamMsg, responseBody) {
+		slog.Warn(
+			"403_client_policy_denied_skips_account_penalty",
+			"account_id", account.ID,
+			"platform", account.Platform,
+			"upstream_message", truncateForLog([]byte(upstreamMsg), 160),
+		)
+		return false
+	}
+
 	if account.Platform == PlatformAntigravity {
 		return s.handleAntigravity403(ctx, account, upstreamMsg, responseBody)
 	}

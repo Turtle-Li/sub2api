@@ -16,7 +16,6 @@
   --studio-radius: 12px;
   --studio-gap: 20px;
   --studio-rail: 320px;
-  --studio-card-height: 330px;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   color: var(--studio-text);
@@ -146,23 +145,28 @@
 .studio-detail-image img { max-height: 100%; max-width: 100%; object-fit: contain; }
 .studio-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
 .studio-detail p { margin-bottom: 10px; font-size: 14px; }
-.image-studio .studio-source-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.image-studio .studio-source-card { height: var(--studio-card-height); background: var(--studio-panel); border-color: var(--studio-border); color: var(--studio-text); box-shadow: none; }
+.image-studio .studio-source-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 16px; }
+.image-studio .studio-source-card { background: var(--studio-panel); border-color: var(--studio-border); color: var(--studio-text); box-shadow: none; }
 .image-studio .studio-source-card > .flex { flex-direction: column; height: 100%; }
-.image-studio .studio-source-card .w-40 { width: 100%; min-width: 0; height: 200px; background: var(--studio-field); }
+.image-studio .studio-source-card .studio-card-preview { width: 100%; min-width: 0; height: auto; aspect-ratio: 1; background: var(--studio-field); }
+.image-studio .studio-card-preview img { object-fit: contain; }
+.image-studio .studio-card-body { flex: 0 0 100px; height: 100px; padding: 10px 12px 6px; gap: 4px; }
+.studio-card-caption { line-height: 1.5; }
+.studio-card-caption > p:not(:first-child) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-card-footer { min-width: 0; }
+.studio-card-model { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--studio-muted); }
 .image-studio .studio-source-card .text-gray-700 { color: var(--studio-text); }
 .image-studio .studio-source-card .text-gray-600 { color: var(--studio-muted); }
 .image-studio .studio-source-card .line-clamp-3 { -webkit-line-clamp: 2; font-size: 12px; }
 .image-studio .studio-source-card .bg-gray-100 { background: var(--studio-field); }
-.image-studio .studio-source-card button { min-height: 32px; min-width: 32px; padding: 6px; border: 0; background: transparent; }
-.image-studio .studio-source-card button:hover { color: var(--studio-accent); }
+.image-studio .studio-source-card button { min-height: 32px; min-width: 32px; padding: 6px; border: 0; background: transparent; color: var(--studio-muted); }
+.image-studio .studio-source-card button:hover:not(:disabled) { color: var(--studio-accent); background: var(--studio-accent-soft); }
 .studio-lightbox { z-index: 100; position: fixed; }
 .studio-lightbox img { max-width: 85vw; max-height: 75vh; }
 .studio-mobile-only, .image-studio .studio-mobile-create { display: none; }
-@media (max-width: 1500px) { .image-studio .studio-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .image-studio { --studio-rail: 288px; --studio-gap: 16px; } .studio-gallery-heading { gap: 6px; flex-wrap: wrap; } }
 @media (max-width: 760px) {
-  .image-studio { --studio-card-height: 280px; padding-bottom: 84px; }
+  .image-studio { padding-bottom: 84px; }
   .studio-workspace { display: block; }
   .studio-composer { display: none; }
   .studio-composer[open] { display: block; position: fixed; inset: auto 0 0; width: 100%; max-width: 100%; max-height: 88dvh; margin: 0; border-radius: 16px 16px 0 0; overscroll-behavior: contain; }
@@ -189,7 +193,7 @@
   .image-studio .studio-tabs button { padding-inline: 10px; }
   .studio-empty { min-height: 400px; }
   .image-studio .studio-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .image-studio .studio-source-card .w-40 { height: 148px; }
+  .image-studio .studio-card-body { flex-basis: 108px; height: 108px; padding: 8px; }
   .image-studio .studio-source-card .line-clamp-3 { font-size: 11px; line-height: 1.4; }
   .image-studio .studio-source-card button { min-height: 40px; min-width: 40px; }
   .image-studio .studio-mobile-create { display: flex; position: fixed; left: 12px; right: 12px; bottom: max(12px, var(--safe-area-bottom)); z-index: 20; justify-content: space-between; align-items: center; min-height: 48px; padding: 10px 14px; background: var(--studio-panel); border: 1px solid var(--studio-accent); border-radius: 12px; box-shadow: 0 8px 24px var(--studio-overlay); color: var(--studio-text); font-weight: 500; }

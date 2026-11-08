@@ -21,6 +21,10 @@ var (
 	// 带捕获组的版本提取正则
 	claudeCodeUAVersionPattern = regexp.MustCompile(`(?i)^claude-cli/(\d+\.\d+\.\d+)`)
 
+	// claudeCLIProductBlock 提取 UA 括号段：(external, <product>[, ...])。
+	// 产品标识是上游区分「官方客户端」与「伪装的 CLI」的关键字段，不能只看前缀。
+	claudeCLIProductBlock = regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+\s*\(([^)]*)\)`)
+
 	// System prompt 相似度阈值（默认 0.5，和 claude-relay-service 一致）
 	systemPromptThreshold = 0.5
 )
@@ -64,6 +68,47 @@ const (
 	claudeCodeEntrypointMarker = "cc_entrypoint="
 )
 
+// claudeCLIDeniedUAProducts 是被上游明确判定为非官方客户端的产品标识。
+// "unknown" 出现在终端探测失败时：由 daemon / cron / 无 TTY 的自动化拉起 CLI，
+// UA 会退化成 "claude-cli/x.y.z (external, unknown)"。实测这类请求能通过仅看
+// 前缀的校验，却会被上游以 gateway_client_policy_denied 拒掉并连带处罚账号。
+// 目前为空：unknown 不再就地拒绝，而是在出站前归一化成合法产品标识
+// （见 claude_client_ua_normalize.go）。保留该名单用于将来出现真正的伪造标识。
+var claudeCLIDeniedUAProducts = map[string]struct{}{}
+
+// parseClaudeCLIUserAgentProduct 返回 UA 括号段里的产品标识（第二段）。
+// 第二个返回值为 false 表示 UA 没有括号段（老版本 CLI 形态）。
+func parseClaudeCLIUserAgentProduct(ua string) (string, bool) {
+	m := claudeCLIProductBlock.FindStringSubmatch(ua)
+	if m == nil {
+		return "", false
+	}
+	parts := strings.Split(m[1], ",")
+	// 老形态只有一个段（如 "(Claude Code)"），直接用它当产品标识；
+	// 新形态是 "(external, <product>, ...)"，产品标识在第二段。
+	if len(parts) == 1 {
+		return strings.ToLower(strings.TrimSpace(parts[0])), true
+	}
+	return strings.ToLower(strings.TrimSpace(parts[1])), true
+}
+
+// isOfficialClaudeCLIUserAgent 校验 UA 既是 claude-cli 家族，又带有可被上游
+// 接受的产品标识。
+func isOfficialClaudeCLIUserAgent(ua string) bool {
+	if !claudeCodeUAPattern.MatchString(ua) {
+		return false
+	}
+	product, hasBlock := parseClaudeCLIUserAgentProduct(ua)
+	if !hasBlock {
+		return true
+	}
+	if product == "" {
+		return false
+	}
+	_, denied := claudeCLIDeniedUAProducts[product]
+	return !denied
+}
+
 // NewClaudeCodeValidator 创建验证器实例
 func NewClaudeCodeValidator() *ClaudeCodeValidator {
 	return &ClaudeCodeValidator{}
@@ -84,7 +129,7 @@ func NewClaudeCodeValidator() *ClaudeCodeValidator {
 func (v *ClaudeCodeValidator) Validate(r *http.Request, body map[string]any) bool {
 	// Step 1: User-Agent 检查
 	ua := r.Header.Get("User-Agent")
-	if !claudeCodeUAPattern.MatchString(ua) {
+	if !isOfficialClaudeCLIUserAgent(ua) {
 		return false
 	}
 
@@ -362,7 +407,7 @@ func getBigrams(s string) map[string]int {
 
 // ValidateUserAgent 仅验证 User-Agent（用于不需要解析请求体的场景）
 func (v *ClaudeCodeValidator) ValidateUserAgent(ua string) bool {
-	return claudeCodeUAPattern.MatchString(ua)
+	return isOfficialClaudeCLIUserAgent(ua)
 }
 
 // IncludesClaudeCodeSystemPrompt 检查请求体是否包含 Claude Code 系统提示词
