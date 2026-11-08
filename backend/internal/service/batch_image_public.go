@@ -853,6 +853,7 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 	if s.Pricing == nil {
 		return nil, ErrBatchImageSettlementPricingMissing
 	}
+	s = s.catalogueRequest()
 	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID); err != nil {
 		return nil, err
 	}
@@ -860,6 +861,7 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 	modelsByProvider := make(map[string]map[string]struct{})
 	pricesByProvider := make(map[string]map[string]map[string]BatchImageModelPriceRange)
 	priceTemplates := make(map[string]map[string]BatchImageModelPriceRange)
+	accountsByPlatform := make(map[string][]Account)
 	groupPlatform, err := s.batchImageGroupPlatform(ctx, owner.GroupID)
 	if err != nil {
 		return nil, err
@@ -872,9 +874,14 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		if !ok || provider == nil || !batchImageProviderSubmissionAvailable(provider) {
 			continue
 		}
-		accounts, err := s.listCandidateAccounts(ctx, owner.GroupID, batchImageProviderPlatform(providerName))
-		if err != nil {
-			return nil, err
+		platform := batchImageProviderPlatform(providerName)
+		accounts, loaded := accountsByPlatform[platform]
+		if !loaded {
+			accounts, err = s.listCandidateAccounts(ctx, owner.GroupID, platform)
+			if err != nil {
+				return nil, err
+			}
+			accountsByPlatform[platform] = accounts
 		}
 		for i := range accounts {
 			account := accounts[i]
@@ -918,11 +925,11 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				accountPrices := make(map[string]BatchImageModelPriceRange, len(template))
 				for size, price := range template {
 					rate := math.Max(0, account.BillingRateMultiplier())
-					value := price.Min * rate
-					if math.IsNaN(value) || math.IsInf(value, 0) {
+					minPrice, maxPrice := price.Min*rate, price.Max*rate
+					if math.IsNaN(minPrice) || math.IsInf(minPrice, 0) || math.IsNaN(maxPrice) || math.IsInf(maxPrice, 0) {
 						continue
 					}
-					accountPrices[size] = BatchImageModelPriceRange{Min: value, Max: value}
+					accountPrices[size] = BatchImageModelPriceRange{Min: minPrice, Max: maxPrice}
 				}
 				mergeBatchImagePrices(pricesByProvider[providerName][model], accountPrices)
 			}
@@ -1909,7 +1916,11 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if configuredUnit := group.GetImagePrice(req.ImageSize); configuredUnit != nil && *configuredUnit >= 0 {
 			unit = *configuredUnit
 		}
-
+		if modelUnit, configured, err := batchImageNativeModelPrice(group, req, provider); err != nil {
+			return nil, err
+		} else if configured {
+			unit = modelUnit
+		}
 	}
 	if unit < 0 {
 		if s.Pricing == nil {

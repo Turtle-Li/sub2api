@@ -53,7 +53,9 @@ func (r *BatchImageModelPricingResolver) BatchImageUnitPrice(ctx context.Context
 		}
 	case BillingModeToken:
 		if resolved.BasePricing != nil && (resolved.BasePricing.ImageOutputPriceExplicit || resolved.BasePricing.ImageOutputPricePerToken > 0) {
-			return resolved.BasePricing.ImageOutputPricePerToken, nil
+			if tokens, ok := batchImageOutputTokenCount(job.Model, job.ImageSize); ok {
+				return resolved.BasePricing.ImageOutputPricePerToken * float64(tokens), nil
+			}
 		}
 	}
 	return 0, ErrBatchImageSettlementPricingMissing

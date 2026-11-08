@@ -21,6 +21,11 @@ function providerName(provider: string) {
   return te(key) ? t(key) : provider
 }
 function price(row: Row) {
+  const quotes = Object.values(row.model.prices || {})
+  if (quotes.length) {
+    const minimum = Math.min(...quotes.map(quote => quote.min)), maximum = Math.max(...quotes.map(quote => quote.max))
+    return minimum === maximum ? String(Number(minimum.toFixed(4))) : `${Number(minimum.toFixed(4))} – ${Number(maximum.toFixed(4))}`
+  }
   const group = row.bindings[0].group
   const tiers = row.model.capabilities?.image_sizes || ['1K', '2K', '4K']
   const prices: Record<string, number | null> = { '1K': group.image_price_1k, '2K': group.image_price_2k, '4K': group.image_price_4k }
@@ -42,7 +47,14 @@ watch(() => [props.groups, props.revision] as const, async () => {
         const available = new Set(catalogue.models.map(model => `${model.provider}:${model.id}`))
         for (const model of catalogue.candidates) {
           const identity = `${model.provider}:${model.id}`
-          const row = collected.get(identity) || { model, bindings: [] }
+          const quoted = catalogue.models.find(item => `${item.provider}:${item.id}` === identity)
+          const row = collected.get(identity) || { model: { ...model, prices: {} }, bindings: [] }
+          const prices = { ...row.model.prices }
+          for (const [size, quote] of Object.entries(quoted?.prices || {})) {
+            const previous = prices[size]
+            prices[size] = previous ? { min: Math.min(previous.min, quote.min), max: Math.max(previous.max, quote.max) } : quote
+          }
+          row.model = { ...row.model, prices }
           row.bindings.push({ group, ready: available.has(identity) }); collected.set(identity, row)
         }
       } catch (cause) { if (current === version) error.value = extractApiErrorMessage(cause) }
@@ -67,11 +79,11 @@ onBeforeUnmount(() => { version++ })
     <div v-else-if="visible.length" class="divide-y divide-gray-200 dark:divide-dark-600">
       <article v-for="row in visible" :key="`${row.model.provider}:${row.model.id}`" class="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-center">
         <div class="min-w-0"><h3 class="break-all text-sm font-semibold">{{ row.model.id }}</h3><p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ providerName(row.model.provider) }}<template v-if="row.model.capabilities"> · {{ row.model.capabilities.image_sizes.join(' / ') }} · {{ t('admin.imageModels.references', { count: row.model.capabilities.max_reference_images }) }}</template></p></div>
-        <div><p class="text-sm font-medium">{{ price(row) }}<span class="ml-1 text-xs font-normal text-gray-500">/ 张</span></p><p class="mt-1 text-xs text-gray-500">USD 源价 · 叠加现有倍率</p></div>
+        <div><p class="text-sm font-medium">{{ price(row) }}<span class="ml-1 text-xs font-normal text-gray-500">/ 张</span></p><p class="mt-1 text-xs text-gray-500">{{ Object.keys(row.model.prices || {}).length ? '当前分组报价 · 内部额度' : '分组源价 · 叠加现有倍率' }}</p></div>
         <div class="flex items-center gap-3"><span class="whitespace-nowrap rounded-md px-2 py-1 text-xs" :class="row.bindings.some(item => item.ready) ? 'bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'">{{ t(row.bindings.some(item => item.ready) ? 'admin.imageModels.ready' : 'admin.imageModels.candidate') }}</span><button type="button" class="btn btn-secondary" :aria-label="`配置 ${row.model.id}`" @click="emit('configure', row.bindings[0].group.id, row.model.id)">配置</button></div>
       </article>
     </div>
     <p v-else class="p-10 text-center text-sm text-gray-500">{{ search ? t('admin.imageModels.noModels') : '尚未配置生图通道。在分组管理中开启生图权限并绑定账号后，模型会显示在这里。' }}</p>
-    <p class="border-t border-gray-200 px-5 py-4 text-xs leading-relaxed text-gray-500 dark:border-dark-600 dark:text-gray-400">配置可用不代表上游已通过真实调用。价格和权限随配置保存生效；共用分组的模型沿用同一组价格，具体来源可在模型配置中查看。</p>
+    <p class="border-t border-gray-200 px-5 py-4 text-xs leading-relaxed text-gray-500 dark:border-dark-600 dark:text-gray-400">配置可用不代表上游已通过真实调用。价格和权限随配置保存生效；模型专属报价优先于分组默认价，具体来源可在模型配置中查看。</p>
   </section>
 </template>

@@ -6,12 +6,15 @@ type Client = ReturnType<typeof studioAPI>
 
 // Discovery is read-only. All mutations and assets still pass through the original
 // key-scoped session API; a model choice never grants access to another key's task.
-export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
+export function workspaceAPI(keys: readonly number[], signal: AbortSignal, access?: { readonly modelKeys: readonly number[]; readonly historyKeys: readonly number[] }) {
   const clients = new Map([...new Set(keys)].sort((a, b) => a - b).map(key => [key, studioAPI(key, signal)]))
+  const modelKeys = new Set(access?.modelKeys ?? keys)
+  const historyKeys = new Set(access?.historyKeys ?? keys)
   const owners = new Map<string, number>()
   const attempts = new Map<string, number>()
   let imageQueue: Promise<void> = Promise.resolve()
-  let thumbnailQueue: Promise<void> = Promise.resolve()
+  let activeThumbnails = 0
+  const thumbnailWaiters: (() => void)[] = []
   const thumbnails = new Map<string, Blob>()
   let thumbnailBytes = 0
   let directory: Promise<{ key: number; models: BatchImageModel[] }[]> | undefined
@@ -19,12 +22,12 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
   let historyWarnings: string[] = []
   async function discover() {
     if (!directory) directory = (async () => {
-      const entries = [...clients.entries()]
+      const entries = [...clients.entries()].filter(([key]) => modelKeys.has(key))
       const results: { key: number; models: BatchImageModel[] }[] = []
       warnings = []
       // Avoid unbounded catalogue requests for users with many API keys.
-      for (let start = 0; start < entries.length; start += 3) {
-        await Promise.all(entries.slice(start, start + 3).map(async ([key, client]) => {
+      for (let start = 0; start < entries.length; start += 6) {
+        await Promise.all(entries.slice(start, start + 6).map(async ([key, client]) => {
           try { results.push({ key, models: await client.models() }) }
           catch (error) {
             if (signal.aborted) throw error
@@ -69,13 +72,13 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
     },
     async tasks(cursor = '', filters?: GalleryFilters) {
       // History does not wait for every model catalogue to finish.
-      const entries = [...clients.entries()]
+      const entries = [...clients.entries()].filter(([key]) => historyKeys.has(key))
       historyWarnings = []
       const offsets: Record<string, string | null> = cursor ? JSON.parse(cursor) : {}
       const pages: Awaited<ReturnType<Client['tasks']>>[] = []
       const next: Record<string, string | null> = {}
-      for (let start = 0; start < entries.length; start += 3) {
-        await Promise.all(entries.slice(start, start + 3).map(async ([key, client]) => {
+      for (let start = 0; start < entries.length; start += 6) {
+        await Promise.all(entries.slice(start, start + 6).map(async ([key, client]) => {
           if (cursor && offsets[key] === null) { next[key] = null; return }
           try {
             const page = filters ? await client.tasks(offsets[key] || '', filters) : await client.tasks(offsets[key] || '')
@@ -109,6 +112,7 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
       // Never fail over after an ambiguous POST, even if the catalogue changes.
       const job = await clients.get(key)!.submit(body, idempotencyKey)
       owners.set(job.id, key)
+      historyKeys.add(key)
       attempts.delete(idempotencyKey)
       return job
     },
@@ -118,21 +122,25 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
       imageQueue = request.then(() => undefined, () => undefined)
       return request
     },
-    thumbnail(task: StudioTask, requestSignal: AbortSignal = signal) {
+    async thumbnail(task: StudioTask, requestSignal: AbortSignal = signal) {
       signal.throwIfAborted()
       requestSignal.throwIfAborted()
       const cached = thumbnails.get(task.id)
       if (cached) {
         thumbnails.delete(task.id); thumbnails.set(task.id, cached)
-        return Promise.resolve(cached)
+        return cached
       }
       // Preview preparation never queues ahead of explicit originals or edits.
-      const request = thumbnailQueue.then(async () => {
+      if (activeThumbnails >= 3) await new Promise<void>(resolve => thumbnailWaiters.push(resolve))
+      else activeThumbnails++
+      try {
         signal.throwIfAborted()
         requestSignal.throwIfAborted()
         const ready = thumbnails.get(task.id)
         if (ready) return ready
         const blob = await owned(task.job).thumbnail(task, requestSignal)
+        const completed = thumbnails.get(task.id)
+        if (completed) return completed
         if (blob.size <= 16 * 1024 * 1024) {
           thumbnails.set(task.id, blob); thumbnailBytes += blob.size
           for (const [id, previous] of thumbnails) {
@@ -141,9 +149,11 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal) {
           }
         }
         return blob
-      })
-      thumbnailQueue = request.then(() => undefined, () => undefined)
-      return request
+      } finally {
+        const next = thumbnailWaiters.shift()
+        if (next) next()
+        else activeThumbnails--
+      }
     },
     async cancel(task: StudioTask) { return owned(task.job).cancel(task) },
   }

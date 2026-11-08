@@ -1,7 +1,7 @@
 import apiClient from '@/api/client'
 import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
 
-export interface StudioKey { readonly id: number; readonly name: string; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean }
+export interface StudioKey { readonly id: number; readonly name: string; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean; readonly can_generate?: boolean; readonly has_history?: boolean }
 export interface ItemContinuation { readonly job: BatchImageJob; readonly cursor: number }
 export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem }
 export interface GalleryFilters { readonly status: string; readonly search: string; readonly root?: string }
@@ -76,7 +76,7 @@ export function studioAPI(key: number, signal: AbortSignal) {
             controller.signal.throwIfAborted()
             return (await apiClient.get<Blob>(`${base}/batches/${encodeURIComponent(task.job.id)}/items/${encodeURIComponent(task.item.custom_id)}/thumbnail`, { ...config, signal: controller.signal, responseType: 'blob', timeout: 120000 })).data
           } catch (error) {
-            if (controller.signal.aborted || attempt >= 4 || typeof error !== 'object' || error === null || !('status' in error) || error.status !== 503) throw error
+            if (controller.signal.aborted || attempt >= 4 || typeof error !== 'object' || error === null || !('status' in error) || (error.status !== 503 && error.status !== 429)) throw error
             await waitForThumbnail(2000 * 2 ** attempt, controller.signal)
           }
         }

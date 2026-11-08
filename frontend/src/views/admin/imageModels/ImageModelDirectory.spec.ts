@@ -38,3 +38,14 @@ it('reloads availability after saved configuration or account policy changes', a
   expect(wrapper.text()).toContain('Configuration available')
   wrapper.unmount()
 })
+
+it('shows actual model quotes across ready bindings instead of the group default', async () => {
+  vi.mocked(getImageModels).mockImplementation(async id => ({
+    candidates: [muse], models: [{ ...muse, prices: { '1K': { min: id === 1 ? .1 : .2, max: id === 1 ? .1 : .2 } } }], unavailable_reason: null,
+  }))
+  const wrapper = mountDirectory()
+  await flushPromises()
+  expect(wrapper.get('article').text()).toContain('0.1 – 0.2/ 张')
+  expect(wrapper.text()).toContain('当前分组报价')
+  wrapper.unmount()
+})

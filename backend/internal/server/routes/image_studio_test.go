@@ -32,6 +32,11 @@ func (r *studioKeysRepo) ListByUserID(_ context.Context, id int64, p pagination.
 	return []service.APIKey{*r.key}, &pagination.PaginationResult{Total: 1}, nil
 }
 
+func (r *studioKeysRepo) ListImageStudioKeys(_ context.Context, id int64, p pagination.PaginationParams) ([]service.ImageStudioKey, *pagination.PaginationResult, error) {
+	r.listedUser, r.page = id, p
+	return []service.ImageStudioKey{{ID: r.key.ID, Name: r.key.Name, Status: r.key.Status, GroupID: r.key.GroupID, CanGenerate: false, HasHistory: true}}, &pagination.PaginationResult{Total: 1}, nil
+}
+
 type studioJobsRepo struct {
 	service.BatchImageRepository
 	owner []int64

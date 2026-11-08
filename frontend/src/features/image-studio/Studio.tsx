@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
-import { listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type ItemContinuation } from './api'
+import { listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type ItemContinuation } from './api'
 import { modelIdentity, workspaceAPI } from './workspaceAPI'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from './upstream/hooks/usePreventBackgroundScroll'
@@ -61,20 +61,20 @@ function DetailModal({ task, api, close, edit, cancel }: { task: StudioTask; api
 
 export function Studio({ userId }: { readonly userId: number }) {
   useGlobalClickSuppression()
-  const [keys, setKeys] = useState<number[] | null>(null)
+  const [keys, setKeys] = useState<StudioKey[] | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     const controller = new AbortController()
-    listKeys(controller.signal).then(items => { if (!controller.signal.aborted) setKeys(items.filter(item => item.status === 'active' && !item.expired && !item.quota_exhausted).map(item => item.id)) }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
+    listKeys(controller.signal).then(items => { if (!controller.signal.aborted) setKeys(items.filter(item => item.status === 'active' && !item.expired && !item.quota_exhausted && (item.can_generate !== false || item.has_history !== false))) }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
     return () => controller.abort()
   }, [userId])
   return <div className="image-studio">
-    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.join(',')}`} keys={keys} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : '暂无可用的生图权限，请联系管理员开通。'}</div>}
+    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.map(key => key.id).join(',')}`} keys={keys} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : '暂无可用的生图权限，请联系管理员开通。'}</div>}
   </div>
 }
 
-function Workspace({ keys }: { readonly keys: readonly number[] }) {
-  const [api] = useState(() => { const controller = new AbortController(); return { client: workspaceAPI(keys, controller.signal), controller } })
+function Workspace({ keys }: { readonly keys: readonly StudioKey[] }) {
+  const [api] = useState(() => { const controller = new AbortController(); return { client: workspaceAPI(keys.map(key => key.id), controller.signal, { modelKeys: keys.filter(key => key.can_generate !== false).map(key => key.id), historyKeys: keys.filter(key => key.has_history !== false).map(key => key.id) }), controller } })
   const composer = useRef<HTMLDialogElement>(null)
   const [mobile, setMobile] = useState(() => Boolean(window.matchMedia?.('(max-width: 760px)').matches))
   const [batchMode, setBatchMode] = useState(false)

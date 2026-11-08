@@ -69,6 +69,9 @@
   Persistent previews and historical backfill additionally follow
   `docs/features/IMAGE_STUDIO_PERSISTENT_THUMBNAILS_20261108.md`: reuse existing
   job/item rows, fence writes before deletion, and never replay generation.
+  For eligible-key loading, Gemini output-token conversion and native per-model
+  CNY tariffs/activation, read
+  `docs/features/IMAGE_STUDIO_LOAD_AND_NATIVE_PRICES_20261108.md`.
 
 ## Codex OAuth relay Fast compatibility
 

@@ -106,7 +106,7 @@ The existing AppLayout supplies the only page header. Desktop uses a 320px rail;
 phone uses the same controlled form in a native modal with a sticky submit action.
 Literal CSS breakpoints remain necessary; they cannot use custom properties.
 
-`workspaceAPI.ts` aggregates capability catalogues with at most three concurrent
+`workspaceAPI.ts` aggregates capability catalogues with at most six concurrent
 directory reads. It deduplicates exact provider/model identities and exposes no
 key/group selector. Routing uses the first eligible owned key in stable ID order,
 or the original task key for a continuation. Histories retain independent key

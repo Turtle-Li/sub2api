@@ -1,5 +1,14 @@
 # Image Studio catalogue and gallery refinement
 
+Follow-up on 2026-11-08: the safe key directory publishes separate generation
+and historical-task eligibility. Catalogue/gallery discovery now skips unrelated
+keys and runs at most six independent reads at once. Preview reads use three
+slots, independent of the original-download queue; bounded 429/503 retries keep
+cold backfill admission from losing a cover. Price calculation reuses group,
+user-rate and candidate-account reads within one catalogue request only.
+Gemini image-output token prices are converted to a whole-image quote using
+verified resolution-specific output token counts, before existing multipliers.
+
 Baseline: `06b619a2d7b1bd611b518c217d8f72b5349c3fc9`.
 
 Owner request: organize model choice by platform/model with visible prices,

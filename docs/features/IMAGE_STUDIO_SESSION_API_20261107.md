@@ -15,7 +15,13 @@ the same user/key/group/IP/subscription/balance checks as the public gateway.
 It returns the existing panel response envelope with `data.items`, `data.total`,
 `data.page`, `data.page_size`, and `data.pages` (see shared pagination response).
 Each item contains only `id`, `name`, `status`, nullable `group_id`, `group_name`,
-nullable RFC3339 `expires_at`, `expired`, and `quota_exhausted`.
+nullable RFC3339 `expires_at`, `expired`, `quota_exhausted`, `can_generate`, and
+`has_history`. The dedicated directory query selects no credential, usage IP or
+live concurrency. Generation eligibility comes from the active image group's
+batch setting; history checks both job user and key ownership, excluding hidden
+jobs. The client discovers only generation keys and reads only history keys,
+then adds a key to history after its first successful submission. Historical
+keys remain visible even if their group no longer permits generation.
 Only the logged-in user's keys are queried. Directory metadata is informational;
 permission and available balance are rechecked on each operation. Do not interpret
 an active key as proof of batch capability; load its model directory.
