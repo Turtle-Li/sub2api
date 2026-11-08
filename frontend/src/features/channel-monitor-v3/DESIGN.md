@@ -1,8 +1,8 @@
 # Model status cards
 
 The owner-supplied November 7 reference defines the information hierarchy:
-platform sections containing group cards, three request metrics, an 18-cell
-timeline, explicit missing samples and a separate scheduled-check footer.
+platform sections containing group cards, three request metrics, a72-cell
+ten-minute timeline (12h), explicit missing samples and a separate scheduled-check footer.
 This extends the existing product shell and design tokens; it does not create
 a new visual system or introduce imagery. Product and statistics contract:
 `docs/features/MODEL_AVAILABILITY_GROUPS.md`.
@@ -20,13 +20,18 @@ Quiet groups show qualified scheduled-check metrics with “检测成功率” a
 labelled “检测耗时 P50” until enough native TTFT samples exist. The descriptive
 window is neutral (“分组表现”), and the inline note explains separate sources.
 Require probe metric version1, enabled and ready; unavailable/invalid metrics
-remain unknown. Cache prefers independently qualified real pool usage. If no
-eligible real hour exists, six successful native cache receipts in180minutes
-can supply “检测缓存占比” / “Check cache share”, scoped to this group's scheduled
-checks. Show “近3小时 · Token加权” beneath it, without a best-hour date/title.
-Require explicit group_probe/weighted_tokens metadata, the180-minute window,
-version1 and enabled/ready checks. Retain measured zero/low ratios. Absent or
-incompatible cache stays unknown; never infer it from successful connectivity.
+remain unknown. Cache prefers independently qualified real pool usage, including valid low
+ratios. Without a qualified real hour, show cache capability: “缓存已验证”
+only with version1 capability metadata, enabled checks and a dated positive
+native receipt from the current model in the last24h; otherwise “待验证”.
+This is not a conversational cache rate. Keep raw probe ratios unchanged;
+never fabricate hits or warm the cache with additional requests.
+Explicit current Claude global quota windows add an amber notice, distinguishing
+partial restriction from full-pool exhaustion. Count down only a known reset;
+label it estimated partial quota recovery, not guaranteed service recovery.
+Unknown resets wait for provider evidence; expired times wait for a check.
+The snapshot expires after90seconds without refresh. No private account data
+or counts are published.
 
 The grid fits the available container width with a minimum card width of22rem
 (or the full width on narrower containers). Platforms with one group share
@@ -45,7 +50,8 @@ Manage checks and its inline editor. Save preserves the complete versioned
 configuration, and model selection always remains an explicit owner action.
 The homepage has its own `#status` card section with the same sample guards,
 metrics and their explicit observation windows. Model plaza contains prices without status.
-The November 8 correction aligns 18 cells to ten-minute checks (180 minutes).
+The November9 refinement uses72 thin cells with a single roving keyboard stop.
+The strip covers12h; all success/timing measurements retain their3h window.
 The later cache correction independently labels cache as shared-account-pool,
 all-model real usage; success and latency keep their own group scope. Cache
 uses the highest sample-qualified complete hour from the last24UTC hours,

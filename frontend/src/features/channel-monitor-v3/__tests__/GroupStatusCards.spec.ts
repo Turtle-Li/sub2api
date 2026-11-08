@@ -54,10 +54,10 @@ describe('status group cards', () => {
     expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
     wrapper.unmount()
   })
-  it('retains measured cold and low cache shares without changing or hiding their values', () => {
+  it('does not advertise synthetic ratios as conversational cache rates', () => {
     for (const rate of [0, 52, 89.99, 100]) {
       const wrapper = mount(GroupStatusCard, { props: { group: group({ ...probeCache, probe_cache_read_rate: rate }) } })
-      expect(wrapper.get('[data-metric="cache"]').text()).toBe(`${rate.toFixed(1)}%`)
+      expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
       wrapper.unmount()
     }
   })
@@ -68,14 +68,10 @@ describe('status group cards', () => {
     expect(wrapper.text()).not.toContain('channelMonitorV3.cards.probeCache')
     wrapper.unmount()
   })
-  it('uses explicitly labelled check cache when real pool cache is unavailable', () => {
+  it('keeps legacy synthetic cache receipts out of the public usage ratio', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group({ cache_sample_state: 'none', cache_peak_hour_rate: null,
       probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens', probe_cache_read_rate: 96.5 }) } })
-    expect(wrapper.get('[data-metric="cache"]').text()).toBe('96.5%')
-    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeCache')
-    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeCacheWindow')
-    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.cacheScope')
-    expect(wrapper.get('[data-metric="cache"]').attributes('title')).toBeUndefined()
+    expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
     wrapper.unmount()
   })
   it('shows labelled scheduled metrics when real request samples are missing', () => {

@@ -11,7 +11,7 @@ const (
 	ChannelMonitorV3GroupWindowMinutes = 180
 	ChannelMonitorV3GroupMinRequests   = 20
 	ChannelMonitorV3GroupMinProbes     = 6
-	channelMonitorV3GroupCells         = 18
+	channelMonitorV3GroupCells         = 72
 	channelMonitorV3GroupInterval      = ChannelMonitorV3ProbeInterval
 	channelMonitorV3CacheLookbackHours = 24
 )
@@ -25,21 +25,28 @@ type ChannelMonitorV3GroupCell struct {
 // Published metrics contain no traffic volumes. Real requests and inexpensive
 // scheduled checks always retain independent denominators.
 type ChannelMonitorV3GroupStatus struct {
-	Status              string     `json:"status"`
-	Source              string     `json:"source"`
-	CheckedAt           *time.Time `json:"checked_at"`
-	ProbeEnabled        bool       `json:"probe_enabled"`
-	ProbeModel          string     `json:"-"`
-	DisplayName         string     `json:"-"`
-	RequestSuccessRate  *float64   `json:"request_success_rate"`
-	ProbeSuccessRate    *float64   `json:"probe_success_rate"`
-	ProbeMetricsVersion int        `json:"probe_metrics_version"`
-	ProbeTTFTP50Ms      *int64     `json:"probe_ttft_p50_ms"`
-	ProbeLatencyP50Ms   *int64     `json:"probe_latency_p50_ms"`
-	ProbeCacheReadRate  *float64   `json:"probe_cache_read_rate"`
-	ProbeCacheState     string     `json:"probe_cache_sample_state"`
-	ProbeCacheScope     string     `json:"probe_cache_scope"`
-	ProbeCacheStatistic string     `json:"probe_cache_statistic"`
+	Status                            string     `json:"status"`
+	Source                            string     `json:"source"`
+	CheckedAt                         *time.Time `json:"checked_at"`
+	ProbeEnabled                      bool       `json:"probe_enabled"`
+	ProbeModel                        string     `json:"-"`
+	DisplayName                       string     `json:"-"`
+	RequestSuccessRate                *float64   `json:"request_success_rate"`
+	ProbeSuccessRate                  *float64   `json:"probe_success_rate"`
+	ProbeMetricsVersion               int        `json:"probe_metrics_version"`
+	ProbeTTFTP50Ms                    *int64     `json:"probe_ttft_p50_ms"`
+	ProbeLatencyP50Ms                 *int64     `json:"probe_latency_p50_ms"`
+	ProbeCacheReadRate                *float64   `json:"probe_cache_read_rate"`
+	ProbeCacheState                   string     `json:"probe_cache_sample_state"`
+	ProbeCacheScope                   string     `json:"probe_cache_scope"`
+	ProbeCacheStatistic               string     `json:"probe_cache_statistic"`
+	ProbeCacheVerifiedAt              *time.Time `json:"probe_cache_verified_at"`
+	ProbeCacheVerificationVersion     int        `json:"probe_cache_verification_version"`
+	ProbeCacheVerificationWindowHours int        `json:"probe_cache_verification_window_hours"`
+	PoolQuotaState                    string     `json:"pool_quota_state,omitempty"`
+	PoolQuotaResetsAt                 *time.Time `json:"pool_quota_resets_at,omitempty"`
+	PoolQuotaObservedAt               *time.Time `json:"pool_quota_observed_at,omitempty"`
+	HistoryWindowMinutes              int        `json:"history_window_minutes"`
 	// Retired rolling-rate field stays null so older clients cannot mislabel a peak.
 	CacheReadRate      *float64                    `json:"cache_read_rate"`
 	CachePeakHourRate  *float64                    `json:"cache_peak_hour_rate"`
@@ -81,10 +88,12 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	interval := channelMonitorV3GroupInterval
 	last := now.Truncate(interval)
 	first := last.Add(-time.Duration(channelMonitorV3GroupCells-1) * interval)
+	metricsFirst := last.Add(-time.Duration(ChannelMonitorV3GroupWindowMinutes/int(interval/time.Minute)-1) * interval)
 	facts, err := s.repo.SlotFacts(ctx, groupIDs, first, last.Add(interval), interval, true)
 	if err != nil {
 		return nil, err
 	}
+	metricFacts := channelMonitorV3FactsSince(facts, metricsFirst)
 	through, err := s.repo.DataThrough(ctx)
 	if err != nil {
 		return nil, err
@@ -98,7 +107,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	}
 	var probes []ChannelMonitorV3GroupProbeResult
 	if repo, ok := s.repo.(ChannelMonitorV3GroupProbeRepository); ok {
-		probes, err = repo.GroupProbes(ctx, groupIDs, first, now.Add(time.Nanosecond))
+		probes, err = repo.GroupProbes(ctx, groupIDs, now.Add(-24*time.Hour), now.Add(time.Nanosecond))
 		if err != nil {
 			return nil, err
 		}
@@ -111,10 +120,20 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	for _, probe := range probes {
 		byGroup[probe.GroupID] = append(byGroup[probe.GroupID], probe)
 	}
+	quotaAccounts := map[int64][]Account{}
+	if repo, ok := s.repo.(channelMonitorV3QuotaReader); ok {
+		// Quota context is supplementary; a failed snapshot must not erase history.
+		if accounts, err := repo.GroupQuotaAccounts(ctx, groupIDs); err == nil {
+			quotaAccounts = accounts
+		}
+	}
 	for _, id := range groupIDs {
 		target := targets[id]
 		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model, ProbeMetricsVersion: 1,
 			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", ProbeCacheState: "none", ProbeCacheScope: "group_probe", ProbeCacheStatistic: "weighted_tokens", CacheSampleState: "none", CacheScope: "shared_account_pool", CacheStatistic: "best_complete_hour", CacheLookbackHours: channelMonitorV3CacheLookbackHours, WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
+		item.HistoryWindowMinutes = int(time.Duration(channelMonitorV3GroupCells) * interval / time.Minute)
+		item.ProbeCacheVerificationVersion, item.ProbeCacheVerificationWindowHours = 1, 24
+		channelMonitorV3ApplyQuota(item, quotaAccounts[id], now)
 		for _, cache := range requestCache[id] {
 			start := cache.HourStart.UTC()
 			if start.Before(cacheFrom) || !start.Before(cacheTo) || !start.Equal(start.Truncate(time.Hour)) || cache.Requests <= 0 || cache.InputTokens < 0 || cache.CacheCreationTokens < 0 || cache.CacheReadTokens < 0 {
@@ -138,7 +157,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			}
 		}
 		component := ChannelMonitorV3Component{GroupID: id}
-		total := channelMonitorV3Accumulate(*cfg, component, facts, time.Time{}, 0)[0]
+		total := channelMonitorV3Accumulate(*cfg, component, metricFacts, time.Time{}, 0)[0]
 		if total.counted() > 0 {
 			item.RequestSampleState = "insufficient"
 		}
@@ -175,17 +194,32 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		probeLatency, probeTTFT := map[int64]int64{}, map[int64]int64{}
 		var latestProbeAt *time.Time
 		for _, probe := range byGroup[id] {
-			if probe.Model != target.Model || probe.Slot.Before(first) || probe.Slot.After(now) || probe.FinishedAt == nil || probe.FinishedAt.Before(probe.Slot) || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
+			if probe.Model != target.Model || probe.Slot.Before(now.Add(-24*time.Hour)) || probe.Slot.After(now) || probe.FinishedAt == nil || probe.FinishedAt.Before(probe.Slot) || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
+				continue
+			}
+			if item.ProbeEnabled && probe.Outcome == "success" && probe.CacheInputTokens != nil && probe.CacheReadTokens != nil && *probe.CacheInputTokens > 0 && *probe.CacheReadTokens > 0 && *probe.CacheReadTokens <= *probe.CacheInputTokens && (item.ProbeCacheVerifiedAt == nil || probe.FinishedAt.After(*item.ProbeCacheVerifiedAt)) {
+				at := *probe.FinishedAt
+				item.ProbeCacheVerifiedAt = &at
+			}
+			if !probe.Slot.Before(first) {
+				index := int(probe.Slot.Sub(first) / interval)
+				if index >= 0 && index < len(item.Cells) && item.Cells[index].Source != "requests" {
+					state := ChannelMonitorV3StatusDown
+					if probe.Outcome == "success" {
+						state = ChannelMonitorV3StatusOperational
+					}
+					item.Cells[index].Status, item.Cells[index].Source = state, "probe"
+				}
+			}
+			if probe.Slot.Before(metricsFirst) {
 				continue
 			}
 			count++
 			if latestProbeAt == nil || probe.FinishedAt.After(*latestProbeAt) {
 				latestProbeAt = probe.FinishedAt
 			}
-			state := ChannelMonitorV3StatusDown
 			if probe.Outcome == "success" {
 				successes++
-				state = ChannelMonitorV3StatusOperational
 				if probe.LatencyMs > 0 {
 					probeLatency[probe.LatencyMs]++
 					latencySamples++
@@ -199,13 +233,6 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 					probeCacheInput += float64(*probe.CacheInputTokens)
 					probeCacheRead += float64(*probe.CacheReadTokens)
 				}
-			}
-			index := int(probe.Slot.Sub(first) / interval)
-			if probe.Slot.Before(first) || index < 0 || index >= len(item.Cells) {
-				continue
-			}
-			if item.Cells[index].Source != "requests" || item.Cells[index].Status == ChannelMonitorV3StatusInsufficient {
-				item.Cells[index].Status, item.Cells[index].Source = state, "probe"
 			}
 		}
 		if count > 0 {

@@ -6,11 +6,15 @@ first-token latency independently prefer qualified real group traffic. Otherwise
 show qualified check success and native check first-token P50; if native timing
 is not yet sufficient, use the separately labelled whole-check duration P50.
 No checks are added to real-request denominators or dashboard cache usage.
-Native check cache receipts now provide a separately qualified fallback,
-labelled “检测缓存占比” with its three-hour token-weighted window. This is not
-the real-request best-hour statistic. Details and rollout evidence:
-`docs/operations/MODEL_STATUS_PROBE_METRICS_20261108.md` and
-`docs/operations/MODEL_STATUS_PROBE_CACHE_20261108.md`.
+Current November9 refinement: the timeline contains72 ten-minute cells (12h)
+while success/latency and raw probe ratios retain their180-minute denominator.
+Low-frequency native receipts verify cache capability (dated positive proof,
+current exact model, enabled checks,24h); public clients no longer publish a
+synthetic cache ratio as conversational usage. Real qualified best-hour cache
+retains priority, including valid low values. Group-level explicit Claude
+quota snapshots distinguish limited versus exhausted and expose only an
+observation/reset time, without accounts or counts. See
+`docs/operations/MODEL_STATUS_REFINEMENT_20261109.md`.
 
 Historical owner correction, 2026-11-07: the homepage and signed-in model plaza must show
 availability inside each existing group card. All viewers use their existing
@@ -100,10 +104,9 @@ independent `cache_sample_state`. The retired `cache_read_rate` remainsnull so
 older clients cannot mislabel the historical maximum. No accounts, models, counts or tokens leave
 the status endpoint. Every displayed metric labels its scope. Availability,
 success, first-token latency and history still describe the selected group.
-The homepage uses immutable asset namespacev8 and the same publication guards.
+The homepage uses immutable asset namespacev9 and the same publication guards.
 
-If no eligible real-traffic hour exists, native scheduled-check cache can be
-published independently: at least six successful cache-bearing final receipts
+Raw native scheduled-check cache remains available independently for diagnosis: at least six successful cache-bearing final receipts
 in the last180minutes, current configured model, checks enabled and latest
 completed check no older than15minutes. Compute sum(cache-read) divided by
 sum(totalinput), including explicit zeros and all valid low values; never
@@ -115,8 +118,13 @@ input is already total; native Anthropic input is the sum of its disjoint
 uncached, creation and read buckets. The DTO adds `probe_cache_read_rate`,
 `probe_cache_sample_state`, `probe_cache_scope=group_probe` and
 `probe_cache_statistic=weighted_tokens`; it publishes no raw usage or identities.
-Both clients require the explicit source/statistic and180-minute window, prefer
-qualified real pool cache, and otherwise label the check ratio/window separately.
+Public clients prefer qualified real pool cache. Without it, a new version1
+capability contract requires an enabled current check model and a positive
+valid native cache receipt within24h, publishing only its verification time.
+Show “缓存已验证” (cache capability, not a hit rate), or “待验证”. Never infer
+capability from connectivity, old-model receipts, invalid/missing buckets or
+converted synthetic fields. Keep valid low probe ratios in their raw aggregates;
+no extra warm-ups, ratio floors or sample trimming.
 
 This local extension follows the pinned source below. Its probe does not
 provide this fallback. Native raw ChatCompletions and native Anthropic receipts
@@ -151,7 +159,7 @@ every model, public ingress or customer entitlement admission.
 
 ### Quiet-group check metrics
 
-Both check metrics use the existing three-hour/18-cell window, exact current
+Both check metrics use the existing three-hour measurement window, exact current
 selected model and enabled target. Only completed success/failure rounds count,
 with at least six rounds for success and six successful valid timings for each
 P50. The latest completed round must be within15minutes. Old-model, pending,
@@ -298,7 +306,8 @@ The plaza endpoint no longer enriches pricing with availability. Current state i
 15 minutes without observation; passive collection must also be fresh within
 ten minutes. A fresh independent probe still works during stale collection.
 The 180-minute real-request percentage and scheduled-check percentage are
-separate. All request metrics and the 18 ten-minute cells use the same window.
+separate. Request metrics retain180minutes; the72 ten-minute history cells span12hours.
+Facts outside the measurement window must not enter metric denominators.
 Publish request success rate only after at least 20 valid requests (or a higher
 configured minimum); publish check success rate only after six completed
 checks. Ignored outcomes, pending checks and empty slots never enter either

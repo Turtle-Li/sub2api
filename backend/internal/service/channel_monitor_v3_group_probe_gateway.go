@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -89,12 +90,15 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 	var firstTokenMs *int
 	var cacheReadTokens int64
 	var nativeCacheReceipt bool
-	body := channelMonitorV3ProbeBody(group.Platform, model)
+	body, headers, buildErr := channelMonitorV3ProbeRequest(group, account, model)
+	if buildErr != nil {
+		out.Category = "probe_internal"
+		return
+	}
 	writer := &channelMonitorV3ProbeWriter{header: make(http.Header)}
 	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body)).WithContext(ctx)
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("User-Agent", "Sub2API-Availability-Probe")
+	c.Request.Header = headers
 	c.Set("api_key", &APIKey{GroupID: &group.ID, Group: group})
 	if domain.UsesOpenAIGateway(group.Platform) {
 		c.Request.URL.Path = "/v1/chat/completions"
@@ -192,6 +196,29 @@ func channelMonitorV3ProbeCacheReadTokens(body []byte, input, cached int64) *int
 		return nil
 	}
 	return &cached
+}
+
+// API-key relays in client-restricted groups use the existing native test profile
+// to satisfy provider client allowlists. OAuth keeps its gateway mimic path.
+// Preserve the one-token budget and normal routing.
+func channelMonitorV3ProbeRequest(group *Group, account *Account, model string) ([]byte, http.Header, error) {
+	headers := http.Header{"Content-Type": {"application/json"}, "User-Agent": {"Sub2API-Availability-Probe"}}
+	if group.Platform != PlatformAnthropic || !group.ClaudeCodeOnly || account.Type != AccountTypeAPIKey {
+		return channelMonitorV3ProbeBody(group.Platform, model), headers, nil
+	}
+	payload, err := createTestPayload(model)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload["max_tokens"] = 1
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	for key, value := range claude.DefaultHeaders() {
+		headers.Set(key, value)
+	}
+	return body, headers, nil
 }
 
 func channelMonitorV3ProbeBody(platform, model string) []byte {

@@ -21,21 +21,21 @@ func TestChannelMonitorV3GroupHistoryMatchesTenMinuteChecks(t *testing.T) {
 	out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
 	require.NoError(t, err)
 	require.Equal(t, 180, out[4].WindowMinutes)
-	require.Len(t, out[4].Cells, 18)
+	require.Len(t, out[4].Cells, 72)
 	require.Equal(t, 10*time.Minute, out[4].Cells[1].Start.Sub(out[4].Cells[0].Start))
-	require.Equal(t, "observed", out[4].Cells[17].Status, "a completed successful request is not an empty slot")
-	require.Equal(t, "requests", out[4].Cells[17].Source)
+	require.Equal(t, "observed", out[4].Cells[71].Status, "a completed successful request is not an empty slot")
+	require.Equal(t, "requests", out[4].Cells[71].Source)
 	require.Nil(t, out[4].RequestSuccessRate, "one request is not enough for a percentage")
 	r.slotFacts.Metrics[0].Errors = 1
 	out, err = s.PlazaStatuses(context.Background(), []int64{4}, false)
 	require.NoError(t, err)
-	require.Equal(t, "errors_observed", out[4].Cells[17].Status)
+	require.Equal(t, "errors_observed", out[4].Cells[71].Status)
 	require.Nil(t, out[4].RequestSuccessRate, "sparse failures do not justify a percentage")
 	r.slotFacts.Metrics = nil
 	out, err = s.PlazaStatuses(context.Background(), []int64{4}, false)
 	require.NoError(t, err)
-	require.Equal(t, "collecting", out[4].Cells[17].Status)
-	require.Equal(t, "unknown", out[4].Cells[16].Status, "an empty historical slot stays unknown")
+	require.Equal(t, "collecting", out[4].Cells[71].Status)
+	require.Equal(t, "unknown", out[4].Cells[70].Status, "an empty historical slot stays unknown")
 	require.Nil(t, out[4].RequestSuccessRate)
 }
 
