@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"github.com/Wei-Shaw/sub2api/migrations"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,10 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
 	t.Cleanup(func() { _ = client.Close() })
 	require.NoError(t, client.Schema.Create(ctx))
+	// Raw audit inserts must obey migration 093's production bound. Ent's
+	// generated PostgreSQL string column does not enforce MaxLen in SQL.
+	_, err = db.ExecContext(ctx, "ALTER TABLE payment_audit_logs ALTER COLUMN action TYPE VARCHAR(50)")
+	require.NoError(t, err)
 	// Exercise the authored migration rather than Ent's unconstrained test schema.
 	_, err = db.ExecContext(ctx, "DROP TABLE shop_order_actions,shop_notifications,shop_fulfillments,shop_products")
 	require.NoError(t, err)
@@ -208,6 +213,10 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 			o = client.PaymentOrder.UpdateOne(o).SetOrderType(payment.OrderTypeManualShop).SetStatus(OrderStatusPaid).SetAmount(0).SetPayAmount(p.Price).ClearCompletedAt().SaveX(ctx)
 			require.NoError(t, createShopFulfillmentTx(ctx, client, o, *p))
 			require.NoError(t, markShopPaidTx(ctx, client, o))
+			task := client.ShopOrderAction.Query().Where(shoporderaction.OrderIDEQ(o.ID)).OnlyX(ctx)
+			require.Len(t, task.ActionKey, 44)
+			_, err = s.ManageAutomation(ctx, o.ID, u.ID, ShopAutomationInput{Action: "retry", ClaimRevision: task.ClaimRevision})
+			require.NoError(t, err)
 			claims := make(chan *shopDaypassClaim, 8)
 			failures := make(chan error, 8)
 			var wg sync.WaitGroup
@@ -249,6 +258,16 @@ func TestShopPostgresAtomicDeliveryAndRefundFences(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, sku.Concurrency, detail.Product.Concurrency)
 			require.Equal(t, sku.DurationDays, detail.Product.DurationValue)
+			var completionAudits int
+			require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM payment_audit_logs WHERE order_id=$1 AND action='SHOP_ACTION_COMPLETE' AND detail::jsonb->>'action_id'=$2", fmt.Sprint(o.ID), task.ActionKey).Scan(&completionAudits))
+			require.Equal(t, 1, completionAudits)
+			task = client.ShopOrderAction.Query().Where(shoporderaction.OrderIDEQ(o.ID)).OnlyX(ctx)
+			_, err = s.ManageAutomation(ctx, o.ID, u.ID, ShopAutomationInput{Action: "revoke", ClaimRevision: task.ClaimRevision})
+			require.NoError(t, err)
+			require.NoError(t, s.RecoverShopActions(ctx))
+			require.Equal(t, shopaction.Revoked, client.ShopOrderAction.Query().Where(shoporderaction.OrderIDEQ(o.ID)).OnlyX(ctx).Status)
+			require.Equal(t, 1, gateway.revocations)
+			require.Equal(t, OrderStatusCompleted, client.PaymentOrder.GetX(ctx, o.ID).Status)
 		})
 	}
 

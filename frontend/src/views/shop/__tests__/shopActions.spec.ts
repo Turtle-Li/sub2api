@@ -39,6 +39,81 @@ const global = { stubs: {
 enableAutoUnmount(afterEach)
 beforeEach(() => { vi.clearAllMocks() })
 
+describe('buyer automatic delivery updates', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers() })
+
+  function pendingOrder(): ShopOrderDetail {
+    return { ...order(), automation: { status: 'RUNNING', result_kind: 'none' } }
+  }
+
+  it('shows completion without a manual refresh and stops polling', async () => {
+    const pending = pendingOrder()
+    api.order.mockResolvedValueOnce({ data: pending }).mockResolvedValue({ data: {
+      ...pending, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', delivery_kind: 'none',
+      automation: { status: 'SUCCEEDED', result_kind: 'none' }
+    } })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('订单已完成')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(api.order).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('keeps the current order visible after a transient refresh failure and retries', async () => {
+    api.order.mockResolvedValueOnce({ data: pendingOrder() }).mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue({ data: { ...pendingOrder(), automation: { status: 'REVIEW_REQUIRED', result_kind: 'none' } } })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ShopOrderSummary' }).exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('无法加载订单')
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('交付待复核')
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(api.order).toHaveBeenCalledTimes(3)
+    wrapper.unmount()
+  })
+
+  it('stops requesting the order when leaving the page', async () => {
+    api.order.mockResolvedValue({ data: pendingOrder() })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(api.order).toHaveBeenCalledTimes(1)
+  })
+
+  it('coalesces a manual refresh with an in-flight automatic refresh', async () => {
+    let finish: (value: { data: ShopOrderDetail }) => void = () => {}
+    const response = new Promise<{ data: ShopOrderDetail }>(resolve => { finish = resolve })
+    api.order.mockResolvedValueOnce({ data: pendingOrder() }).mockReturnValueOnce(response)
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2000)
+    await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')
+    expect(api.order).toHaveBeenCalledTimes(2)
+    finish({ data: { ...pendingOrder(), automation: { status: 'REVIEW_REQUIRED', result_kind: 'none' } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('交付待复核')
+    wrapper.unmount()
+  })
+
+  it('does not poll manual fulfillment orders', async () => {
+    api.order.mockResolvedValue({ data: { ...pendingOrder(), product: { ...product, automatic_fulfillment: false }, automation: undefined } })
+    const wrapper = mount(ShopOrderView, { global })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(api.order).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})
+
 describe('payment action administration', () => {
   it('binds another product to a registered version without changing its price or duration', async () => {
     const wrapper = mount(ShopProductEditor, { props: { product, busy: false, integrations: [integration] } })

@@ -18,16 +18,35 @@ const error = ref('')
 const message = ref('')
 let generation = 0
 let edit = 0
+let loading = false
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+function stopRefresh() {
+  if (refreshTimer !== null) clearTimeout(refreshTimer)
+  refreshTimer = null
+}
+function scheduleRefresh() {
+  stopRefresh()
+  const current = order.value
+  if (!current?.product.automatic_fulfillment || current.fulfillment_status !== 'PROCESSING') return
+  if (current.automation && !['PENDING', 'RUNNING', 'COMPENSATING'].includes(current.automation.status)) return
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null
+    if (busy.value || document.visibilityState === 'hidden') scheduleRefresh()
+    else void load(true)
+  }, 2000)
+}
 const inputURL = computed(() => sanitizeUrl(order.value?.product.input_url || (order.value?.product.input_format === 'session_json' ? 'https://chatgpt.com/api/auth/session' : '')))
 const localPreview = computed(() => order.value?.product.input_format === 'session_json' ? previewShopSession(content.value) : null)
 const displayedCheck = computed(() => inputCheck.value ?? localPreview.value?.check ?? null)
-async function load() {
+async function load(silent = false) {
+  if (loading) return
+  loading = true
+  stopRefresh()
   const current = ++generation
-  busy.value = true
-  error.value = ''
+  if (!silent) { busy.value = true; error.value = '' }
   try { const result = await shopAPI.order(Number(route.params.id)); if (current === generation) order.value = result.data }
-  catch { if (current === generation) error.value = '无法加载订单，请重试。' }
-  finally { if (current === generation) busy.value = false }
+  catch { if (current === generation && !silent) error.value = '无法加载订单，请重试。' }
+  finally { if (current === generation) { loading = false; if (!silent) busy.value = false; scheduleRefresh() } }
 }
 async function submit() {
   if (!order.value?.can_submit || busy.value || !content.value.trim()) return
@@ -53,15 +72,15 @@ async function submit() {
   finally { if (current === generation) busy.value = false }
 }
 watch(content, () => { edit++; inputCheck.value = null; error.value = '' }, { flush: 'sync' })
-watch(() => route.params.id, () => { order.value = null; content.value = ''; inputCheck.value = null; message.value = ''; void load() }, { immediate: true })
-onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
+watch(() => route.params.id, () => { generation++; loading = false; order.value = null; content.value = ''; inputCheck.value = null; message.value = ''; void load() }, { immediate: true })
+onBeforeUnmount(() => { generation++; stopRefresh(); content.value = ''; order.value = null })
 </script>
 <template>
   <AppLayout>
     <div class="mx-auto w-full max-w-4xl py-2 sm:px-4 sm:py-4">
       <header class="mb-5 flex flex-wrap items-center justify-between gap-3">
         <RouterLink to="/orders" class="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-gray-400 dark:hover:text-gray-100 dark:focus:ring-offset-gray-950">返回我的订单</RouterLink>
-        <button type="button" class="btn btn-secondary min-h-11" :disabled="busy" @click="load">刷新状态</button>
+        <button type="button" class="btn btn-secondary min-h-11" :disabled="busy" @click="load()">刷新状态</button>
       </header>
 
       <div v-if="!order && busy" class="space-y-5" aria-busy="true" aria-label="正在加载订单">
@@ -72,7 +91,7 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
       <section v-else-if="!order" class="rounded-xl border border-red-200 bg-white p-6 dark:border-red-900 dark:bg-gray-900" role="alert">
         <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">无法显示订单</h1>
         <p class="mt-2 text-sm text-red-700 dark:text-red-300">{{ error }}</p>
-        <button type="button" class="mt-5 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-medium text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900" @click="load">重新加载</button>
+        <button type="button" class="mt-5 inline-flex min-h-11 items-center justify-center rounded-md bg-primary-700 px-5 text-sm font-medium text-white hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-primary-400 dark:text-gray-950 dark:hover:bg-primary-300 dark:focus:ring-offset-gray-900" @click="load()">重新加载</button>
       </section>
 
       <template v-else-if="order">
@@ -166,7 +185,7 @@ onBeforeUnmount(() => { generation++; content.value = ''; order.value = null })
 
         <section v-else class="mt-4 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '交付待复核' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '正在自动发放 API Key' : order.automation ? shopAutomationLabels[order.automation.status] : order.product.automatic_fulfillment ? '等待自动处理' : '等待人工处理' }}</h2>
-          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '付款已确认，交付需要客服核对。请勿重复购买，可联系客服处理。' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '付款已确认。请稍后刷新状态，Key 和调用方式会显示在这里。有效期从付款时间开始计算。' : order.product.automatic_fulfillment ? '付款已确认。请稍后刷新，交付结果会显示在这里。' : '客服正在处理此订单，完成后可在这里查看结果。' }}</p>
+          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '付款已确认，交付需要客服核对。请勿重复购买，可联系客服处理。' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '付款已确认，页面会自动更新。Key 和调用方式将显示在这里，有效期从付款时间开始计算。' : order.product.automatic_fulfillment ? '付款已确认，页面会自动更新并显示交付结果。' : '客服正在处理此订单，完成后可在这里查看结果。' }}</p>
         </section>
       </template>
     </div>

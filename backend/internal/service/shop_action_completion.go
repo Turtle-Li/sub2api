@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent/shoporderaction"
@@ -80,7 +79,9 @@ func (s *ShopService) completeShopAction(ctx context.Context, c *shopOrderAction
 	if err = queueShopNotification(ctx, client, f, "complete", "email"); err != nil {
 		return err
 	}
-	if err = writePaymentAuditTx(ctx, client, o.ID, "SHOP_ACTION_COMPLETE_"+row.ActionKey, "system:shop-actions", map[string]any{"action_id": row.ActionKey, "receipt_ref": result.ReceiptID}); err != nil {
+	// There is one immutable delivery action per order. Keep its full identity
+	// in detail; the audit event column is limited to 50 characters.
+	if err = writePaymentAuditTx(ctx, client, o.ID, "SHOP_ACTION_COMPLETE", "system:shop-actions", map[string]any{"action_id": row.ActionKey, "receipt_ref": result.ReceiptID}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -113,7 +114,7 @@ func (s *ShopService) finishShopRevocation(ctx context.Context, c *shopOrderActi
 	if err = client.ShopFulfillment.UpdateOne(f).SetStatus(ShopClosed).SetStatusNote("此订单的授权已撤销，请联系客服核对售后。").AddRevision(1).Exec(ctx); err != nil {
 		return err
 	}
-	if err = writePaymentAuditTx(ctx, client, row.OrderID, fmt.Sprintf("SHOP_ACTION_REVOKED_%s", row.ActionKey), "system:shop-actions", map[string]any{"action_id": row.ActionKey}); err != nil {
+	if err = writePaymentAuditTx(ctx, client, row.OrderID, "SHOP_ACTION_REVOKED", "system:shop-actions", map[string]any{"action_id": row.ActionKey}); err != nil {
 		return err
 	}
 	return tx.Commit()

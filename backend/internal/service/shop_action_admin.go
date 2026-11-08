@@ -130,7 +130,7 @@ func (s *ShopService) ManageAutomation(ctx context.Context, orderID, adminID int
 	if err = client.ShopOrderAction.UpdateOne(row).SetStatus(state).SetCompensationReason(reason).SetErrorKind("").AddClaimRevision(1).ClearLeaseUntil().SetNextAttemptAt(time.Now()).Exec(ctx); err != nil {
 		return nil, err
 	}
-	if err = writePaymentAuditTx(ctx, client, o.ID, fmt.Sprintf("SHOP_ACTION_%s_%s_%d", in.Action, row.ActionKey, row.ClaimRevision+1), fmt.Sprintf("admin:%d", adminID), map[string]any{"action_id": row.ActionKey, "claim_revision": row.ClaimRevision + 1}); err != nil {
+	if err = writePaymentAuditTx(ctx, client, o.ID, fmt.Sprintf("SHOP_ACTION_%s_%d", in.Action, row.ClaimRevision+1), fmt.Sprintf("admin:%d", adminID), map[string]any{"action_id": row.ActionKey, "claim_revision": row.ClaimRevision + 1}); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
