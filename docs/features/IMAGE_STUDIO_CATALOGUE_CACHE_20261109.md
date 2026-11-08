@@ -91,8 +91,8 @@ group changes; transient failure; storage bounds; stale refresh fencing; and
 independent history cursors/asset ownership. Commands and final results are in the
 release evidence, with frontend type/lint/build and scoped Go unit/race/build/vet.
 
-Real Chrome inspection used only synthetic local data plus a read-only live
-baseline. Paired 1440×900 and 390×844 screenshots cover light/dark galleries and
+Real Chrome inspection used synthetic local data plus read-only live baseline
+and final-release checks. Paired 1440×900 and 390×844 screenshots cover light/dark galleries and
 mobile model selection. No horizontal overflow or automatic original-content
 request appeared in those gallery checks. The local fixture inserted an eight
 second delay in one channel; deterministic tests establish incremental rendering.
@@ -115,3 +115,6 @@ quote computation dominates measured entry time, the next owner-scoped option is
 a server directory projection with explicit group/account/price invalidation;
 the Image Studio maintainer owns that decision. Do not replace live authorization
 with a shared unscoped server cache.
+
+Final production source, live four-option Gemini verification and recovery are
+recorded in [the release report](../operations/IMAGE_STUDIO_CACHE_RELEASE_20261109.md).
