@@ -100,6 +100,21 @@
   local and upstream version 25 have different layouts. Regenerate Ent/Wire
   after schema merges instead of accepting merged positional generated code.
 
+## Account daily request quotas
+
+- Before changing account daily call limits, read
+  `docs/features/ACCOUNT_DAILY_REQUEST_LIMIT.md`. Keep counters independent of
+  money, reuse billing deduplication and daily reset settings, and preserve
+  upstream failover and ambiguous batch submission protections.
+
+## Account idle keep-alive
+
+- Before changing idle account retention tests, read
+  `docs/features/ACCOUNT_IDLE_KEEPALIVE.md`. Reuse scheduled tests, opt in per
+  account (default 48 idle hours), preserve shared admission and durable claims,
+  and keep synthetic successes separate from customer billing. Disable idle plans
+  before rolling back to a binary that does not understand their inactivity gate.
+
 ## Channel model pricing
 
 - For authored-currency defaults, native Kimi CNY quotes and group-rate previews,

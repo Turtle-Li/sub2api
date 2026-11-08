@@ -26,6 +26,7 @@ type createScheduledTestPlanRequest struct {
 	Enabled        *bool  `json:"enabled"`
 	MaxResults     int    `json:"max_results"`
 	AutoRecover    *bool  `json:"auto_recover"`
+	IdleHours      int    `json:"idle_hours"`
 }
 
 type updateScheduledTestPlanRequest struct {
@@ -34,6 +35,7 @@ type updateScheduledTestPlanRequest struct {
 	Enabled        *bool  `json:"enabled"`
 	MaxResults     int    `json:"max_results"`
 	AutoRecover    *bool  `json:"auto_recover"`
+	IdleHours      *int   `json:"idle_hours"`
 }
 
 // ListByAccount GET /admin/accounts/:id/scheduled-test-plans
@@ -66,6 +68,7 @@ func (h *ScheduledTestHandler) Create(c *gin.Context) {
 		CronExpression: req.CronExpression,
 		Enabled:        true,
 		MaxResults:     req.MaxResults,
+		IdleHours:      req.IdleHours,
 	}
 	if req.Enabled != nil {
 		plan.Enabled = *req.Enabled
@@ -116,6 +119,9 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 	}
 	if req.AutoRecover != nil {
 		existing.AutoRecover = *req.AutoRecover
+	}
+	if req.IdleHours != nil {
+		existing.IdleHours = *req.IdleHours
 	}
 
 	updated, err := h.scheduledTestSvc.UpdatePlan(c.Request.Context(), existing)

@@ -1410,6 +1410,8 @@ export interface Account {
   custom_base_url?: string | null
 
   // API Key 账号配额限制
+  quota_daily_request_limit?: number | null
+  quota_daily_request_used?: number | null
   quota_limit?: number | null
   quota_used?: number | null
   quota_daily_limit?: number | null
@@ -2565,6 +2567,9 @@ export interface ScheduledTestPlan {
   enabled: boolean
   max_results: number
   auto_recover: boolean
+  idle_hours?: number
+  last_success_at?: string | null
+  last_activity_at?: string | null
   last_run_at: string | null
   next_run_at: string | null
   created_at: string
@@ -2590,6 +2595,7 @@ export interface CreateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  idle_hours?: number
 }
 
 export interface UpdateScheduledTestPlanRequest {
@@ -2598,6 +2604,7 @@ export interface UpdateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  idle_hours?: number
 }
 
 // Payment types

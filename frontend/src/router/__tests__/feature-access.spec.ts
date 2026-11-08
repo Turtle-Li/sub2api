@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Router, RouterOptions } from 'vue-router'
 
 type NavigationGuard = (
   to: Record<string, any>,
@@ -8,7 +9,7 @@ type NavigationGuard = (
 
 const routerHarness = vi.hoisted(() => ({
   guard: null as NavigationGuard | null,
-  routes: [] as Array<{ path: string; meta?: Record<string, unknown> }>,
+  router: null as Router | null,
 }))
 
 const authStore = vi.hoisted(() => ({
@@ -33,19 +34,22 @@ const appStore = vi.hoisted(() => ({
   fetchPublicSettings: vi.fn(),
 }))
 
-vi.mock('vue-router', () => ({
-  createWebHistory: vi.fn(() => ({})),
-  createRouter: vi.fn((options: { routes: Array<{ path: string; meta?: Record<string, unknown> }> }) => {
-    routerHarness.routes = options.routes
-    return {
-      beforeEach: vi.fn((guard: NavigationGuard) => {
-        routerHarness.guard = guard
-      }),
-      afterEach: vi.fn(),
-      onError: vi.fn(),
-    }
-  }),
-}))
+vi.mock('vue-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-router')>()
+  return {
+    ...actual,
+    createWebHistory: vi.fn(() => actual.createMemoryHistory()),
+    createRouter: vi.fn((options: RouterOptions) => {
+      const router = actual.createRouter(options)
+      routerHarness.router = router
+      vi.spyOn(router, 'beforeEach').mockImplementation((guard) => {
+        routerHarness.guard = guard as NavigationGuard
+        return vi.fn()
+      })
+      return router
+    }),
+  }
+})
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => authStore,
@@ -112,8 +116,8 @@ function runGuard(meta: Record<string, unknown>, path: string) {
 }
 
 function routeFor(path: string) {
-  const route = routerHarness.routes.find((candidate) => candidate.path === path)
-  if (!route) throw new Error(`route not found: ${path}`)
+  const route = routerHarness.router?.resolve(path)
+  if (!route?.matched.length) throw new Error(`route not found: ${path}`)
   return route
 }
 
@@ -199,9 +203,8 @@ describe('feature route guard', () => {
     expect(ordersRoute.meta).toMatchObject({ requiresAuth: true, requiresAdmin: true })
     expect(ordersRoute.meta?.requiresPayment).toBeUndefined()
     expect(routeFor('/admin/orders/dashboard').meta?.requiresPayment).toBe(true)
-    expect(routeFor('/admin/orders/plans').meta?.requiresPayment).toBe(true)
 
-    const { navigation, next } = runGuard({ requiresAdmin: true }, ordersRoute.path)
+    const { navigation, next } = runGuard(ordersRoute.meta, ordersRoute.path)
     await navigation
 
     expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
@@ -209,13 +212,64 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
+  it('retains the former product URL as an alias of the unified catalog', () => {
+    const catalog = routeFor('/admin/products')
+    const legacy = routeFor('/admin/orders/plans')
+
+    expect(legacy.matched[legacy.matched.length - 1]?.aliasOf)
+      .toBe(catalog.matched[catalog.matched.length - 1])
+  })
+
+  it.each(['/admin/products', '/admin/orders/plans'])(
+    'allows an administrator to reach %s while public purchasing is disabled',
+    async (path) => {
+      authStore.isAdmin = true
+      appStore.cachedPublicSettings = { payment_enabled: false }
+      appStore.publicSettingsLoaded = true
+      const route = routeFor(path)
+
+      expect(route.meta).toMatchObject({ requiresAuth: true, requiresAdmin: true, requiresPayment: false })
+      const { navigation, next } = runGuard(route.meta, route.path)
+      await navigation
+
+      expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+      expect(next).toHaveBeenCalledOnce()
+      expect(next).toHaveBeenCalledWith()
+    }
+  )
+
+  it.each(['/admin/products', '/admin/orders/plans'])(
+    'requires sign-in for %s',
+    async (path) => {
+      authStore.isAuthenticated = false
+      const route = routeFor(path)
+      const { navigation, next } = runGuard(route.meta, route.path)
+      await navigation
+
+      expect(next).toHaveBeenCalledOnce()
+      expect(next).toHaveBeenCalledWith({ path: '/login', query: { redirect: path } })
+    }
+  )
+
+  it.each(['/admin/products', '/admin/orders/plans'])(
+    'blocks non-admin users from %s',
+    async (path) => {
+      const route = routeFor(path)
+      const { navigation, next } = runGuard(route.meta, route.path)
+      await navigation
+
+      expect(next).toHaveBeenCalledOnce()
+      expect(next).toHaveBeenCalledWith('/dashboard')
+    }
+  )
+
   it('keeps the customer purchase route blocked while public purchasing is disabled', async () => {
     appStore.cachedPublicSettings = { payment_enabled: false }
     appStore.publicSettingsLoaded = true
     const purchaseRoute = routeFor('/purchase')
 
     expect(purchaseRoute.meta?.requiresPayment).toBe(true)
-    const { navigation, next } = runGuard({ requiresPayment: true }, purchaseRoute.path)
+    const { navigation, next } = runGuard(purchaseRoute.meta, purchaseRoute.path)
     await navigation
 
     expect(next).toHaveBeenCalledOnce()
@@ -229,7 +283,7 @@ describe('feature route guard', () => {
 
     // The presentation-only entry switch must not tighten the route guard.
     expect(purchaseRoute.meta?.requiresPayment).toBe(true)
-    const { navigation, next } = runGuard({ requiresPayment: true }, purchaseRoute.path)
+    const { navigation, next } = runGuard(purchaseRoute.meta, purchaseRoute.path)
     await navigation
 
     expect(next).toHaveBeenCalledOnce()
@@ -242,7 +296,7 @@ describe('feature route guard', () => {
     const ordersRoute = routeFor('/orders')
 
     expect(ordersRoute.meta?.requiresPayment).toBe(false)
-    const { navigation, next } = runGuard({}, ordersRoute.path)
+    const { navigation, next } = runGuard(ordersRoute.meta, ordersRoute.path)
     await navigation
 
     expect(next).toHaveBeenCalledWith()

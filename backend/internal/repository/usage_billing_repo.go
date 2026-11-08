@@ -210,6 +210,9 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 		result.QuotaState = quotaState
 	}
+	if err := incrementDailyRequestQuota(ctx, tx, cmd.AccountID, cmd.AccountRequestCount); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -302,6 +305,15 @@ func reserveUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 }
 
 func captureUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *service.BatchImageBalanceHoldCommand) (*service.BatchImageBalanceHoldResult, error) {
+	if cmd.AccountRequestCount > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET last_used_at = GREATEST(last_used_at, NOW())
+			WHERE id = $1 AND deleted_at IS NULL`, cmd.AccountID); err != nil {
+			return nil, err
+		}
+	}
+	if err := incrementDailyRequestQuota(ctx, tx, cmd.AccountID, cmd.AccountRequestCount); err != nil {
+		return nil, err
+	}
 	if cmd.HoldAmount <= 0 && cmd.ActualAmount <= 0 {
 		return &service.BatchImageBalanceHoldResult{}, nil
 	}

@@ -5,10 +5,12 @@ import type { QuotaThresholdType, QuotaResetMode } from '@/constants/account'
 
 const { t } = useI18n()
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   dim: 'daily' | 'weekly' | 'total'
   label: string
   limit: number | null
+  kind?: 'money' | 'requests'
+  resetControls?: boolean
   quotaNotifyGlobalEnabled: boolean
   notifyEnabled: boolean | null
   notifyThreshold: number | null
@@ -24,7 +26,7 @@ const props = defineProps<{
   hourOptions: number[]
   dayOptions: { value: number; key: string }[]
   timezoneOptions?: string[]
-}>()
+}>(), { resetControls: true })
 
 const emit = defineEmits<{
   'update:limit': [value: number | null]
@@ -37,7 +39,7 @@ const emit = defineEmits<{
   'update:resetTimezone': [value: string | null]
 }>()
 
-const hasResetMode = props.dim !== 'total'
+const hasResetMode = props.dim !== 'total' && props.resetControls !== false
 
 const onLimitInput = (e: Event) => {
   const raw = (e.target as HTMLInputElement).valueAsNumber
@@ -78,8 +80,8 @@ function getTimezoneOffsetLabel(tz: string): string {
     <!-- Input row -->
     <div class="flex items-center gap-2">
       <div :class="['relative', quotaNotifyGlobalEnabled ? 'flex-1 min-w-0' : 'flex-1']">
-        <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 text-sm">$</span>
-        <input :value="limit" @input="onLimitInput" type="number" min="0" step="0.01" class="input pl-6 py-1.5 text-sm" :placeholder="t('admin.accounts.quotaLimitPlaceholder')" />
+        <span v-if="kind !== 'requests'" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 text-sm">$</span>
+        <input :value="limit" @input="onLimitInput" type="number" min="0" :step="kind === 'requests' ? 1 : 0.01" class="input py-1.5 text-sm" :class="{ 'pl-6': kind !== 'requests' }" :aria-label="label" :placeholder="t('admin.accounts.quotaLimitPlaceholder')" />
       </div>
       <QuotaNotifyToggle
         v-if="quotaNotifyGlobalEnabled && limit && limit > 0"

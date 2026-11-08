@@ -9,6 +9,7 @@ const { t } = useI18n()
 const props = withDefaults(defineProps<{
   totalLimit: number | null
   dailyLimit: number | null
+  dailyRequestLimit?: number | null
   weeklyLimit: number | null
   dailyResetMode: QuotaResetMode | null
   dailyResetHour: number | null
@@ -28,6 +29,7 @@ const props = withDefaults(defineProps<{
   quotaNotifyTotalThresholdType?: QuotaThresholdType | null
 }>(), {
   quotaNotifyGlobalEnabled: false,
+  dailyRequestLimit: null,
   quotaNotifyDailyEnabled: null,
   quotaNotifyDailyThreshold: null,
   quotaNotifyDailyThresholdType: null,
@@ -42,6 +44,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:totalLimit': [value: number | null]
   'update:dailyLimit': [value: number | null]
+  'update:dailyRequestLimit': [value: number | null]
   'update:weeklyLimit': [value: number | null]
   'update:dailyResetMode': [value: QuotaResetMode | null]
   'update:dailyResetHour': [value: number | null]
@@ -63,6 +66,7 @@ const emit = defineEmits<{
 const enabled = computed(() =>
   (props.totalLimit != null && props.totalLimit > 0) ||
   (props.dailyLimit != null && props.dailyLimit > 0) ||
+  (props.dailyRequestLimit != null && props.dailyRequestLimit > 0) ||
   (props.weeklyLimit != null && props.weeklyLimit > 0)
 )
 
@@ -80,6 +84,7 @@ watch(localEnabled, (val) => {
     collapsed.value = false
     emit('update:totalLimit', null)
     emit('update:dailyLimit', null)
+    emit('update:dailyRequestLimit', null)
     emit('update:weeklyLimit', null)
     emit('update:dailyResetMode', null)
     emit('update:dailyResetHour', null)
@@ -147,6 +152,9 @@ const dailyFixedHint = computed(() =>
         </div>
         <button
           type="button"
+          role="switch"
+          :aria-checked="localEnabled"
+          :aria-label="t('admin.accounts.quotaLimitToggle')"
           @click="localEnabled = !localEnabled"
           :class="[
             'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -189,6 +197,27 @@ const dailyFixedHint = computed(() =>
           @update:reset-mode="emit('update:dailyResetMode', $event)"
           @update:reset-hour="emit('update:dailyResetHour', $event)"
           @update:reset-timezone="emit('update:resetTimezone', $event)"
+        />
+
+        <QuotaDimensionRow
+          dim="daily"
+          kind="requests"
+          :reset-controls="false"
+          :label="t('admin.accounts.quotaDailyRequestLimit')"
+          :limit="dailyRequestLimit"
+          :quota-notify-global-enabled="false"
+          :notify-enabled="null"
+          :notify-threshold="null"
+          :notify-threshold-type="null"
+          :reset-mode="dailyResetMode"
+          :reset-hour="dailyResetHour"
+          :reset-day="null"
+          :reset-timezone="resetTimezone"
+          :hint-rolling="t('admin.accounts.quotaDailyRequestLimitHint')"
+          hint-fixed=""
+          :hour-options="hourOptions"
+          :day-options="dayOptions"
+          @update:limit="emit('update:dailyRequestLimit', $event)"
         />
 
         <!-- Weekly quota -->

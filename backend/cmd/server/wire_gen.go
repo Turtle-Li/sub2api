@@ -398,7 +398,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	proxyTimezoneBackfillService := service.ProvideProxyTimezoneBackfillService(proxyRepository, proxyExitInfoProber, leaderLockCache, db)
 	subscriptionExpiryService := service.ProvideSubscriptionExpiryService(userSubscriptionRepository, settingRepository, notificationEmailService, leaderLockCache, db)
 	batchImageWorkerRuntime := service.ProvideBatchImageWorkerRuntime(batchImageRepository, accountRepository, batchImageQueue, usageBillingRepository, usageLogRepository, batchImageModelPricingResolver, apiKeyAuthCacheInvalidator, batchImageDeliveryObjectStore, openAIGatewayService, configConfig)
-	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig, leaderLockCache, db)
+	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig, leaderLockCache, db, concurrencyService)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	paymentMonthlyResetCardDeliveryService := service.ProvidePaymentMonthlyResetCardDeliveryService(client, leaderLockCache, db)
 	invoiceNotificationService := service.ProvideInvoiceNotificationService(paymentService, leaderLockCache, db)

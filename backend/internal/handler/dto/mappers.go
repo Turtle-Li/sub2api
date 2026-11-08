@@ -346,6 +346,14 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 
 	// 提取账号配额限制（apikey / bedrock / service_account 类型有效）
 	if a.SupportsAccountQuota() {
+		if limit := a.GetQuotaDailyRequestLimit(); limit > 0 {
+			out.QuotaDailyRequestLimit = &limit
+			used := a.GetQuotaDailyRequestUsed()
+			if a.IsDailyRequestQuotaPeriodExpired() {
+				used = 0
+			}
+			out.QuotaDailyRequestUsed = &used
+		}
 		if limit := a.GetQuotaLimit(); limit > 0 {
 			out.QuotaLimit = &limit
 			used := a.GetQuotaUsed()
@@ -486,6 +494,7 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		EnableSessionIDMasking: a.EnableSessionIDMasking, CacheTTLOverrideEnabled: a.CacheTTLOverrideEnabled,
 		CacheTTLOverrideTarget: a.CacheTTLOverrideTarget, CustomBaseURLEnabled: a.CustomBaseURLEnabled,
 		CustomBaseURL: a.CustomBaseURL, QuotaLimit: a.QuotaLimit, QuotaUsed: a.QuotaUsed,
+		QuotaDailyRequestLimit: a.QuotaDailyRequestLimit, QuotaDailyRequestUsed: a.QuotaDailyRequestUsed,
 		QuotaDailyLimit: a.QuotaDailyLimit, QuotaDailyUsed: a.QuotaDailyUsed, QuotaWeeklyLimit: a.QuotaWeeklyLimit,
 		QuotaWeeklyUsed: a.QuotaWeeklyUsed, QuotaDailyResetMode: a.QuotaDailyResetMode,
 		QuotaDailyResetHour: a.QuotaDailyResetHour, QuotaWeeklyResetMode: a.QuotaWeeklyResetMode,

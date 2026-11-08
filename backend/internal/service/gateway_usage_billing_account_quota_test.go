@@ -84,9 +84,24 @@ func TestUsageBillingCommandFingerprintIgnoresAccountQuotaPeriodHints(t *testing
 	hinted := base
 	hinted.AccountQuotaHasDailyLimit = true
 	hinted.AccountQuotaHasWeeklyLimit = true
+	hinted.AccountRequestCount = 1
 
 	base.Normalize()
 	hinted.Normalize()
 	require.NotEmpty(t, base.RequestFingerprint)
 	require.Equal(t, base.RequestFingerprint, hinted.RequestFingerprint)
+}
+
+func TestBuildUsageBillingCommand_FreeCallsCountTowardsDailyLimit(t *testing.T) {
+	p := &postUsageBillingParams{
+		Cost: &CostBreakdown{}, User: &User{ID: 1}, APIKey: &APIKey{ID: 2},
+		Account: &Account{ID: 3, Type: AccountTypeAPIKey,
+			Extra: map[string]any{"quota_daily_request_limit": 10}},
+	}
+
+	cmd := buildUsageBillingCommand("free-request", nil, p)
+
+	require.Equal(t, 1, cmd.AccountRequestCount)
+	require.Zero(t, cmd.BalanceCost)
+	require.Zero(t, cmd.AccountQuotaCost)
 }

@@ -107,6 +107,27 @@
               </p>
             </div>
           </div>
+          <div class="space-y-2 rounded-lg bg-white/70 p-3 dark:bg-dark-800/60 sm:col-span-2">
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <Toggle v-model="newPlan.idle_only" :aria-label="t('admin.scheduledTests.idleOnly')" />
+              {{ t('admin.scheduledTests.idleOnly') }}
+            </label>
+            <p v-if="!newPlan.idle_only" class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+              {{ t('admin.scheduledTests.regularModeHelp') }}
+            </p>
+            <template v-if="newPlan.idle_only">
+              <Input
+                id="new-keepalive-hours"
+                v-model="newPlan.idle_hours"
+                type="number"
+                :label="t('admin.scheduledTests.idleHours')"
+                :hint="t('admin.scheduledTests.idleHelp')"
+              />
+              <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                {{ t('admin.scheduledTests.keepAliveHelp') }}
+              </p>
+            </template>
+          </div>
         </div>
         <div class="mt-3 flex justify-end gap-2">
           <button
@@ -155,10 +176,10 @@
             class="flex cursor-pointer items-center justify-between px-4 py-3"
             @click="toggleExpand(plan.id)"
           >
-            <div class="flex flex-1 items-center gap-4">
+            <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2">
               <!-- Model -->
               <div class="min-w-0">
-                <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                <div class="break-all text-sm font-medium text-gray-900 dark:text-gray-100">
                   {{ plan.model_id }}
                 </div>
                 <div class="mt-0.5 font-mono text-xs text-gray-500 dark:text-gray-400">
@@ -166,10 +187,18 @@
                 </div>
               </div>
 
+              <span
+                v-if="plan.idle_hours"
+                class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/20 dark:text-blue-300"
+              >
+                {{ t('admin.scheduledTests.idleBadge', { hours: plan.idle_hours }) }}
+              </span>
+
               <!-- Enabled Toggle -->
               <div class="flex items-center gap-1.5" @click.stop>
                 <Toggle
                   :model-value="plan.enabled"
+                  :aria-label="`${t('admin.scheduledTests.enabled')} ${plan.model_id}`"
                   @update:model-value="(val: boolean) => handleToggleEnabled(plan, val)"
                 />
                 <span class="text-xs text-gray-500 dark:text-gray-400">
@@ -195,7 +224,7 @@
 
               <!-- Next Run -->
               <div v-if="plan.next_run_at" class="hidden text-right text-xs text-gray-500 dark:text-gray-400 sm:block">
-                <div>{{ t('admin.scheduledTests.nextRun') }}</div>
+                <div>{{ t(plan.idle_hours ? 'admin.scheduledTests.nextCheck' : 'admin.scheduledTests.nextRun') }}</div>
                 <div>{{ formatDateTime(plan.next_run_at) }}</div>
               </div>
 
@@ -227,6 +256,14 @@
                 ]"
               />
             </div>
+          </div>
+
+          <div v-if="plan.idle_hours" class="space-y-1 border-t border-gray-100 px-4 py-2.5 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
+            <div class="flex flex-wrap gap-x-4 gap-y-1">
+              <span>{{ t('admin.scheduledTests.lastActivity') }}：{{ plan.last_activity_at ? formatDateTime(plan.last_activity_at) : t('admin.scheduledTests.noActivity') }}</span>
+              <span v-if="plan.last_activity_at">{{ t('admin.scheduledTests.idleDuration', { hours: idleDurationHours(plan.last_activity_at) }) }}</span>
+            </div>
+            <p>{{ t('admin.scheduledTests.activityHelp') }}</p>
           </div>
 
           <!-- Edit Form -->
@@ -316,6 +353,27 @@
                     {{ t('admin.scheduledTests.autoRecoverHelp') }}
                   </p>
                 </div>
+              </div>
+              <div class="space-y-2 rounded-lg bg-white/70 p-3 dark:bg-dark-800/60 sm:col-span-2">
+                <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <Toggle v-model="editForm.idle_only" :aria-label="t('admin.scheduledTests.idleOnly')" />
+                  {{ t('admin.scheduledTests.idleOnly') }}
+                </label>
+                <p v-if="!editForm.idle_only" class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.regularModeHelp') }}
+                </p>
+                <template v-if="editForm.idle_only">
+                  <Input
+                    id="edit-keepalive-hours"
+                    v-model="editForm.idle_hours"
+                    type="number"
+                    :label="t('admin.scheduledTests.idleHours')"
+                    :hint="t('admin.scheduledTests.idleHelp')"
+                  />
+                  <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                    {{ t('admin.scheduledTests.keepAliveHelp') }}
+                  </p>
+                </template>
               </div>
             </div>
             <div class="mt-3 flex justify-end gap-2">
@@ -515,7 +573,9 @@ const editForm = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  idle_only: false,
+  idle_hours: '48'
 })
 
 const newPlan = reactive({
@@ -523,8 +583,26 @@ const newPlan = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  idle_only: false,
+  idle_hours: '48'
 })
+
+watch(() => newPlan.idle_only, (enabled) => {
+  if (enabled && !newPlan.cron_expression) newPlan.cron_expression = '0 * * * *'
+})
+
+const idleDurationHours = (lastActivity: string) => {
+  const elapsed = Date.now() - new Date(lastActivity).getTime()
+  return Number.isFinite(elapsed) ? Math.max(0, Math.floor(elapsed / 3600000)) : '—'
+}
+
+const validIdleHours = (enabled: boolean, value: string) => {
+  const hours = Number(value)
+  if (!enabled || (Number.isInteger(hours) && hours >= 1 && hours <= 8760)) return true
+  appStore.showError(t('admin.scheduledTests.invalidIdleHours'))
+  return false
+}
 
 const resetNewPlan = () => {
   newPlan.model_id = ''
@@ -532,6 +610,8 @@ const resetNewPlan = () => {
   newPlan.max_results = '100'
   newPlan.enabled = true
   newPlan.auto_recover = false
+  newPlan.idle_only = false
+  newPlan.idle_hours = '48'
 }
 
 // Load plans when dialog opens
@@ -547,6 +627,8 @@ watch(
       expandedResultIds.clear()
       showAddForm.value = false
       showDeleteConfirm.value = false
+      editingPlanId.value = null
+      resetNewPlan()
     }
   }
 )
@@ -565,6 +647,7 @@ const loadPlans = async () => {
 
 const handleCreate = async () => {
   if (!props.accountId || !newPlan.model_id || !newPlan.cron_expression) return
+  if (!validIdleHours(newPlan.idle_only, newPlan.idle_hours)) return
   creating.value = true
   try {
     const maxResults = Number(newPlan.max_results) || 100
@@ -574,7 +657,8 @@ const handleCreate = async () => {
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
       max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      auto_recover: newPlan.auto_recover,
+      idle_hours: newPlan.idle_only ? Number(newPlan.idle_hours) : 0
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -607,6 +691,8 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
   editForm.auto_recover = plan.auto_recover
+  editForm.idle_only = (plan.idle_hours ?? 0) > 0
+  editForm.idle_hours = String(plan.idle_hours || 48)
 }
 
 const cancelEdit = () => {
@@ -615,6 +701,7 @@ const cancelEdit = () => {
 
 const handleEdit = async () => {
   if (!editingPlanId.value || !editForm.model_id || !editForm.cron_expression) return
+  if (!validIdleHours(editForm.idle_only, editForm.idle_hours)) return
   updating.value = true
   try {
     const updated = await adminAPI.scheduledTests.update(editingPlanId.value, {
@@ -622,7 +709,8 @@ const handleEdit = async () => {
       cron_expression: editForm.cron_expression,
       max_results: Number(editForm.max_results) || 100,
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: editForm.auto_recover,
+      idle_hours: editForm.idle_only ? Number(editForm.idle_hours) : 0
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {

@@ -2977,8 +2977,14 @@ func ComputeQuotaResetAt(extra map[string]any) {
 		}
 		resetAt := nextFixedDailyReset(hour, tz, now)
 		extra["quota_daily_reset_at"] = resetAt.UTC().Format(time.RFC3339)
+		if parseExtraFloat64(extra["quota_daily_request_limit"]) > 0 {
+			extra["quota_daily_request_reset_at"] = resetAt.UTC().Format(time.RFC3339)
+		} else {
+			delete(extra, "quota_daily_request_reset_at")
+		}
 	} else {
 		delete(extra, "quota_daily_reset_at")
+		delete(extra, "quota_daily_request_reset_at")
 	}
 
 	// 周配额固定重置时间
@@ -3008,6 +3014,7 @@ func ComputeQuotaResetAt(extra map[string]any) {
 // old rolling window, response mapping treats the usage as expired and the dashboard shows
 // 0 until the next reset. Normalize those stale starts before persisting the edited account.
 func NormalizeFixedQuotaWindows(extra map[string]any) {
+	NormalizeFixedDailyRequestWindow(extra)
 	if extra == nil {
 		return
 	}
@@ -3057,6 +3064,9 @@ func NormalizeFixedQuotaWindows(extra map[string]any) {
 
 // ValidateQuotaResetConfig 校验配额固定重置时间配置的合法性
 func ValidateQuotaResetConfig(extra map[string]any) error {
+	if err := validateDailyRequestQuotaConfig(extra); err != nil {
+		return err
+	}
 	if extra == nil {
 		return nil
 	}
@@ -3135,6 +3145,9 @@ func (a *Account) IsWeeklyQuotaPeriodExpired() bool {
 
 // IsQuotaExceeded 检查 API Key 账号配额是否已超限（任一维度超限即返回 true）
 func (a *Account) IsQuotaExceeded() bool {
+	if limit := a.GetQuotaDailyRequestLimit(); limit > 0 && !a.IsDailyRequestQuotaPeriodExpired() && a.GetQuotaDailyRequestUsed() >= limit {
+		return true
+	}
 	// 总额度
 	if limit := a.GetQuotaLimit(); limit > 0 && a.GetQuotaUsed() >= limit {
 		return true

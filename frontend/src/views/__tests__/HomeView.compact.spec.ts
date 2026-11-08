@@ -56,7 +56,7 @@ function mountHome(settings: Record<string, unknown> = {}) {
 }
 
 function compactDestination(wrapper: ReturnType<typeof mountHome>) {
-  return wrapper.get('[data-testid="compact-home"]').findComponent(RouterLinkStub).props('to')
+  return wrapper.get('[data-testid="compact-home"] main').getComponent(RouterLinkStub).props('to')
 }
 
 function modelPlazaDestination(wrapper: ReturnType<typeof mountHome>) {
@@ -115,6 +115,14 @@ describe('HomeView compact mode', () => {
     expect(compactDestination(mountHome({ compact_home_enabled: true }))).toBe('/login')
   })
 
+  it('keeps the channel status entry in the header', () => {
+    const wrapper = mountHome({ compact_home_enabled: true })
+    const statusLink = wrapper.get('header').findAllComponents(RouterLinkStub)
+      .find((link) => link.text() === 'nav.channelStatus')
+
+    expect(statusLink?.props('to')).toBe('/status')
+  })
+
   it('links authenticated users to their dashboard', () => {
     authStore.isAuthenticated = true
 
@@ -139,6 +147,7 @@ describe('HomeView compact mode', () => {
     })
 
     expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
+    expect(compactDestination(wrapper)).toBe('/login')
   })
 
   it('hides the model plaza link from anonymous visitors when sign-in is required', () => {
