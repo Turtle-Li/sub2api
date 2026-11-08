@@ -12,7 +12,8 @@
     <dl class="mt-4 grid gap-3" :class="cacheVisible ? 'grid-cols-3' : 'grid-cols-2'">
       <div v-for="metric in metrics" :key="metric.key" class="min-w-0">
         <dt class="text-[11px] leading-5 text-gray-500 dark:text-dark-300">{{ t(`channelMonitorV3.cards.${metric.key}`) }}<span class="block text-[10px]">{{ t(`channelMonitorV3.cards.${metric.key === 'cache' ? 'cacheScope' : 'groupScope'}`) }}</span></dt>
-        <dd class="mt-1 font-mono text-xl font-semibold tabular-nums tracking-tight text-gray-900 dark:text-dark-50 sm:text-2xl" :data-metric="metric.key">{{ metric.value }}</dd>
+        <dd class="mt-1 font-mono text-xl font-semibold tabular-nums tracking-tight text-gray-900 dark:text-dark-50 sm:text-2xl" :data-metric="metric.key" :title="metric.key === 'cache' ? cacheHourTitle : undefined">{{ metric.value }}</dd>
+        <span v-if="metric.key === 'cache'" class="mt-1 block text-[10px] leading-4 text-gray-500 dark:text-dark-300">{{ cacheHourLabel }}</span>
       </div>
     </dl>
 
@@ -50,14 +51,20 @@ const selected = ref<number | null>(null)
 const status = computed(() => props.group.availability)
 const percent = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1)}%`
 const requestReady = computed(() => status.value?.request_sample_state === 'ready')
-const cacheVisible = computed(() => status.value?.cache_sample_state === 'ready' && status.value?.cache_scope === 'shared_account_pool' && typeof status.value.cache_read_rate === 'number' && Number.isFinite(status.value.cache_read_rate) && status.value.cache_read_rate >= 90 && status.value.cache_read_rate <= 100)
+const cacheVisible = computed(() => {
+  const s = status.value
+  const start = Date.parse(s?.cache_hour_start ?? ''), end = Date.parse(s?.cache_hour_end ?? '')
+  return s?.cache_sample_state === 'ready' && s.cache_scope === 'shared_account_pool' && s.cache_statistic === 'best_complete_hour' && s.cache_lookback_hours === 24 && Number.isFinite(start) && start % 3600000 === 0 && end - start === 3600000 && typeof s.cache_peak_hour_rate === 'number' && Number.isFinite(s.cache_peak_hour_rate) && s.cache_peak_hour_rate >= 0 && s.cache_peak_hour_rate <= 100
+})
 const metrics = computed(() => [
-  ...(cacheVisible.value ? [{ key: 'cache', value: percent(status.value?.cache_read_rate) }] : []),
+  ...(cacheVisible.value ? [{ key: 'cache', value: percent(status.value?.cache_peak_hour_rate) }] : []),
   { key: 'success', value: requestReady.value ? percent(status.value?.request_success_rate) : '—' },
   { key: 'ttft', value: requestReady.value && status.value?.ttft_p50_ms != null ? `${(status.value.ttft_p50_ms / 1000).toFixed(1)}s` : '—' },
 ])
 const stateLabel = computed(() => t(`channelMonitorV3.cards.state.${status.value?.status ?? 'unknown'}`))
 const time = (value: string) => new Date(value).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
+const cacheHourLabel = computed(() => cacheVisible.value ? `${new Date(status.value!.cache_hour_start!).toLocaleDateString(locale.value, { month: '2-digit', day: '2-digit' })} ${time(status.value!.cache_hour_start!)}–${time(status.value!.cache_hour_end!)}` : '')
+const cacheHourTitle = computed(() => cacheVisible.value ? t('channelMonitorV3.cards.cacheHour', { start: new Date(status.value!.cache_hour_start!).toLocaleString(locale.value), end: new Date(status.value!.cache_hour_end!).toLocaleString(locale.value) }) : '')
 const checkedLabel = computed(() => status.value?.checked_at ? t(`channelMonitorV3.cards.${status.value.source === 'probe' ? 'checked' : 'observed'}`, { time: time(status.value.checked_at) }) : t('channelMonitorV3.cards.noRecent'))
 const sampleLabel = computed(() => {
   const key = status.value?.request_sample_state

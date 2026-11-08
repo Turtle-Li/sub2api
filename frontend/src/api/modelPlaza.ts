@@ -93,9 +93,15 @@ export interface ModelPlazaResponse {
 }
 
 export interface PlazaGroupAvailability {
+	/** Retired rolling-rate field; new servers leave it null. */
 	cache_read_rate?: number | null
+	cache_peak_hour_rate?: number | null
 	cache_sample_state?: 'none' | 'insufficient' | 'ready' | 'below_threshold'
 	cache_scope?: 'shared_account_pool'
+	cache_statistic?: 'best_complete_hour'
+	cache_lookback_hours?: number
+	cache_hour_start?: string | null
+	cache_hour_end?: string | null
 	ttft_p50_ms?: number | null
 	request_sample_state?: 'none' | 'insufficient' | 'ready' | 'stale'
 	probe_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled'

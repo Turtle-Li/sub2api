@@ -5,7 +5,7 @@ export default {
       title: '模型状态', description: '查看公开分组的服务状态、全组请求表现和近期记录。',
       manage: '管理检测', manageHere: '前往模型状态管理检测', publicAccess: '允许访客查看公开分组状态',
       search: '搜索分组', refreshIn: '{seconds} 秒后刷新',
-      requestWindow: '近 {minutes} 分钟 · 真实请求', cache: '缓存读取占比', cacheScope: '同账号池 · 全模型', groupScope: '本分组 · 全模型', success: '请求成功率', ttft: '首 Token P50',
+      requestWindow: '近 {minutes} 分钟 · 本分组请求', cache: '最佳小时缓存', cacheScope: '同账号池 · 24h', cacheHour: '统计小时：{start} – {end}', groupScope: '本分组 · 全模型', success: '请求成功率', ttft: '首 Token P50',
       slots: '近 {count} 个 10 分钟时段', checked: '检测于 {time}', observed: '请求采样于 {time}', noRecent: '暂无近期数据',
       past: '过去', now: '现在', waiting: '本分组近期暂无真实请求，成功率与延迟待采集。', insufficient: '本分组样本不足，至少 {count} 条有效请求后展示成功率与延迟',
       requestReady: '仅统计有效请求；无数据时段不计入分母', unavailable: '请求统计暂不可用',
@@ -13,7 +13,7 @@ export default {
       requestSource: '全组真实请求', probeSource: '分组检测', noData: '无数据',
       loadFailed: '状态暂时无法更新，已清除旧状态。请点击刷新重试。', empty: '暂无可查看的分组。', noMatch: '没有匹配的分组。',
       rules: '统计口径与颜色说明',
-      rulesDetail: '统计近 3 小时，每格 10 分钟。成功率、首 Token 与请求记录覆盖本分组全部模型；用户中断、余额不足等不计失败，重试按最终结果统计。少于 20 条有效请求（或更高配置门槛）隐藏成功率；P50 还需足够的延迟样本。缓存使用仪表盘的真实用量记录，汇总本分组所绑定账号在同平台各分组中的全部文本模型，按缓存读取 Token / 总输入 Token（含缓存写入）加权计算；包含订阅流量，仅发布聚合比例，不含定时检测。缓存样本不足或读取占比低于 90% 时收起该指标，此展示门槛不会改变真实统计。灰色表示没有结果，当前未完成时段显示采集中。低价模型仅用于连通检查，失败最多尝试 3 次，不与真实请求混算，也不表示每款模型都已测试。',
+      rulesDetail: '成功率、首 Token 与请求记录统计本分组近 3 小时的全部模型，每格 10 分钟；用户中断、余额不足等不计失败，重试按最终结果统计。少于 20 条有效请求（或更高配置门槛）隐藏成功率；P50 还需足够的延迟样本。最佳小时缓存使用仪表盘的真实用量记录，汇总同账号池在同平台各分组的全部文本模型，包含订阅流量，不含定时检测。每个完整 UTC 小时按缓存读取 Token / 总输入 Token（含缓存写入）加权，展示最近 24 个完整小时中样本充足的最高值，并标注统计小时；它是近期最佳表现，不是实时值或全时段平均值。每小时至少 20 条有效请求（或更高配置门槛）；未完成小时、小样本及无效 Token 记录不参选。正常的低缓存请求保留，原始用量不变；没有合格小时则等待采集，不设置比例保底。灰色表示没有结果，当前未完成时段显示采集中。低价模型仅用于连通检查，失败最多尝试 3 次，不与真实请求混算，也不表示每款模型都已测试。',
       state: { operational: '运行正常', degraded: '部分异常', down: '检测异常', unknown: '暂无近期数据', insufficient: '样本不足', observed: '有成功请求', errors_observed: '有失败记录', collecting: '本时段采集中' },
     },
     probes: {

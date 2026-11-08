@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   status: vi.fn(), settings: vi.fn(), update: vi.fn(), groups: vi.fn(), models: vi.fn(),
   auth: { isAdmin: false },
 }))
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key, locale: ref('zh-CN') }) }))
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, values?: Record<string, string>) => key.endsWith('.cacheHour') ? `${key} ${values?.start} – ${values?.end}` : key, locale: ref('zh-CN') }) }))
 vi.mock('@/api/modelStatus', () => ({ getModelStatus: mocks.status }))
 vi.mock('@/api/channelMonitorV3', () => ({ getSettings: mocks.settings, updateConfig: mocks.update }))
 vi.mock('@/api/admin', () => ({ adminAPI: { groups: { getAll: mocks.groups, getModelAllowlistCandidates: mocks.models } } }))
@@ -26,7 +26,8 @@ const mountControls = () => mount(GroupStatusControls, { global: { stubs: { Sele
 const group = (overrides: Record<string, unknown> = {}): ModelStatusGroup => ({
   id: 6, name: 'GPT 按量', platform: 'openai',
   availability: { status: 'operational', source: 'probe', checked_at: '2026-11-07T09:10:00Z', probe_enabled: true,
-    probe_model: 'owner-selected', request_success_rate: 99.9, probe_success_rate: 100, cache_read_rate: 97.2, ttft_p50_ms: 3000,
+    probe_model: 'owner-selected', request_success_rate: 99.9, probe_success_rate: 100, cache_read_rate: null, cache_peak_hour_rate: 97.2, ttft_p50_ms: 3000,
+    cache_statistic: 'best_complete_hour', cache_lookback_hours: 24, cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z',
     request_sample_state: 'ready', cache_sample_state: 'ready', cache_scope: 'shared_account_pool', probe_sample_state: 'ready', min_requests: 20, window_minutes: 180,
     cells: Array.from({ length: 18 }, (_, i) => ({ start: `2026-11-07T09:${String(i).padStart(2, '0')}:00Z`, status: i < 3 ? 'unknown' : 'operational', source: i < 3 ? 'none' : 'requests' })), ...overrides },
 })
@@ -37,6 +38,16 @@ beforeEach(() => {
   mocks.models.mockReset().mockResolvedValue(['new-owner-model', 'deepseek-chat'])
 })
 describe('status group cards', () => {
+  it('publishes the labelled best complete hour independently of a legacy current rate', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({
+      cache_read_rate: null, cache_peak_hour_rate: 87.2, cache_statistic: 'best_complete_hour', cache_lookback_hours: 24,
+      cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z',
+    }) } })
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe('87.2%')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.cache')
+    expect(wrapper.get('[data-metric="cache"]').attributes('title')).toContain('2026')
+    wrapper.unmount()
+  })
   it('shows cache share, request success and actual first-token P50 without prices', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group() } })
     expect(wrapper.get('[data-metric="cache"]').text()).toBe('97.2%')
@@ -70,8 +81,14 @@ describe('status group cards', () => {
   })
   it.each([
     { cache_sample_state: 'below_threshold', cache_read_rate: 52 },
-    { cache_sample_state: 'ready', cache_read_rate: 89.99 },
-    { cache_sample_state: 'ready', cache_read_rate: 101 },
+    { cache_peak_hour_rate: 101 },
+    { cache_peak_hour_rate: -1 },
+    { cache_peak_hour_rate: Infinity },
+    { cache_peak_hour_rate: null, cache_read_rate: 99 },
+    { cache_statistic: undefined },
+    { cache_lookback_hours: 3 },
+    { cache_hour_start: null },
+    { cache_hour_end: '2026-11-07T09:10:00Z' },
     { cache_sample_state: undefined },
     { cache_scope: undefined },
   ])('collapses unpublished cache while preserving group metrics: %j', overrides => {
@@ -79,6 +96,11 @@ describe('status group cards', () => {
     expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
     expect(wrapper.get('[data-metric="success"]').text()).toBe('99.9%')
     expect(wrapper.get('[data-metric="ttft"]').text()).toBe('3.0s')
+    wrapper.unmount()
+  })
+  it.each([0, 50, 89.99])('does not invent a ratio floor for a valid best-hour result: %s', value => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ cache_peak_hour_rate: value }) } })
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe(`${value.toFixed(1)}%`)
     wrapper.unmount()
   })
   it('renders ordinary-user cards with no management controls or admin reads', async () => {

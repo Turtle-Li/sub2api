@@ -21,7 +21,7 @@ type monitorV3RepoFake struct {
 	slotFacts          ChannelMonitorV3Facts
 	totals             ChannelMonitorV3Facts
 	through            *time.Time
-	requestCache       map[int64]ChannelMonitorV3RequestCache
+	requestCache       map[int64][]ChannelMonitorV3RequestCache
 	cacheFrom, cacheTo time.Time
 	slotCalls          []monitorV3SlotCall
 	nextID             int64
@@ -161,7 +161,7 @@ func (r *monitorV3RepoFake) RangeFacts(context.Context, []int64, time.Time, time
 }
 func (r *monitorV3RepoFake) DataThrough(context.Context) (*time.Time, error) { return r.through, nil }
 
-func (r *monitorV3RepoFake) GroupRequestCache(_ context.Context, _ []int64, from, to time.Time) (map[int64]ChannelMonitorV3RequestCache, error) {
+func (r *monitorV3RepoFake) GroupRequestCache(_ context.Context, _ []int64, from, to time.Time) (map[int64][]ChannelMonitorV3RequestCache, error) {
 	r.cacheFrom, r.cacheTo = from, to
 	return r.requestCache, nil
 }

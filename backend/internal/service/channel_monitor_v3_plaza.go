@@ -13,7 +13,7 @@ const (
 	ChannelMonitorV3GroupMinProbes     = 6
 	channelMonitorV3GroupCells         = 18
 	channelMonitorV3GroupInterval      = ChannelMonitorV3ProbeInterval
-	channelMonitorV3CacheMinPercent    = 90.0
+	channelMonitorV3CacheLookbackHours = 24
 )
 
 type ChannelMonitorV3GroupCell struct {
@@ -25,17 +25,23 @@ type ChannelMonitorV3GroupCell struct {
 // Published metrics contain no traffic volumes. Real requests and inexpensive
 // scheduled checks always retain independent denominators.
 type ChannelMonitorV3GroupStatus struct {
-	Status             string                      `json:"status"`
-	Source             string                      `json:"source"`
-	CheckedAt          *time.Time                  `json:"checked_at"`
-	ProbeEnabled       bool                        `json:"probe_enabled"`
-	ProbeModel         string                      `json:"-"`
-	DisplayName        string                      `json:"-"`
-	RequestSuccessRate *float64                    `json:"request_success_rate"`
-	ProbeSuccessRate   *float64                    `json:"probe_success_rate"`
+	Status             string     `json:"status"`
+	Source             string     `json:"source"`
+	CheckedAt          *time.Time `json:"checked_at"`
+	ProbeEnabled       bool       `json:"probe_enabled"`
+	ProbeModel         string     `json:"-"`
+	DisplayName        string     `json:"-"`
+	RequestSuccessRate *float64   `json:"request_success_rate"`
+	ProbeSuccessRate   *float64   `json:"probe_success_rate"`
+	// Retired rolling-rate field stays null so older clients cannot mislabel a peak.
 	CacheReadRate      *float64                    `json:"cache_read_rate"`
+	CachePeakHourRate  *float64                    `json:"cache_peak_hour_rate"`
 	CacheSampleState   string                      `json:"cache_sample_state"`
 	CacheScope         string                      `json:"cache_scope"`
+	CacheStatistic     string                      `json:"cache_statistic"`
+	CacheLookbackHours int                         `json:"cache_lookback_hours"`
+	CacheHourStart     *time.Time                  `json:"cache_hour_start"`
+	CacheHourEnd       *time.Time                  `json:"cache_hour_end"`
 	TTFTP50Ms          *int64                      `json:"ttft_p50_ms"`
 	RequestSampleState string                      `json:"request_sample_state"`
 	ProbeSampleState   string                      `json:"probe_sample_state"`
@@ -46,6 +52,7 @@ type ChannelMonitorV3GroupStatus struct {
 
 // Token buckets match the dashboard's usage_logs contract and are never public.
 type ChannelMonitorV3RequestCache struct {
+	HourStart                                                   time.Time
 	Requests, InputTokens, CacheCreationTokens, CacheReadTokens int64
 }
 
@@ -76,7 +83,9 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		return nil, err
 	}
 	passiveFresh := through != nil && !through.After(now) && now.Sub(*through) <= 10*time.Minute
-	requestCache, err := s.repo.GroupRequestCache(ctx, groupIDs, now.Add(-ChannelMonitorV3GroupWindowMinutes*time.Minute), now)
+	cacheTo := now.Truncate(time.Hour)
+	cacheFrom := cacheTo.Add(-channelMonitorV3CacheLookbackHours * time.Hour)
+	requestCache, err := s.repo.GroupRequestCache(ctx, groupIDs, cacheFrom, cacheTo)
 	if err != nil {
 		return nil, err
 	}
@@ -98,16 +107,27 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	for _, id := range groupIDs {
 		target := targets[id]
 		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model,
-			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", CacheSampleState: "none", CacheScope: "shared_account_pool", WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
-		cache := requestCache[id]
-		if input := cache.InputTokens + cache.CacheCreationTokens + cache.CacheReadTokens; input > 0 && cache.InputTokens >= 0 && cache.CacheCreationTokens >= 0 && cache.CacheReadTokens >= 0 {
-			item.CacheSampleState = "insufficient"
-			if cache.Requests >= int64(item.MinRequests) {
-				rate := 100 * float64(cache.CacheReadTokens) / float64(input)
-				item.CacheSampleState = "below_threshold"
-				if rate >= channelMonitorV3CacheMinPercent && rate <= 100 {
-					item.CacheSampleState, item.CacheReadRate = "ready", &rate
-				}
+			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", CacheSampleState: "none", CacheScope: "shared_account_pool", CacheStatistic: "best_complete_hour", CacheLookbackHours: channelMonitorV3CacheLookbackHours, WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
+		for _, cache := range requestCache[id] {
+			start := cache.HourStart.UTC()
+			if start.Before(cacheFrom) || !start.Before(cacheTo) || !start.Equal(start.Truncate(time.Hour)) || cache.Requests <= 0 || cache.InputTokens < 0 || cache.CacheCreationTokens < 0 || cache.CacheReadTokens < 0 {
+				continue
+			}
+			input := float64(cache.InputTokens) + float64(cache.CacheCreationTokens) + float64(cache.CacheReadTokens)
+			if input == 0 {
+				continue
+			}
+			if item.CacheSampleState == "none" {
+				item.CacheSampleState = "insufficient"
+			}
+			if cache.Requests < int64(item.MinRequests) {
+				continue
+			}
+			rate := 100 * float64(cache.CacheReadTokens) / input
+			if item.CachePeakHourRate == nil || rate > *item.CachePeakHourRate || (rate == *item.CachePeakHourRate && start.After(*item.CacheHourStart)) {
+				end := start.Add(time.Hour)
+				item.CacheSampleState, item.CachePeakHourRate = "ready", &rate
+				item.CacheHourStart, item.CacheHourEnd = &start, &end
 			}
 		}
 		component := ChannelMonitorV3Component{GroupID: id}

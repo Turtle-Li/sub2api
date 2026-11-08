@@ -34,8 +34,8 @@ func TestChannelMonitorV3CacheUsesRealSharedAccountTraffic(t *testing.T) {
 	user := mustCreateUser(t, client, &service.User{Email: uuid.NewString() + "@example.com"})
 	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, GroupID: &peer.ID})
 	usage := NewUsageLogRepository(client, integrationDB)
-	to := time.Now().UTC().Truncate(time.Minute)
-	from := to.Add(-3 * time.Hour)
+	to := time.Now().UTC().Truncate(time.Hour)
+	from := to.Add(-24 * time.Hour)
 	add := func(gid, aid int64, model string, kind service.RequestType, at time.Time, input, write, read int) {
 		t.Helper()
 		images, videos := 0, 0
@@ -67,6 +67,12 @@ func TestChannelMonitorV3CacheUsesRealSharedAccountTraffic(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		add(private.ID, account.ID, "claude-subscription", service.RequestTypeStream, from, 1, 1, 98)
 	}
+	// A valid cold request stays in its hour's weighted denominator.
+	add(peer.ID, account.ID, "cold-request", service.RequestTypeStream, from.Add(59*time.Minute), 100, 0, 0)
+	// The next UTC hour has an independent weighted denominator.
+	for i := 0; i < 20; i++ {
+		add(peer.ID, account.ID, "claude-sonnet", service.RequestTypeStream, from.Add(time.Hour), 1, 1, 98)
+	}
 	// Every excluded class would change the result if its boundary regressed.
 	for _, gid := range []int64{otherPlatform.ID, inactive.ID} {
 		add(gid, account.ID, "not-public-pool", service.RequestTypeStream, from, 10000, 0, 0)
@@ -78,6 +84,9 @@ func TestChannelMonitorV3CacheUsesRealSharedAccountTraffic(t *testing.T) {
 	add(peer.ID, account.ID, "media", service.RequestTypeStream, from, 10000, 0, 0)
 	add(peer.ID, account.ID, "video", service.RequestTypeStream, from, 10000, 0, 0)
 	add(peer.ID, account.ID, "empty-usage", service.RequestTypeStream, from, 0, 0, 0)
+	add(peer.ID, account.ID, "invalid-input", service.RequestTypeStream, from, -1, 0, 10000)
+	add(peer.ID, account.ID, "invalid-write", service.RequestTypeStream, from, 0, -1, 10000)
+	add(peer.ID, account.ID, "invalid-read", service.RequestTypeStream, from, 10000, 0, -1)
 	_, err = integrationDB.ExecContext(ctx, `INSERT INTO channel_monitor_v3_group_probes
 		(group_id,model,slot_start,finished_at,outcome,input_tokens,output_tokens,attempt_count)
 		VALUES ($1,'cheap-haiku',$2,$2,'success',100000,1,1)`, target.ID, from)
@@ -85,7 +94,10 @@ func TestChannelMonitorV3CacheUsesRealSharedAccountTraffic(t *testing.T) {
 	repo := NewChannelMonitorV3Repository(integrationDB)
 	facts, err := repo.GroupRequestCache(ctx, []int64{target.ID, private.ID, inactive.ID}, from, to)
 	require.NoError(t, err)
-	require.Equal(t, service.ChannelMonitorV3RequestCache{Requests: 30, InputTokens: 50, CacheCreationTokens: 50, CacheReadTokens: 2900}, facts[target.ID])
+	require.ElementsMatch(t, []service.ChannelMonitorV3RequestCache{
+		{HourStart: from, Requests: 31, InputTokens: 150, CacheCreationTokens: 50, CacheReadTokens: 2900},
+		{HourStart: from.Add(time.Hour), Requests: 20, InputTokens: 20, CacheCreationTokens: 20, CacheReadTokens: 1960},
+	}, facts[target.ID])
 	require.NotContains(t, facts, private.ID)
 	require.NotContains(t, facts, inactive.ID)
 	// Removing the live binding removes the scope immediately, without cached data.
