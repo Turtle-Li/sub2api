@@ -20,7 +20,7 @@
 	}
 }
 
-api.turtleligpt.com {
+api.turtleligpt.com, api-proxy.turtleligpt.com {
 	encode zstd gzip
 
 	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches

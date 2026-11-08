@@ -302,6 +302,8 @@
 - API automatic certificate management uses Caddy ACME; read
   `deploy/API_CERT_AUTORENEW_20261108.md` before changing its TLS ownership.
   Preserve persistent Caddy data and verify a newly served certificate.
+  The proxied API alias shares the same API site; read
+  `deploy/API_PROXY_INGRESS_20261108.md` before changing its hostnames or routing.
 
 - The AWS Lightsail production host is documented in
   `deploy/AWS_CANDIDATE_20260923.md`; use `deploy/AWS_MIGRATION_RUNBOOK.md`
