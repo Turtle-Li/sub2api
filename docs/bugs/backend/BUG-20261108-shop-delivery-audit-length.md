@@ -1,6 +1,6 @@
 # 自动交付已创建 Key 但商城不能完成订单
 
-状态：ANALYSIS_READY；2026-11-08，来源为买家实际购买后的交付延迟反馈。
+状态：已修复、发布并验收原订单恢复；2026-11-08，来源为买家实际购买后的交付延迟反馈。
 
 ## 现象与证据
 
@@ -37,7 +37,7 @@ knowledge_candidate: yes；生产字段约束必须进入真实数据库回归�
 
 ## 本地修复证据
 
-IMPLEMENTATION_READY，发布和订单72恢复验收待完成。
+IMPLEMENTATION_READY；本节保留本地验证，生产恢复结果见下节。
 
 - 已按上述方案修复完成、撤销及管理员操作的审计事件；无需修改生产字段或已有行。
 - 独立 QA 用旧 completion.go 的 overlay，在真实 PostgreSQL 50字符限制下，四种SKU
@@ -46,5 +46,28 @@ IMPLEMENTATION_READY，发布和订单72恢复验收待完成。
   ESLint与vue-tsc通过。真实浏览器合成订单无需点击即从自动处理中进入 Key 已交付，
   默认隐藏内容。
 - 前端独立QA先发现手动与后台刷新重复GET；增加在途门闩后，原样复测5个生命周期
-  场景及Shop全套均通过，前后源码指纹一致。后端独立代码审查 CLEAR / APPROVE；
-  最终审查与线上结果随发布记录更新。
+  场景及Shop全套均通过，前后源码指纹一致。后端及前端独立代码审查均 CLEAR / APPROVE。
+
+## 生产恢复验收
+
+- 修复提交 `1c14e1947e6e5be1ea28d160b72d5a134080f477` 已推送自有仓库 main；
+  [生产流水线42476710774](https://github.com/Turtle-Li/sub2api/actions/runs/42476710774)
+  成功完成构建、镜像身份验证和标准蓝绿发布。无新增迁移，无手工修改订单、资金、租约或授权。
+- `11:48:22Z` 切至健康 `sub2api-blue`；原green进入standby并自然归零、停止。
+  旧任务租约 `11:49:15Z` 到期后，由新程序按原任务正常恢复。
+- 订单72于 `11:49:33.842864Z` 成为 `COMPLETED / COMPLETED / SUCCEEDED`，加密交付
+  已保存，租约清除、error_kind为空、完成审计恰为1条。原 paid_at 未改。
+- Sub2回执45与接收端原 token45一致；恢复前后订单72始终只有1条原生回执，原创建时间、
+  paid_at、expires_at及active状态不变。没有重新发 Key 或开始新的有效期。
+- 实际买家页面 `/shop/orders/72` 显示“自动交付完成 / API Key 已交付”，邮件已发送，
+  内容仍默认隐藏。验收未展开、复制或记录实际 Key。
+
+镜像 `sub2api:auto-20261108-034747-1c14e194`，ID
+`sha256:e59d474387c0224c2f74605825c3efb873e7aa6c2f5fc24b708a12e9c85e76e0`；
+archive110162110字节，SHA256
+`dc801fb10ad7f201089aae37895940aca2dc12e3c8e04c61c7f53d893cc35b99`。
+主机证据 `/var/log/sub2api-release/gha-20261108-034747-1c14e194-2913908`；
+本地买家截图 `artifacts/shop-sku/production-order-72-delivered.png`，不提交图片。
+
+后端仍采用20秒扫描和原租约恢复机制；本次修复没有把正常排队耗时宣称为创建 Key 耗时。
+保留新版SKU兼容回滚底线，禁止恢复旧数据库或向旧接收端降级。
