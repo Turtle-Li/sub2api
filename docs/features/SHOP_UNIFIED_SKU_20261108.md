@@ -1,6 +1,6 @@
 # 统一商城商品与 SKU 配置
 
-状态：RELEASE_AUTHORIZED（2026-11-08）；基线 `2a7267d2ed422c5320e495d9a1df798ad48221c0`。用户要求普通商品配置、订阅/按量/商城一致的 tab、统一 SKU 配置，并明确代充和成品号人工交付，DeepSeek 调用独立服务交付。本地实现与独立审查通过后，用户已明确授权提交、合并和发布；线上商品和价格保持现值。
+状态：RELEASED / LIVE_VERIFIED（2026-11-08）；实现基线 `2a7267d2ed422c5320e495d9a1df798ad48221c0`。用户验收并明确授权提交、合并和发布。商城生产源码 `fafcdfb1a6b195bd6b39be7d6eb9c4149e93b39c`，接收端 guard.5.3。三类商品统一配置，代充和成品号人工交付、DeepSeek 调用独立服务。线上商品价格与上下架状态保留；商品3已按原价保存四个持久 SKU，revision4→5。
 
 ## 问题分析（ANALYSIS_READY）
 
@@ -41,7 +41,7 @@ Operate 模式，沿用当前订阅/按量后台的青绿色、system 中文字�
 ## 固定参考与许可
 
 - Wei-Shaw/sub2api `bdb42e22f81fcb633ff0a060961211dd2bcb515b`：已检查 `backend/internal/service/payment_fulfillment.go`、`payment_fulfillment_test.go`；保留可信付款、重复通知与原事务资金栅栏。人工履约、SKU 快照与自动交付为本地扩展。LGPL-3.0 保留。
-- QuantumNous/new-api `e835b1bfc43b565d625537830dbfb19328925134`：参考本地固定 vendor 的 `model/subscription.go`、`model/token.go` 及原生测试；继续复用同一事务的原生 token/subscription。自有 guard.5.2 的 `model/daypass_shop.go`、`controller/daypass_shop.go` 为当前协议基线，历史摘要兼容。AGPL-3.0 与完整对应源码发布义务保留；本次尚未部署。
+- QuantumNous/new-api `e835b1bfc43b565d625537830dbfb19328925134`：参考本地固定 vendor 的 `model/subscription.go`、`model/token.go` 及原生测试；继续复用同一事务的原生 token/subscription。自有 guard.5.2 的 `model/daypass_shop.go`、`controller/daypass_shop.go` 为协议基线，历史摘要兼容。本次以 guard.5.3 发布完整 AGPL-3.0 对应源码，见下文。
 
 knowledge_candidate: no；这是当前项目的持久业务契约，写回本项目，不提升为全局模式。
 
@@ -75,10 +75,10 @@ SHA256 `9115702c5bb54c05f9a4bd073c5b900d26be6514ef25c08b8a8ebfb14e1fceae`。
 `42261afa4ad0cbae22c5ebf86dd77c273496280f3112c647f46df00ebca51a1a`。
 源码/测试路径与许可见上文及该项目 `docs/upstream.md`。
 
-后续获准发布时，先按各自项目部署记录定位目标和边界：兼容接收端 → 验证私有 Ready
+已按各自项目部署记录定位目标和边界并完成发布：兼容接收端 → 验证私有 Ready
 版本 2 → Sub2 migration274 与兼容程序 → 管理员保存 SKU 并验收新购。版本 2 订单出现
 后不得回滚到不识别该绑定的程序；保留全部交易/回执数据，不能恢复旧 DB 抹去订单。
-接收端部署必须同时提供完整 AGPL 对应源码。这里记录发布前提，没有执行发布。
+接收端同时提供完整 AGPL 对应源码；实际制品和验收见下文。
 
 ## 验证与独立复核
 
@@ -104,3 +104,53 @@ profile 不可用，使用独立通用代码审查员及文档执行者替代，
 为对比度修正后结果；其余包含目录、交付设置与买家明暗手机/桌面。所有商品、账号与
 金额均为合成数据。预览入口：运行前端 Vite 后访问
 `/previews/shop-sku/index.html#/admin/products?tab=shop`，不连接真实付款或客户资料。
+
+## 已完成的生产发布与验收
+
+用户明确批准后，先快进合并主分支 `496683426` 的监控改动；其迁移273保留，商城
+迁移顺延274，真实 PostgreSQL 回归重跑通过。合并后的 Go race 订单/交付回归、
+72项前端测试、类型检查和生产构建通过。实现提交 `f6c60f671`；并发文档提交
+`ce1f40600` 安全合并后，生产源码为 `fafcdfb1a6b195bd6b39be7d6eb9c4149e93b39c`。
+补丁零行上下文应用后逐字节复现三份已测接收端源码；独立发布包装复核无阻塞项。
+
+**接收端先行：** 按独立项目记录仅操作其专用应用，guard.5.3 已运行，零重启。
+镜像 `sha256:ed7ded46880418dd595b8f6e2f95ed188bb13db0c55785179961eb04ef2c89e5`；
+二进制 SHA256 `0aca17c50545bce88511a1101ce5dde7915105d3c6797bc9f3c990f325afcd88`。
+完整对应源码 [guard.5.3](https://ds.turtleligpt.com/source/new-api-daypass-guard.5.3.tar.gz)
+6998664字节，SHA256 `574c9fece21ef1fbd39864908701876be4fe8413c1eb4c04cda556efd7af5ab5`，
+线上下载校验与 Footer 均通过。私有 Ready200 返回 `sku_versions:[2]`、1/7天、2/3并发；
+公网控制路径404/isolated，未授权私有路径403。15个同机服务身份与受保护配置摘要不变。
+
+接收方合成原生回执9317941348160–9317941348164、token40–44验证：前四个都用600分，
+分别发放日2/日3/周2/周3；第五个验证版本零。原请求回放相同、有效改价/改权益409，
+精确撤销后再发410。SQLite独立确认回执/密钥/订阅共同到期、原paid_at、并发、无限总量、
+无钱包兜底，以及全部 disabled/cancelled/revoked。没有创建 Sub2 付款、回调或付费模型请求。
+原生备份 `/opt/new-api-daypass/backups/pre-sku-guard5.3-20261108T104432Z`，完整性ok。
+恢复使用该项目 `README.deploy.md` 记录的5.3 `recover`，保留原数据，禁止5.2或旧DB。
+
+**商城发布：** [GitHub Actions42472851388](https://github.com/Turtle-Li/sub2api/actions/runs/42472851388)
+成功构建并发布精确main源码，生产未拉取源码或编译。制品110156215字节，archive SHA256
+`9b5d97a41ce21cd8216a44f88ac844f394f5f566bfd08e7b4f9e136e1ab8a78e`；镜像
+`sub2api:auto-20261108-025543-fafcdfb1`，本机ID
+`sha256:cc461e87100e91ed582ad97fd11a0b042ab8ce0d013a27bcad378f54ec4f3f44`。
+原始日志 `/var/log/sub2api-release/gha-20261108-025543-fafcdfb1-2843720`。
+镜像身份、真实请求探测、候选健康、切流、回滚门禁和Caddy模板接收均通过。
+
+**线上真实浏览器：** 已登录管理员访问 `/admin/products?tab=shop`，同款三个Tab和
+3件商品正确。代充0.10元/下架、成品号100元/上架保留，人工交付仍区分代充与账号；
+DeepSeek自动服务不变。按原价日2=6、日3=8、周2=30、周3=40保存后，刷新重开
+revision4→5，四个SKU金额、有效期、并发、默认/上架均保持。买家选择周卡+3路显示
+40元/7天，交付说明同步变化。实拍 `artifacts/shop-sku/production-sku-saved.png`。
+
+**兼容恢复槽：** SKU已保存后，旧程序不再是可用恢复版本。使用上述同一已验证镜像
+经规范 `--prebuilt` 发布完成 `shop-sku-recovery-floor-20261108-verified`：green为健康
+active，blue同一源码/镜像作为兼容排空或历史恢复槽，后台standby。该流程保留连接，
+检查到app_5xx/app_fatal/caddy_5xx均0。最初手动预检因健康URL与固定解析不一致被拒绝，
+未改运行状态；改用根配置的权威URL后通过。未修改根配置的保留排空默认false。
+共享维护锁内核对三处Caddy视图、健康green与兼容blue后，仅移除已停止且exit0的
+旧legacy容器 `sub2api`（f3addd923），防止运行时保护选择不兼容程序；原镜像和全部
+数据卷保留。证据 `retired-incompatible-slot.json` 位于此次恢复槽日志目录。
+后续只允许本次SKU协议兼容程序，保留JSONB、订单快照、回执与全部资金记录；禁止旧DB。
+最终API/www健康均ok，green健康/active、blue健康/只读standby继续自然排空，二者零重启；
+旧legacy槽已不存在。运行保护timer的既有disabled/inactive状态保持，没有在本次功能发布
+中修改保护程序、重启策略或启用开关；上述两个槽为规范手动/应急恢复提供兼容镜像。

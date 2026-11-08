@@ -7,6 +7,10 @@
   references, migration 274 and the paired DeepSeek receiver protocol. Preserve
   historical snapshots and version-zero binding digests. Configured checkouts
   require a server-resolved SKU ID; prices and entitlements come from the catalog.
+  This is live with receiver guard.5.3 and app `fafcdfb1a`; product3 has saved
+  SKUs. Recovery must understand explicit SKU bindings and retain all data.
+  Both automatic recovery slots now use that compatible image; never promote
+  a pre-SKU binary or restore an old database.
 
 ## Model availability status
 
