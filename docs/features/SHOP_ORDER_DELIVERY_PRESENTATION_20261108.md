@@ -75,7 +75,7 @@ Chrome390px实际验证自动/人工开关、全文复制反馈、默认隐藏�
 浏览器未读取系统剪贴板字节，复制精确值由组件测试验证。独立代码审查为
 CLEAR / APPROVE，视觉 finish 为 ship；35份源码与2项删除的冻结指纹匹配，
 无阻塞项。报告与源指纹在本任务 `.omo/evidence/shop-order-detail-{qa,review}.md`
-及对应目录。本地预览不创建付款或重发授权；正式发布证据完成后补入。
+及对应目录。本地预览不创建付款或重发授权。
 
 北京时间增量再次独立 QA_PASS / 源码 CLEAR：7个变更文件的前后SHA256一致。
 独立Go race5个顶层（含QA overlay额外用例）、PG8子场景、前端相关38项通过；
@@ -92,6 +92,23 @@ CLEAR / APPROVE，视觉 finish 为 ship；35份源码与2项删除的冻结指�
 首个源提交852b710ed的流水线42481357320在用户追加北京时间要求后，于构建阶段
 主动取消；上传、应用部署和Caddy步骤全部跳过，未切换生产。后续统一发布包含
 北京时间变更的精确main源码。
+
+正式发布源为 `a2fbc37e951f55b1ad845ecd73ba9f0bdb3c55ee`，
+[GitHub run42482623873](https://github.com/Turtle-Li/sub2api/actions/runs/42482623873)
+于2026-11-08T13:05:47Z完成并为SUCCESS。精确main镜像构建、身份校验、维护锁内
+应用切换及Caddy入口验证均通过。现役 `sub2api-green` 健康、重启0次，Caddy仅指向
+`sub2api-green:8080`，镜像 `sub2api:auto-20261108-050431-a2fbc37e`，镜像ID
+`sha256:3fc78b938465f9bb64ddcf7069ad590f44f9b221ff11a4fdfae970baadbb7124`。
+现役流量状态accepting、后台active；旧blue已退出，历史legacy应用名不存在。日志目录
+`/var/log/sub2api-release/gha-20261108-050431-a2fbc37e-3006510`；公网health返回ok。
+
+只读生产验收确认275列为nullable JSONB，商品1/2/3的逐项复制均保持默认关闭。
+实际订单72显示 `到期时间：2026-11-09 19:15:53（北京时间 UTC+8）`，旧句、UTC旧后缀
+和逐项复制入口均不存在，完整指南在领取区下方。验收后重新隐藏Key再截图，页面
+无横向溢出。订单付款/交付均COMPLETED、动作SUCCEEDED，原receipt45、paid_at、
+完成时刻、商品快照及交付密文摘要与发布前逐项相同；未重发授权或修改财务事实。
+生产画面保存在本任务 `.omo/design/shop-order/production-order-72-beijing.png`，
+只含隐藏后的交付区，不提交包含真实订单信息的截图。
 
 原固定参考、LGPL/AGPL 许可及本地人工/自动交付边界继承
 [`SHOP_UNIFIED_SKU_20261108.md`](SHOP_UNIFIED_SKU_20261108.md)。本次仅扩展本地
