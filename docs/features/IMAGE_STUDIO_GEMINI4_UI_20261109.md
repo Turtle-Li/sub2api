@@ -81,4 +81,4 @@ The BrowserSkill overlay obstructed the phone bottom-control pointer path;
 keyboard expansion passed. The obstructed pointer case is not claimed as a
 pass. Local fixtures validate layout and browser request behavior, not WAN speed
 or production provider availability. Production release/smoke evidence is kept
-in the corresponding operations report.
+in [the operations report](../operations/IMAGE_STUDIO_GEMINI4_UI_RELEASE_20261109.md).
