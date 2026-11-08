@@ -83,6 +83,10 @@ func captureBatchImageBalanceHold(ctx context.Context, repo UsageBillingReposito
 	if err != nil {
 		return err
 	}
+	if job.AccountID != nil {
+		cmd.AccountID = *job.AccountID
+		cmd.AccountRequestCount = job.SuccessCount
+	}
 	if _, err := repo.CaptureBatchImageBalance(ctx, cmd); err != nil {
 		return ErrBatchImageSettlementBillingFailed.WithCause(err)
 	}

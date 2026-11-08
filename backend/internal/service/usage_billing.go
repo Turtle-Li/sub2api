@@ -12,8 +12,10 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
-var ErrUsageBillingRequestConflict = errors.New("usage billing request fingerprint conflict")
+var (
+	ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
+	ErrUsageBillingRequestConflict   = errors.New("usage billing request fingerprint conflict")
+)
 
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {
@@ -42,6 +44,9 @@ type UsageBillingCommand struct {
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
+	// AccountRequestCount is an optional settlement hint, excluded from the
+	// fingerprint so quota configuration changes preserve request deduplication.
+	AccountRequestCount int
 
 	// AccountQuotaHasDailyLimit / AccountQuotaHasWeeklyLimit 记录构造命令时账号是否设置了日/周上限，
 	// 只用于选择账号配额累加语句，不参与幂等指纹；实际累加哪些维度以数据库中的账号配置为准。
@@ -177,14 +182,16 @@ type UsageBillingApplyResult struct {
 
 // BatchImageBalanceHoldCommand describes an idempotent balance hold operation.
 type BatchImageBalanceHoldCommand struct {
-	RequestID          string
-	APIKeyID           int64
-	RequestFingerprint string
-	RequestPayloadHash string
-	UserID             int64
-	BatchID            string
-	HoldAmount         float64
-	ActualAmount       float64
+	RequestID           string
+	APIKeyID            int64
+	RequestFingerprint  string
+	RequestPayloadHash  string
+	UserID              int64
+	BatchID             string
+	HoldAmount          float64
+	ActualAmount        float64
+	AccountID           int64
+	AccountRequestCount int
 }
 
 func (c *BatchImageBalanceHoldCommand) Normalize() {

@@ -201,3 +201,7 @@ docs/features/*
 !docs/features/IMAGE_STUDIO_ADMIN_20261107.md
 !docs/features/IMAGE_STUDIO_REDESIGN_20261108.md
 !docs/features/SHOP_UNIFIED_SKU_20261108.md
+!docs/features/ACCOUNT_DAILY_REQUEST_LIMIT.md
+!docs/features/evidence/
+docs/features/evidence/*
+!docs/features/evidence/daily-request-quota/

@@ -288,12 +288,14 @@ type Account struct {
 	CustomBaseURL        *string `json:"custom_base_url,omitempty"`
 
 	// API Key 账号配额限制
-	QuotaLimit       *float64 `json:"quota_limit,omitempty"`
-	QuotaUsed        *float64 `json:"quota_used,omitempty"`
-	QuotaDailyLimit  *float64 `json:"quota_daily_limit,omitempty"`
-	QuotaDailyUsed   *float64 `json:"quota_daily_used,omitempty"`
-	QuotaWeeklyLimit *float64 `json:"quota_weekly_limit,omitempty"`
-	QuotaWeeklyUsed  *float64 `json:"quota_weekly_used,omitempty"`
+	QuotaDailyRequestLimit *int     `json:"quota_daily_request_limit,omitempty"`
+	QuotaDailyRequestUsed  *int     `json:"quota_daily_request_used,omitempty"`
+	QuotaLimit             *float64 `json:"quota_limit,omitempty"`
+	QuotaUsed              *float64 `json:"quota_used,omitempty"`
+	QuotaDailyLimit        *float64 `json:"quota_daily_limit,omitempty"`
+	QuotaDailyUsed         *float64 `json:"quota_daily_used,omitempty"`
+	QuotaWeeklyLimit       *float64 `json:"quota_weekly_limit,omitempty"`
+	QuotaWeeklyUsed        *float64 `json:"quota_weekly_used,omitempty"`
 
 	// 配额固定时间重置配置
 	QuotaDailyResetMode  *string `json:"quota_daily_reset_mode,omitempty"`
@@ -398,12 +400,14 @@ type AccountListItem struct {
 	CustomBaseURLEnabled    *bool    `json:"custom_base_url_enabled,omitempty"`
 	CustomBaseURL           *string  `json:"custom_base_url,omitempty"`
 
-	QuotaLimit       *float64 `json:"quota_limit,omitempty"`
-	QuotaUsed        *float64 `json:"quota_used,omitempty"`
-	QuotaDailyLimit  *float64 `json:"quota_daily_limit,omitempty"`
-	QuotaDailyUsed   *float64 `json:"quota_daily_used,omitempty"`
-	QuotaWeeklyLimit *float64 `json:"quota_weekly_limit,omitempty"`
-	QuotaWeeklyUsed  *float64 `json:"quota_weekly_used,omitempty"`
+	QuotaDailyRequestLimit *int     `json:"quota_daily_request_limit,omitempty"`
+	QuotaDailyRequestUsed  *int     `json:"quota_daily_request_used,omitempty"`
+	QuotaLimit             *float64 `json:"quota_limit,omitempty"`
+	QuotaUsed              *float64 `json:"quota_used,omitempty"`
+	QuotaDailyLimit        *float64 `json:"quota_daily_limit,omitempty"`
+	QuotaDailyUsed         *float64 `json:"quota_daily_used,omitempty"`
+	QuotaWeeklyLimit       *float64 `json:"quota_weekly_limit,omitempty"`
+	QuotaWeeklyUsed        *float64 `json:"quota_weekly_used,omitempty"`
 
 	QuotaDailyResetMode  *string `json:"quota_daily_reset_mode,omitempty"`
 	QuotaDailyResetHour  *int    `json:"quota_daily_reset_hour,omitempty"`

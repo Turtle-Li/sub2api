@@ -96,6 +96,13 @@
   local and upstream version 25 have different layouts. Regenerate Ent/Wire
   after schema merges instead of accepting merged positional generated code.
 
+## Account daily request quotas
+
+- Before changing account daily call limits, read
+  `docs/features/ACCOUNT_DAILY_REQUEST_LIMIT.md`. Keep counters independent of
+  money, reuse billing deduplication and daily reset settings, and preserve
+  upstream failover and ambiguous batch submission protections.
+
 ## Channel model pricing
 
 - For authored-currency defaults, native Kimi CNY quotes and group-rate previews,

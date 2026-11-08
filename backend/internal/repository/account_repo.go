@@ -75,8 +75,10 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 
 const postgresParameterBatchSize = 50000
 
-const codexFingerprintSeedCanonicalPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-const codexFingerprintNilSeed = "00000000-0000-0000-0000-000000000000"
+const (
+	codexFingerprintSeedCanonicalPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+	codexFingerprintNilSeed              = "00000000-0000-0000-0000-000000000000"
+)
 
 func codexFingerprintSeedValidSQL(extraExpr string) string {
 	value := "(" + extraExpr + " ->> 'codex_fingerprint_seed')"
@@ -1019,8 +1021,14 @@ func lockAndMergeAccountProbeExtra(
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+	if err := mergeDailyRequestUsageForEdit(ctx, client, account, extra); err != nil {
+		return nil, err
+	}
 	if _, explicit := extra[service.PaidFallbackExtraKey]; !explicit && len(currentPaidFallback) > 0 {
 		var marker any
 		if err := json.Unmarshal(currentPaidFallback, &marker); err != nil {
@@ -3410,7 +3418,6 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		"UPDATE accounts SET extra = "+extraExpression+", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
 		string(payload), id,
 	)
-
 	if err != nil {
 		return err
 	}
@@ -4936,8 +4943,9 @@ func (r *accountRepository) ResetQuotaUsedAndClearRateLimitCooldown(ctx context.
 	result, err := r.sql.ExecContext(ctx,
 		`UPDATE accounts SET extra = (
 			COALESCE(extra, '{}'::jsonb)
-			|| '{"quota_used": 0, "quota_daily_used": 0, "quota_weekly_used": 0}'::jsonb
-		) - 'quota_daily_start' - 'quota_weekly_start' - 'quota_daily_reset_at' - 'quota_weekly_reset_at',
+			|| '{"quota_used": 0, "quota_daily_used": 0, "quota_weekly_used": 0, "quota_daily_request_used": 0}'::jsonb
+		) - 'quota_daily_start' - 'quota_weekly_start' - 'quota_daily_reset_at' - 'quota_weekly_reset_at'
+		  - 'quota_daily_request_start' - 'quota_daily_request_reset_at',
 		rate_limited_at = NULL, rate_limit_reset_at = NULL, updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL`,
 		id)

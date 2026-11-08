@@ -2438,6 +2438,7 @@
         <QuotaLimitCard
           :totalLimit="editQuotaLimit"
           :dailyLimit="editQuotaDailyLimit"
+          :dailyRequestLimit="editQuotaDailyRequestLimit"
           :weeklyLimit="editQuotaWeeklyLimit"
           :dailyResetMode="editDailyResetMode"
           :dailyResetHour="editDailyResetHour"
@@ -2457,6 +2458,7 @@
           :quotaNotifyTotalThresholdType="quotaNotifyState.total.thresholdType"
           @update:totalLimit="editQuotaLimit = $event"
           @update:dailyLimit="editQuotaDailyLimit = $event"
+          @update:dailyRequestLimit="editQuotaDailyRequestLimit = $event"
           @update:weeklyLimit="editQuotaWeeklyLimit = $event"
           @update:dailyResetMode="editDailyResetMode = $event"
           @update:dailyResetHour="editDailyResetHour = $event"
@@ -2489,6 +2491,7 @@
         <QuotaLimitCard
           :totalLimit="editQuotaLimit"
           :dailyLimit="editQuotaDailyLimit"
+          :dailyRequestLimit="editQuotaDailyRequestLimit"
           :weeklyLimit="editQuotaWeeklyLimit"
           :dailyResetMode="editDailyResetMode"
           :dailyResetHour="editDailyResetHour"
@@ -2508,6 +2511,7 @@
           :quotaNotifyTotalThresholdType="quotaNotifyState.total.thresholdType"
           @update:totalLimit="editQuotaLimit = $event"
           @update:dailyLimit="editQuotaDailyLimit = $event"
+          @update:dailyRequestLimit="editQuotaDailyRequestLimit = $event"
           @update:weeklyLimit="editQuotaWeeklyLimit = $event"
           @update:dailyResetMode="editDailyResetMode = $event"
           @update:dailyResetHour="editDailyResetHour = $event"
@@ -4263,6 +4267,7 @@ adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
 loadQuotaNotifyGlobal()
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
+const editQuotaDailyRequestLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
 const editDailyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editDailyResetHour = ref<number | null>(null)
@@ -4838,6 +4843,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     editQuotaLimit.value = (quotaVal && quotaVal > 0) ? quotaVal : null
     const dailyVal = extra?.quota_daily_limit as number | undefined
     editQuotaDailyLimit.value = (dailyVal && dailyVal > 0) ? dailyVal : null
+    const requestLimit = extra?.quota_daily_request_limit
+    editQuotaDailyRequestLimit.value = typeof requestLimit === 'number' && requestLimit > 0 ? requestLimit : null
     const weeklyVal = extra?.quota_weekly_limit as number | undefined
     editQuotaWeeklyLimit.value = (weeklyVal && weeklyVal > 0) ? weeklyVal : null
     // Load quota reset mode config
@@ -4852,6 +4859,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   } else {
     editQuotaLimit.value = null
     editQuotaDailyLimit.value = null
+    editQuotaDailyRequestLimit.value = null
     editQuotaWeeklyLimit.value = null
     editDailyResetMode.value = null
     editDailyResetHour.value = null
@@ -6529,6 +6537,12 @@ const handleSubmit = async () => {
         delete newExtra.quota_daily_limit
         delete newExtra.quota_daily_used
         delete newExtra.quota_daily_start
+      }
+      // Daily request quota
+      if (editQuotaDailyRequestLimit.value != null && editQuotaDailyRequestLimit.value > 0) {
+        newExtra.quota_daily_request_limit = editQuotaDailyRequestLimit.value
+      } else {
+        delete newExtra.quota_daily_request_limit
       }
       // Weekly quota
       if (editQuotaWeeklyLimit.value != null && editQuotaWeeklyLimit.value > 0) {

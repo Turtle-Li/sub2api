@@ -348,6 +348,9 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		cmd.AccountQuotaHasDailyLimit = p.Account.GetQuotaDailyLimit() > 0
 		cmd.AccountQuotaHasWeeklyLimit = p.Account.GetQuotaWeeklyLimit() > 0
 	}
+	if p.Account.SupportsAccountQuota() && p.Account.GetQuotaDailyRequestLimit() > 0 {
+		cmd.AccountRequestCount = 1
+	}
 
 	// Preserve the existing monetary fingerprint across a denomination change.
 	// Only customer-wallet/key amounts changed unit; subscription and upstream

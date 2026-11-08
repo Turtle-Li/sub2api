@@ -1,5 +1,17 @@
 <template>
-  <div ref="rootRef" v-if="showUsageWindows">
+  <div ref="rootRef">
+    <div v-if="quotaDailyRequestBar" class="mb-1" data-test="daily-request-quota">
+      <div class="mb-0.5 text-[10px] text-gray-500 dark:text-gray-400">
+        {{ t('admin.accounts.quotaDailyRequests') }} {{ account.quota_daily_request_used ?? 0 }} / {{ account.quota_daily_request_limit }}
+      </div>
+      <UsageProgressBar
+        label="1d"
+        :utilization="quotaDailyRequestBar.utilization"
+        :resets-at="quotaDailyRequestBar.resetsAt"
+        color="amber"
+      />
+    </div>
+    <template v-if="showUsageWindows">
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
       v-if="
@@ -620,10 +632,10 @@
     <template v-else>
       <div class="text-xs text-gray-400">-</div>
     </template>
-  </div>
+    </template>
 
-  <!-- Non-OAuth/Setup-Token accounts -->
-  <div ref="rootRef" v-else>
+    <!-- Non-OAuth/Setup-Token accounts -->
+    <template v-else>
     <!-- Gemini API Key accounts: show quota info -->
     <AccountQuotaInfo v-if="account.platform === 'gemini' && !isGeminiThirdPartyApiKey" :account="account" />
     <!-- Key/Bedrock accounts: show today stats + optional quota bars -->
@@ -703,6 +715,7 @@
         class="text-xs text-gray-400"
       >-</div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -1619,7 +1632,9 @@ const makeQuotaBar = (
 
     if (mode === 'fixed') {
       // Use pre-computed next reset time for fixed mode
-      const resetAtKey = isDaily ? 'quota_daily_reset_at' : 'quota_weekly_reset_at'
+      const resetAtKey = startKey === 'quota_daily_request_start'
+        ? 'quota_daily_request_reset_at'
+        : isDaily ? 'quota_daily_reset_at' : 'quota_weekly_reset_at'
       resetsAt = (extra?.[resetAtKey] as string) || null
     } else {
       // Rolling mode: compute from start + period
@@ -1638,9 +1653,16 @@ const hasApiKeyQuota = computed(() => {
   if (!supportsAccountQuota(props.account.type)) return false
   return (
     (props.account.quota_daily_limit ?? 0) > 0 ||
+    (props.account.quota_daily_request_limit ?? 0) > 0 ||
     (props.account.quota_weekly_limit ?? 0) > 0 ||
     (props.account.quota_limit ?? 0) > 0
   )
+})
+
+const quotaDailyRequestBar = computed((): QuotaBarInfo | null => {
+  const limit = props.account.quota_daily_request_limit ?? 0
+  if (!supportsAccountQuota(props.account.type) || limit <= 0) return null
+  return makeQuotaBar(props.account.quota_daily_request_used ?? 0, limit, 'quota_daily_request_start')
 })
 
 const quotaDailyBar = computed((): QuotaBarInfo | null => {

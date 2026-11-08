@@ -1410,6 +1410,8 @@ export interface Account {
   custom_base_url?: string | null
 
   // API Key 账号配额限制
+  quota_daily_request_limit?: number | null
+  quota_daily_request_used?: number | null
   quota_limit?: number | null
   quota_used?: number | null
   quota_daily_limit?: number | null

@@ -371,6 +371,28 @@ function mountModal(
 }
 
 describe('EditAccountModal', () => {
+  it('loads and saves a daily call limit without requiring a monetary limit', async () => {
+    const account = {
+      ...buildAccount(),
+      extra: { quota_daily_request_limit: 100, quota_daily_request_used: 7, custom_setting: 'preserved' }
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    const limit = wrapper.get('input[aria-label="admin.accounts.quotaDailyRequestLimit"]')
+    await limit.setValue('50')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({
+      extra: expect.objectContaining({
+        quota_daily_request_limit: 50, quota_daily_request_used: 7, custom_setting: 'preserved'
+      })
+    }))
+  })
+
   it('loads a stored Codex relay opt-in and saves an explicit disable', async () => {
     // Given an OpenAI API-key relay with compatibility already enabled.
     const account = { ...buildAccount(), extra: { openai_codex_oauth_relay: true } }

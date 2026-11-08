@@ -91,8 +91,10 @@ func (s *adminServiceImpl) GetAccountsByIDs(ctx context.Context, ids []int64) ([
 	return accounts, nil
 }
 
-const maxAccountNameRunes = 100
-const duplicateAccountOperationIDExtraKey = "duplicate_operation_id"
+const (
+	maxAccountNameRunes                 = 100
+	duplicateAccountOperationIDExtraKey = "duplicate_operation_id"
+)
 
 func duplicateAccountName(sourceName string) string {
 	const suffix = " (Copy)"
@@ -129,13 +131,16 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	// ModelTrace monitors and probe history belong to the source account.
 	ModelTraceExtraKey: {},
 	// Local quota usage and derived window timestamps must start fresh.
-	"quota_used":            {},
-	"quota_daily_used":      {},
-	"quota_weekly_used":     {},
-	"quota_daily_start":     {},
-	"quota_weekly_start":    {},
-	"quota_daily_reset_at":  {},
-	"quota_weekly_reset_at": {},
+	"quota_used":                   {},
+	"quota_daily_used":             {},
+	"quota_weekly_used":            {},
+	"quota_daily_start":            {},
+	"quota_weekly_start":           {},
+	"quota_daily_reset_at":         {},
+	"quota_weekly_reset_at":        {},
+	"quota_daily_request_used":     {},
+	"quota_daily_request_start":    {},
+	"quota_daily_request_reset_at": {},
 	// Provider observations, capability probes, and transient scheduling state.
 	"model_rate_limits":                      {},
 	"session_window_utilization":             {},
@@ -446,6 +451,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
+	delete(accountExtra, "quota_daily_request_used")
+	delete(accountExtra, "quota_daily_request_start")
+	delete(accountExtra, "quota_daily_request_reset_at")
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
@@ -806,7 +814,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, grokObservedModelsExtraKey)
 		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
+		delete(normalizedExtra, "quota_daily_request_used")
+		delete(normalizedExtra, "quota_daily_request_start")
+		delete(normalizedExtra, "quota_daily_request_reset_at")
 		for _, key := range []string{
+			"quota_daily_request_used",
+			"quota_daily_request_start",
+			"quota_daily_request_reset_at",
 			"quota_used",
 			"quota_daily_used",
 			"quota_daily_start",
@@ -1098,6 +1112,12 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
+	delete(input.Extra, "quota_daily_request_used")
+	delete(input.Extra, "quota_daily_request_start")
+	delete(input.Extra, "quota_daily_request_reset_at")
+	if err := validateDailyRequestQuotaConfig(input.Extra); err != nil {
+		return nil, err
+	}
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingProbeExtraKey)

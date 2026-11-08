@@ -2310,6 +2310,7 @@
         <QuotaLimitCard
           :totalLimit="editQuotaLimit"
           :dailyLimit="editQuotaDailyLimit"
+          :dailyRequestLimit="editQuotaDailyRequestLimit"
           :weeklyLimit="editQuotaWeeklyLimit"
           :quotaNotifyGlobalEnabled="quotaNotifyGlobalEnabled"
           :quotaNotifyDailyEnabled="quotaNotifyState.daily.enabled"
@@ -2329,6 +2330,7 @@
           :resetTimezone="editResetTimezone"
           @update:totalLimit="editQuotaLimit = $event"
           @update:dailyLimit="editQuotaDailyLimit = $event"
+          @update:dailyRequestLimit="editQuotaDailyRequestLimit = $event"
           @update:weeklyLimit="editQuotaWeeklyLimit = $event"
           @update:quotaNotifyDailyEnabled="quotaNotifyState.daily.enabled = $event"
           @update:quotaNotifyDailyThreshold="quotaNotifyState.daily.threshold = $event"
@@ -2362,6 +2364,7 @@
         <QuotaLimitCard
           :totalLimit="editQuotaLimit"
           :dailyLimit="editQuotaDailyLimit"
+          :dailyRequestLimit="editQuotaDailyRequestLimit"
           :weeklyLimit="editQuotaWeeklyLimit"
           :quotaNotifyGlobalEnabled="quotaNotifyGlobalEnabled"
           :quotaNotifyDailyEnabled="quotaNotifyState.daily.enabled"
@@ -2381,6 +2384,7 @@
           :resetTimezone="editResetTimezone"
           @update:totalLimit="editQuotaLimit = $event"
           @update:dailyLimit="editQuotaDailyLimit = $event"
+          @update:dailyRequestLimit="editQuotaDailyRequestLimit = $event"
           @update:weeklyLimit="editQuotaWeeklyLimit = $event"
           @update:quotaNotifyDailyEnabled="quotaNotifyState.daily.enabled = $event"
           @update:quotaNotifyDailyThreshold="quotaNotifyState.daily.threshold = $event"
@@ -4651,6 +4655,7 @@ const syncPreviewCredentials = computed(() => {
 
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
+const editQuotaDailyRequestLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
 const editDailyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editDailyResetHour = ref<number | null>(null)
@@ -5694,6 +5699,7 @@ const resetForm = () => {
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
+  editQuotaDailyRequestLimit.value = null
   editQuotaWeeklyLimit.value = null
   editDailyResetMode.value = null
   editDailyResetHour.value = null
@@ -6364,6 +6370,9 @@ const createAccountAndFinish = async (
     }
     if (editQuotaDailyLimit.value != null && editQuotaDailyLimit.value > 0) {
       quotaExtra.quota_daily_limit = editQuotaDailyLimit.value
+    }
+    if (editQuotaDailyRequestLimit.value != null && editQuotaDailyRequestLimit.value > 0) {
+      quotaExtra.quota_daily_request_limit = editQuotaDailyRequestLimit.value
     }
     if (editQuotaWeeklyLimit.value != null && editQuotaWeeklyLimit.value > 0) {
       quotaExtra.quota_weekly_limit = editQuotaWeeklyLimit.value

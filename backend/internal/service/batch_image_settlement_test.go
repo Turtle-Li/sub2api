@@ -46,6 +46,8 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	require.Equal(t, int64(321), billing.captures[0].APIKeyID)
 	require.Equal(t, job.UserID, billing.captures[0].UserID)
 	require.Equal(t, job.BatchID, billing.captures[0].BatchID)
+	require.Equal(t, *job.AccountID, billing.captures[0].AccountID)
+	require.Equal(t, 3, billing.captures[0].AccountRequestCount)
 	require.Equal(t, 0.75, billing.captures[0].ActualAmount)
 	require.Equal(t, 1.25, billing.captures[0].HoldAmount)
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), batchImageTestData)
@@ -91,6 +93,7 @@ func TestBatchImageSettlementService_ZeroSuccessCanComplete(t *testing.T) {
 	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
 	require.Len(t, billing.captures, 1)
 	require.Equal(t, 0.0, billing.captures[0].ActualAmount)
+	require.Zero(t, billing.captures[0].AccountRequestCount)
 }
 
 func TestBatchImageSettlementService_CompletedJobReturnsAlreadySettledWithoutBilling(t *testing.T) {
@@ -546,6 +549,8 @@ func (r *fakeBatchImageBillingRepo) applyHold(cmd *BatchImageBalanceHoldCommand,
 	return &BatchImageBalanceHoldResult{Applied: true}, nil
 }
 
-var _ UsageBillingRepository = (*fakeBatchImageBillingRepo)(nil)
-var _ BatchImagePricingResolver = (*fakeBatchImagePricingResolver)(nil)
-var _ = strings.TrimSpace
+var (
+	_ UsageBillingRepository    = (*fakeBatchImageBillingRepo)(nil)
+	_ BatchImagePricingResolver = (*fakeBatchImagePricingResolver)(nil)
+	_                           = strings.TrimSpace
+)

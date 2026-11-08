@@ -93,6 +93,20 @@ const cnUsageCellStubs = {
 }
 
 describe('AccountUsageCell', () => {
+  it('shows a count-only quota independently of money limits', () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          platform: 'openai', type: 'apikey',
+          quota_daily_request_limit: 100, quota_daily_request_used: 7
+        })
+      },
+      global: { stubs: { UsageProgressBar: true, AccountQuotaInfo: true } }
+    })
+
+    expect(wrapper.get('[data-test="daily-request-quota"]').text()).toContain('7 / 100')
+  })
+
   beforeEach(() => {
     getUsage.mockReset()
     Object.defineProperty(window, 'matchMedia', {
