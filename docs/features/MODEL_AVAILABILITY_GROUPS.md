@@ -1,5 +1,13 @@
 # Public group availability module
 
+Current owner correction, November8: scheduled ten-minute checks also supply
+explicitly labelled card metrics when real traffic is insufficient. Success and
+first-token latency independently prefer qualified real group traffic. Otherwise,
+show qualified check success and native check first-token P50; if native timing
+is not yet sufficient, use the separately labelled whole-check duration P50.
+No checks are added to real-request denominators or cache usage. Details and
+rollout evidence: `docs/operations/MODEL_STATUS_PROBE_METRICS_20261108.md`.
+
 Historical owner correction, 2026-11-07: the homepage and signed-in model plaza must show
 availability inside each existing group card. All viewers use their existing
 plaza visibility rules. A link to a separate status page does not satisfy this
@@ -111,6 +119,43 @@ groups; they never enter real-request success-rate denominators. Unknown,
 disabled, pending, stale and failed collection must be explicit rather than
 blank or fabricated green history. The scheduled check does not certify
 every model, public ingress or customer entitlement admission.
+
+### Quiet-group check metrics
+
+Both check metrics use the existing three-hour/18-cell window, exact current
+selected model and enabled target. Only completed success/failure rounds count,
+with at least six rounds for success and six successful valid timings for each
+P50. The latest completed round must be within15minutes. Old-model, pending,
+cancelled, future or internally inconsistent receipts are excluded; disabled,
+stale and small samples publish no numeric check metrics. Each scheduled round
+has one final outcome after at most three attempts, and only the final successful
+attempt supplies timing. Token accounting still accumulates every paid attempt.
+
+Migration272 adds nullable `first_token_ms` without rewriting history. Capture
+native `ForwardResult.FirstTokenMs` only after successful protocol/usage validation;
+never derive TTFT from total duration or the recorder's first header/write.
+Historical/draining old writers remainNULL and can supply `probe_latency_p50_ms`
+only. Native TTFT is nonnegative and cannot exceed whole-attempt duration.
+Each timing distribution qualifies independently. The sanitized DTO adds
+`probe_metrics_version=1`, `probe_ttft_p50_ms`, `probe_latency_p50_ms` and the
+`stale` probe state, without any raw account, model, token or sample count.
+Clients require version1, enabled and ready before applying fallback, preserving
+safe behavior across an old server or failed refresh.
+
+All user surfaces label each metric's actual source. New checks accumulate native
+timing naturally; no extra paid warm-up requests or model/config edits are made.
+The homepage uses immutable assets innamespacev7; v6 remains rollback-compatible.
+The additive column can remain during application rollback, where the old binary
+ignores it. Preserve the exact old homepage backup and its immutablev6 assets.
+
+Pinned reference rechecked before this change: ranxi2001/sub2api revision
+`5f0b6321a50153a738aef3fbade57c969dbe710c`,
+`backend/internal/service/channel_monitor_v3_probe.go`, its `_test.go`, and
+`channel_monitor_v3.go` quiet-slot fallback. Upstream separates probe duration
+from TTFT, and its probe test keeps `TTFTP50Ms=nil`. This local implementation
+preserves that distinction while intentionally adding native forwarder TTFT,
+source-labelled quiet-group metrics, six-round gates and15minute freshness.
+LGPL attribution and existing notices are retained.
 
 ## Architecture decision
 

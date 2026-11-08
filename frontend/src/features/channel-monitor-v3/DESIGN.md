@@ -14,6 +14,14 @@ state together with text. Request success, cache share and first-token P50 are
 the primary figures; exact check models belong only to the admin group editor. Prices
 and multipliers belong to the model plaza, not this dashboard.
 
+For each success/timing metric, qualified real group requests take priority.
+Quiet groups show qualified scheduled-check metrics with “检测成功率” and
+“检测首 Token P50”, scoped to “本分组 · 定时检测”. Historical total duration is
+labelled “检测耗时 P50” until enough native TTFT samples exist. The descriptive
+window is neutral (“分组表现”), and the inline note explains separate sources.
+Require probe metric version1, enabled and ready; unavailable/invalid metrics
+remain unknown. Cache remains independently sourced from real pool usage.
+
 The grid fits the available container width with a minimum card width of22rem
 (or the full width on narrower containers). Platforms with one group share
 columns in one grid; a platform with multiple groups spans the row and uses

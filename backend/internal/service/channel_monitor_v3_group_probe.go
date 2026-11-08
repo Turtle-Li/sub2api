@@ -47,6 +47,7 @@ type ChannelMonitorV3GroupProbeResult struct {
 	Outcome              string
 	Category             string
 	LatencyMs            int64
+	FirstTokenMs         *int64
 	AccountID            int64
 	InputTokens          int64
 	OutputTokens         int64

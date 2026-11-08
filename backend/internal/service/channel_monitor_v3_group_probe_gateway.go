@@ -86,6 +86,7 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 		return
 	}
 	var err error
+	var firstTokenMs *int
 	body := channelMonitorV3ProbeBody(group.Platform, model)
 	writer := &channelMonitorV3ProbeWriter{header: make(http.Header)}
 	c, _ := gin.CreateTestContext(writer)
@@ -100,6 +101,7 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 		if result != nil {
 			out.InputTokens = int64(result.Usage.InputTokens)
 			out.OutputTokens = int64(result.Usage.OutputTokens)
+			firstTokenMs = result.FirstTokenMs
 		}
 	} else {
 		parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
@@ -115,6 +117,7 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 			// input_tokens alone omits the cached consumption of this check.
 			out.InputTokens = int64(result.Usage.InputTokens) + int64(result.Usage.CacheCreationInputTokens) + int64(result.Usage.CacheReadInputTokens)
 			out.OutputTokens = int64(result.Usage.OutputTokens)
+			firstTokenMs = result.FirstTokenMs
 		}
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
@@ -128,6 +131,10 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 	}
 	if err != nil || writer.status >= 400 || writer.overflow || !channelMonitorV3ProbeResponseOK(writer.body.Bytes()) {
 		return
+	}
+	if firstTokenMs != nil && *firstTokenMs >= 0 {
+		ms := int64(*firstTokenMs)
+		out.FirstTokenMs = &ms
 	}
 	out.Outcome = "success"
 	out.Category = ""

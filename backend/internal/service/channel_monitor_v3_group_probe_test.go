@@ -103,9 +103,10 @@ func (e *groupProbeExec) Check(_ context.Context, _ *Group, _ string) ChannelMon
 func TestChannelMonitorV3GroupProbeRecoversWithinThreeAttempts(t *testing.T) {
 	// Given a transient failure followed by a successful provider receipt.
 	repo, p, exec := groupProbeFixture()
+	failedTTFT, successfulTTFT := int64(100), int64(1200)
 	exec.steps = []ChannelMonitorV3GroupProbeResult{
-		{Outcome: "failure", Category: "upstream_error", InputTokens: 20, OutputTokens: 2},
-		{Outcome: "success", InputTokens: 30, OutputTokens: 3},
+		{Outcome: "failure", Category: "upstream_error", FirstTokenMs: &failedTTFT, LatencyMs: 500, InputTokens: 20, OutputTokens: 2},
+		{Outcome: "success", FirstTokenMs: &successfulTTFT, LatencyMs: 4500, InputTokens: 30, OutputTokens: 3},
 	}
 	// When one scheduled slot is processed.
 	p.RunDue(context.Background(), time.Now())
@@ -113,12 +114,28 @@ func TestChannelMonitorV3GroupProbeRecoversWithinThreeAttempts(t *testing.T) {
 	require.Equal(t, 2, exec.calls)
 	require.Len(t, repo.results, 1)
 	require.Equal(t, "success", repo.results[0].Outcome)
+	require.Equal(t, &successfulTTFT, repo.results[0].FirstTokenMs, "timing belongs only to the final successful attempt")
+	require.EqualValues(t, 4500, repo.results[0].LatencyMs)
 	require.EqualValues(t, 50, repo.results[0].InputTokens)
 	require.EqualValues(t, 5, repo.results[0].OutputTokens)
 	require.Equal(t, 2, repo.results[0].AttemptCount)
 	require.Len(t, repo.progress, 2)
 	require.EqualValues(t, 20, repo.progress[0].InputTokens)
 	require.EqualValues(t, 50, repo.progress[1].InputTokens)
+}
+
+func TestChannelMonitorV3GroupProbeRecoveryDoesNotReuseFailedTiming(t *testing.T) {
+	// Given a failed receipt with timing followed by success without native TTFT.
+	repo, p, exec := groupProbeFixture()
+	failedTTFT := int64(100)
+	exec.steps = []ChannelMonitorV3GroupProbeResult{
+		{Outcome: "failure", FirstTokenMs: &failedTTFT}, {Outcome: "success", LatencyMs: 4500},
+	}
+	// When the slot is finalized, unknown native timing stays unknown.
+	p.RunDue(context.Background(), time.Now())
+	require.Len(t, repo.results, 1)
+	require.Nil(t, repo.results[0].FirstTokenMs)
+	require.EqualValues(t, 4500, repo.results[0].LatencyMs)
 }
 
 func TestChannelMonitorV3GroupProbeFailsOnlyAfterThreeAttempts(t *testing.T) {

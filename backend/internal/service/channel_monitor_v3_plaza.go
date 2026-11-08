@@ -25,14 +25,17 @@ type ChannelMonitorV3GroupCell struct {
 // Published metrics contain no traffic volumes. Real requests and inexpensive
 // scheduled checks always retain independent denominators.
 type ChannelMonitorV3GroupStatus struct {
-	Status             string     `json:"status"`
-	Source             string     `json:"source"`
-	CheckedAt          *time.Time `json:"checked_at"`
-	ProbeEnabled       bool       `json:"probe_enabled"`
-	ProbeModel         string     `json:"-"`
-	DisplayName        string     `json:"-"`
-	RequestSuccessRate *float64   `json:"request_success_rate"`
-	ProbeSuccessRate   *float64   `json:"probe_success_rate"`
+	Status              string     `json:"status"`
+	Source              string     `json:"source"`
+	CheckedAt           *time.Time `json:"checked_at"`
+	ProbeEnabled        bool       `json:"probe_enabled"`
+	ProbeModel          string     `json:"-"`
+	DisplayName         string     `json:"-"`
+	RequestSuccessRate  *float64   `json:"request_success_rate"`
+	ProbeSuccessRate    *float64   `json:"probe_success_rate"`
+	ProbeMetricsVersion int        `json:"probe_metrics_version"`
+	ProbeTTFTP50Ms      *int64     `json:"probe_ttft_p50_ms"`
+	ProbeLatencyP50Ms   *int64     `json:"probe_latency_p50_ms"`
 	// Retired rolling-rate field stays null so older clients cannot mislabel a peak.
 	CacheReadRate      *float64                    `json:"cache_read_rate"`
 	CachePeakHourRate  *float64                    `json:"cache_peak_hour_rate"`
@@ -106,7 +109,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	}
 	for _, id := range groupIDs {
 		target := targets[id]
-		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model,
+		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model, ProbeMetricsVersion: 1,
 			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", CacheSampleState: "none", CacheScope: "shared_account_pool", CacheStatistic: "best_complete_hour", CacheLookbackHours: channelMonitorV3CacheLookbackHours, WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
 		for _, cache := range requestCache[id] {
 			start := cache.HourStart.UTC()
@@ -163,16 +166,29 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 				}
 			}
 		}
-		var successes, count int
+		var successes, count, latencySamples, ttftSamples int
+		probeLatency, probeTTFT := map[int64]int64{}, map[int64]int64{}
+		var latestProbeAt *time.Time
 		for _, probe := range byGroup[id] {
-			if probe.Model != target.Model || probe.FinishedAt == nil || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
+			if probe.Model != target.Model || probe.Slot.Before(first) || probe.Slot.After(now) || probe.FinishedAt == nil || probe.FinishedAt.Before(probe.Slot) || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
 				continue
 			}
 			count++
+			if latestProbeAt == nil || probe.FinishedAt.After(*latestProbeAt) {
+				latestProbeAt = probe.FinishedAt
+			}
 			state := ChannelMonitorV3StatusDown
 			if probe.Outcome == "success" {
 				successes++
 				state = ChannelMonitorV3StatusOperational
+				if probe.LatencyMs > 0 {
+					probeLatency[probe.LatencyMs]++
+					latencySamples++
+				}
+				if probe.FirstTokenMs != nil && *probe.FirstTokenMs >= 0 && *probe.FirstTokenMs <= probe.LatencyMs {
+					probeTTFT[*probe.FirstTokenMs]++
+					ttftSamples++
+				}
 			}
 			index := int(probe.Slot.Sub(first) / interval)
 			if probe.Slot.Before(first) || index < 0 || index >= len(item.Cells) {
@@ -187,9 +203,17 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		}
 		if !item.ProbeEnabled {
 			item.ProbeSampleState = "disabled"
+		} else if latestProbeAt != nil && now.Sub(*latestProbeAt) > 15*time.Minute {
+			item.ProbeSampleState = "stale"
 		} else if count >= ChannelMonitorV3GroupMinProbes {
 			rate := 100 * float64(successes) / float64(count)
 			item.ProbeSuccessRate, item.ProbeSampleState = &rate, "ready"
+			if latencySamples >= ChannelMonitorV3GroupMinProbes {
+				item.ProbeLatencyP50Ms = channelMonitorV3P50(probeLatency)
+			}
+			if ttftSamples >= ChannelMonitorV3GroupMinProbes {
+				item.ProbeTTFTP50Ms = channelMonitorV3P50(probeTTFT)
+			}
 		}
 		for i := len(item.Cells) - 1; i >= 0; i-- {
 			cell := item.Cells[i]

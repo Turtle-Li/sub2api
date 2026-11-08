@@ -57,6 +57,8 @@ func TestChannelMonitorV3ProbeOpenAIProviderForwarding(t *testing.T) {
 			probe := &channelMonitorV3GatewayProbe{openai: &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}}
 			result := probe.checkAccount(context.Background(), &Group{ID: 6, Platform: PlatformOpenAI}, "gpt-5.4-mini", account)
 			require.Equal(t, "success", result.Outcome)
+			require.NotNil(t, result.FirstTokenMs, "preserve native Responses first-token timing")
+			require.GreaterOrEqual(t, *result.FirstTokenMs, int64(0))
 			require.EqualValues(t, 9, result.InputTokens)
 			require.EqualValues(t, 1, result.OutputTokens)
 			require.Len(t, upstream.requests, 1)
@@ -89,6 +91,8 @@ func TestChannelMonitorV3ProbeAnthropicProviderForwarding(t *testing.T) {
 			probe := &channelMonitorV3GatewayProbe{gateway: newForwardPartialUsageServiceForTest(upstream)}
 			result := probe.checkAccount(context.Background(), &Group{ID: 10, Platform: PlatformAnthropic}, "claude-haiku-4-5", newAnthropicAPIKeyAccountForTest())
 			require.Equal(t, "success", result.Outcome)
+			require.NotNil(t, result.FirstTokenMs, "preserve native Messages first-token timing")
+			require.GreaterOrEqual(t, *result.FirstTokenMs, int64(0))
 			require.EqualValues(t, tc.input, result.InputTokens)
 			require.EqualValues(t, 1, result.OutputTokens)
 			require.EqualValues(t, 1, gjson.GetBytes(upstream.lastBody, "max_tokens").Int())

@@ -104,7 +104,10 @@ export interface PlazaGroupAvailability {
 	cache_hour_end?: string | null
 	ttft_p50_ms?: number | null
 	request_sample_state?: 'none' | 'insufficient' | 'ready' | 'stale'
-	probe_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled'
+	probe_sample_state?: 'none' | 'insufficient' | 'ready' | 'disabled' | 'stale'
+	probe_metrics_version?: number
+	probe_ttft_p50_ms?: number | null
+	probe_latency_p50_ms?: number | null
 	window_minutes?: number
 	min_requests?: number
   status: 'operational' | 'degraded' | 'down' | 'unknown' | 'observed' | 'errors_observed' | 'collecting'

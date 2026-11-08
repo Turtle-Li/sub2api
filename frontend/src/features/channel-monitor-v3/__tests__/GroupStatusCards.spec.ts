@@ -26,7 +26,7 @@ const mountControls = () => mount(GroupStatusControls, { global: { stubs: { Sele
 const group = (overrides: Record<string, unknown> = {}): ModelStatusGroup => ({
   id: 6, name: 'GPT 按量', platform: 'openai',
   availability: { status: 'operational', source: 'probe', checked_at: '2026-11-07T09:10:00Z', probe_enabled: true,
-    probe_model: 'owner-selected', request_success_rate: 99.9, probe_success_rate: 100, cache_read_rate: null, cache_peak_hour_rate: 97.2, ttft_p50_ms: 3000,
+    probe_model: 'owner-selected', probe_metrics_version: 1, request_success_rate: 99.9, probe_success_rate: 100, cache_read_rate: null, cache_peak_hour_rate: 97.2, ttft_p50_ms: 3000,
     cache_statistic: 'best_complete_hour', cache_lookback_hours: 24, cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z',
     request_sample_state: 'ready', cache_sample_state: 'ready', cache_scope: 'shared_account_pool', probe_sample_state: 'ready', min_requests: 20, window_minutes: 180,
     cells: Array.from({ length: 18 }, (_, i) => ({ start: `2026-11-07T09:${String(i).padStart(2, '0')}:00Z`, status: i < 3 ? 'unknown' : 'operational', source: i < 3 ? 'none' : 'requests' })), ...overrides },
@@ -38,6 +38,33 @@ beforeEach(() => {
   mocks.models.mockReset().mockResolvedValue(['new-owner-model', 'deepseek-chat'])
 })
 describe('status group cards', () => {
+  it('shows labelled scheduled metrics when real request samples are missing', () => {
+    // Given an idle group with qualified scheduled-check statistics.
+    const idle = group({ request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null,
+      probe_latency_p50_ms: 4500, probe_ttft_p50_ms: 1200 })
+    // When its card is rendered.
+    const wrapper = mount(GroupStatusCard, { props: { group: idle } })
+    // Then scheduled statistics fill the card with an explicit source.
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('100.0%')
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('1.2s')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeSuccess')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeTTFT')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeScope')
+    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.waiting')
+    wrapper.unmount()
+  })
+  it('labels legacy whole-check duration without presenting it as first-token latency', () => {
+    // Given qualified legacy checks without native first-token receipts.
+    const idle = group({ request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null,
+      probe_latency_p50_ms: 4500, probe_ttft_p50_ms: null })
+    // When its card is rendered.
+    const wrapper = mount(GroupStatusCard, { props: { group: idle } })
+    // Then the actual whole-request duration is explicitly labelled.
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('4.5s')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeLatency')
+    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.probeTTFT')
+    wrapper.unmount()
+  })
   it('publishes the labelled best complete hour independently of a legacy current rate', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group({
       cache_read_rate: null, cache_peak_hour_rate: 87.2, cache_statistic: 'best_complete_hour', cache_lookback_hours: 24,
@@ -66,17 +93,45 @@ describe('status group cards', () => {
     expect(wrapper.text()).toContain('channelMonitorV3.cards.insufficient')
     wrapper.unmount()
   })
-  it('never uses a synthetic check as request latency or cache data', () => {
+  it('labels qualified probe success without inventing latency or cache data', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', cache_sample_state: 'none', request_success_rate: null, cache_read_rate: null, ttft_p50_ms: null }) } })
-    expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['—', '—'])
-    expect(wrapper.text()).not.toContain('100.0%')
+    expect(wrapper.findAll('dd').map(x => x.text())).toEqual(['100.0%', '—'])
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeSuccess')
+    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.cacheScope')
     wrapper.unmount()
   })
   it('shows real pool cache independently of idle check-group metrics and labels its scope', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null }) } })
     expect(wrapper.get('[data-metric="cache"]').text()).toBe('97.2%')
-    expect(wrapper.get('[data-metric="success"]').text()).toBe('—')
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('100.0%')
     expect(wrapper.text()).toContain('channelMonitorV3.cards.cacheScope')
+    wrapper.unmount()
+  })
+  it('prefers independently qualified real metrics and fills only missing request timing', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ ttft_p50_ms: null, probe_ttft_p50_ms: 0, probe_latency_p50_ms: 4500 }) } })
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('99.9%')
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('0.0s')
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeTTFT')
+    expect(wrapper.text()).not.toContain('channelMonitorV3.cards.probeSuccess')
+    wrapper.unmount()
+  })
+  it.each([
+    { probe_metrics_version: undefined }, { probe_metrics_version: 2 },
+    { probe_enabled: false }, { probe_sample_state: 'stale' },
+    { probe_sample_state: 'insufficient' }, { probe_sample_state: 'disabled' },
+    { probe_sample_state: 'none' },
+  ])('keeps unavailable or incompatible probe metrics unknown: %j', overrides => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null,
+      probe_ttft_p50_ms: 1200, probe_latency_p50_ms: 4500, ...overrides }) } })
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('—')
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('—')
+    wrapper.unmount()
+  })
+  it.each([-1, Infinity, NaN, 101])('rejects invalid probe percentages without altering real cache: %s', value => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ request_sample_state: 'none', probe_success_rate: value, probe_ttft_p50_ms: -1, probe_latency_p50_ms: Infinity }) } })
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('—')
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('—')
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe('97.2%')
     wrapper.unmount()
   })
   it.each([
