@@ -8,6 +8,13 @@ const platforms: Readonly<Record<string, string>> = {
   muse_images: 'Muse', workbuddy_images: '腾讯混元',
 }
 export const modelPlatform = (provider: string) => platforms[provider] || provider
+function pickerModels(models: readonly BatchImageModel[]) {
+  return models.filter(model => {
+    if (!['gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'].includes(model.id)) return true
+    const stable = models.find(candidate => candidate.provider === model.provider && candidate.id === model.id.replace(/-preview$/, ''))
+    return !stable?.capabilities || !stable.prices || JSON.stringify(stable.capabilities) !== JSON.stringify(model.capabilities) || JSON.stringify(stable.prices) !== JSON.stringify(model.prices)
+  })
+}
 export function modelPrice(model: BatchImageModel | undefined, size: string, count = 1): string {
   const price = model?.prices?.[size || model.capabilities?.default_image_size || '1K']
   if (!price || !Number.isFinite(price.min) || !Number.isFinite(price.max) || price.min < 0 || price.max < price.min) return '价格待配置'
@@ -15,19 +22,21 @@ export function modelPrice(model: BatchImageModel | undefined, size: string, cou
   return price.min === price.max ? format(price.min) : `${format(price.min)}–${format(price.max)}`
 }
 
-export function ModelPicker({ models, value, size, disabled, onChange }: {
+export function ModelPicker({ models, value, size, disabled, loading = false, onChange }: {
   readonly models: readonly BatchImageModel[]; readonly value: string; readonly size: string
-  readonly disabled: boolean; readonly onChange: (value: string) => void
+  readonly disabled: boolean; readonly loading?: boolean; readonly onChange: (value: string) => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [platform, setPlatform] = useState('')
-  const selected = models.find(model => modelIdentity(model) === value)
+  const options = pickerModels(models)
+  const original = models.find(model => modelIdentity(model) === value)
+  const selected = original && !options.includes(original) ? options.find(model => model.provider === original.provider && model.id === original.id.replace(/-preview$/, '')) : original
   const query = search.trim().toLowerCase()
   const groups = new Map<string, BatchImageModel[]>()
-  for (const model of models) {
+  for (const model of options) {
     const name = modelPlatform(model.provider)
     if (query && !`${name} ${model.id}`.toLowerCase().includes(query)) continue
     const existing = groups.get(name) || []
@@ -43,10 +52,10 @@ export function ModelPicker({ models, value, size, disabled, onChange }: {
       setOpen(true); dialog.current?.showModal(); dialog.current?.querySelector<HTMLInputElement>('input')?.focus()
     }}>
       <span className="studio-model-mark" aria-hidden="true">{(selected ? modelPlatform(selected.provider) : 'AI').slice(0, 1)}</span>
-      <span className="studio-model-copy"><small>{selected ? modelPlatform(selected.provider) : '生图模型'}</small><strong>{selected?.id || '暂无可用模型'}</strong></span>
+      <span className="studio-model-copy"><small>{selected ? modelPlatform(selected.provider) : '生图模型'}</small><strong>{selected?.id || (loading ? '正在加载模型…' : '暂无可用模型')}</strong></span>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
     </button>
-    <div className="studio-model-current-price"><span>{size || selected?.capabilities?.default_image_size || '1K'} 分辨率</span><span><strong>{modelPrice(selected, size)}</strong>{modelPrice(selected, size) !== '价格待配置' && ' 额度 / 张'}</span></div>
+    <div className="studio-model-current-price" aria-live="polite"><span>{size || selected?.capabilities?.default_image_size || '1K'} 分辨率{selected && loading ? ' · 更新中' : ''}</span><span><strong>{!selected && loading ? '正在读取价格…' : modelPrice(selected, size)}</strong>{modelPrice(selected, size) !== '价格待配置' && ' 额度 / 张'}</span></div>
     <dialog ref={dialog} className="studio-model-dialog" aria-label="选择图片模型" onCancel={event => { event.preventDefault(); close() }} onClose={() => { setOpen(false); trigger.current?.focus() }} onClick={event => { if (event.target === event.currentTarget) close() }}>
       <div className="studio-model-dialog-heading"><h2>选择图片模型</h2><button type="button" aria-label="关闭模型选择" onClick={close}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button></div>
       <input type="search" autoFocus aria-label="搜索生图模型" placeholder="搜索平台或模型" value={search} onChange={event => setSearch(event.target.value)} />
@@ -63,7 +72,7 @@ export function ModelPicker({ models, value, size, disabled, onChange }: {
           {visible.map(model => {
             const optionSize = model.capabilities?.image_sizes.includes(size) ? size : model.capabilities?.default_image_size || size || '1K'
             const price = modelPrice(model, optionSize)
-            return <button type="button" role="option" aria-selected={modelIdentity(model) === value} key={modelIdentity(model)} className="studio-model-option" onClick={() => { onChange(modelIdentity(model)); close() }}>
+            return <button type="button" role="option" aria-selected={selected && modelIdentity(model) === modelIdentity(selected)} key={modelIdentity(model)} className="studio-model-option" onClick={() => { onChange(modelIdentity(model)); close() }}>
             <span className="studio-model-option-copy"><strong>{model.id}</strong><small>{modelPlatform(model.provider)}{model.capabilities?.max_reference_images ? ` · 最多 ${model.capabilities.max_reference_images} 张参考图` : ''}</small></span>
             <span className="studio-model-option-price"><strong>{price}</strong><small>{price === '价格待配置' ? `${optionSize} 分辨率` : `${optionSize} · 额度 / 张`}</small></span>
             <svg className="studio-model-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>

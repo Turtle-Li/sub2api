@@ -86,3 +86,36 @@ func TestImageStudioCatalogueMergesEligibleAccountPriceRange(t *testing.T) {
 		require.Equal(t, BatchImageModelPriceRange{Min: 3, Max: 6}, model.Prices["1K"])
 	}
 }
+
+func TestImageStudioCatalogueUsesConfiguredOpenAIImagePrice(t *testing.T) {
+	for _, configured := range []bool{true, false} {
+		t.Run(map[bool]string{true: "configured group", false: "unpriced group"}[configured], func(t *testing.T) {
+			s, _, _, _, _ := newTestBatchImagePublicService(true)
+			id, unit := int64(7), 0.402
+			group := &Group{ID: id, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard,
+				AllowImageGeneration: true, AllowBatchImageGeneration: true, RateMultiplier: 1,
+				BatchImageDiscountMultiplier: 1, BatchImageHoldMultiplier: 1}
+			if configured {
+				group.ImagePrice1K = &unit
+			}
+			s.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{id: group}}
+			account := testBatchImageMappedAccount(303, AccountTypeAPIKey, map[string]any{"gpt-image-2.5-flare": "gpt-image-2.5-flare"})
+			account.Platform = PlatformOpenAI
+			s.AccountRepo = &publicBatchImageAccountRepo{accounts: []Account{account}}
+			s.ProviderRegistry = NewBatchImageProviderRegistry(&publicBatchImageProvider{name: BatchImageProviderOpenAI})
+			billing := &BillingService{pricingService: &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+				"gpt-image-2.5-flare": {OutputCostPerImageToken: 30e-6},
+			}}}
+			s.Pricing = &BatchImageModelPricingResolver{Resolver: NewModelPricingResolver(nil, billing)}
+			got, err := s.ListModels(t.Context(), BatchImageOwner{UserID: 10, GroupID: &id})
+			require.NoError(t, err)
+			if !configured {
+				require.Empty(t, got.Data, "unknown token conversion must never invent a flat price")
+				return
+			}
+			require.Len(t, got.Data, 1, "configured image quotes must bypass the global token-only precheck")
+			require.Equal(t, "gpt-image-2.5-flare", got.Data[0].ID)
+			require.Equal(t, BatchImageModelPriceRange{Min: unit, Max: unit}, got.Data[0].Prices["1K"])
+		})
+	}
+}

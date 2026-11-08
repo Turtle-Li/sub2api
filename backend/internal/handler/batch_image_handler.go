@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -161,7 +163,23 @@ func (h *BatchImageHandler) Models(c *gin.Context) {
 	if apiKey, ok := middleware.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil {
 		got.Data = filterBatchImageModelsByAllowlist(got.Data, apiKey.Group.ModelAllowlist)
 	}
-	c.JSON(http.StatusOK, got)
+	body, err := json.Marshal(got)
+	if err != nil {
+		batchImageError(c, err)
+		return
+	}
+	digest := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(digest[:]) + `"`
+	c.Header("Cache-Control", "private, no-cache")
+	c.Writer.Header().Add("Vary", "Authorization, X-API-Key-ID")
+	c.Header("ETag", etag)
+	for _, tag := range strings.Split(c.GetHeader("If-None-Match"), ",") {
+		if strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(tag), "W/")) == etag {
+			c.Status(http.StatusNotModified)
+			return
+		}
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }
 
 // filterBatchImageModelsByAllowlist 按分组模型白名单过滤批量生图模型列表。

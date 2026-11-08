@@ -9,16 +9,16 @@ interface Props {
  readonly setImageSize: (size: string) => void; readonly setAspectRatio: (ratio: string) => void; readonly referenceError: string;
  refs: string[]; removeRef: (index: number) => void; prompt: string; setPrompt: (text: string) => void;
  editing: boolean; upload: (files: FileList | null) => void; models: BatchImageModel[];
- model: string; setModel: (model: string) => void; busy: boolean; submit: () => void;
+ model: string; modelLoading?: boolean; setModel: (model: string) => void; busy: boolean; submit: () => void;
  batchMode: boolean; setBatchMode: (batch: boolean) => void;
 }
-export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, model, setModel, busy, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError, batchMode, setBatchMode }: Props) {
+export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, modelLoading, model, setModel, busy, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError, batchMode, setBatchMode }: Props) {
  const count = batchMode && !editing ? prompt.split(/\n\s*---\s*\n/).filter(text => text.trim()).length : prompt.trim() ? 1 : 0
  const selected = models.find(item => modelIdentity(item) === model)
  const estimate = modelPrice(selected, imageSize, Math.max(1, count))
  return <section data-input-bar className="studio-input">
   <div className="studio-input-fields">
-   <ModelPicker models={models} value={model} size={imageSize} disabled={busy} onChange={setModel} />
+   <ModelPicker models={models} value={model} size={imageSize} disabled={busy} loading={modelLoading} onChange={setModel} />
    {!models.length && <p className="studio-muted">管理员配置可用模型后，即可在这里开始创作。</p>}
    {!editing && <div className="studio-tabs studio-mode" aria-label="创作模式"><button disabled={busy} aria-pressed={!batchMode} onClick={() => setBatchMode(false)}>单张创作</button><button disabled={busy} aria-pressed={batchMode} onClick={() => setBatchMode(true)}>批量创作</button></div>}
    <div className="studio-prompt-heading"><label htmlFor="studio-prompt">{editing ? '修改描述' : '画面描述'}</label><span className="studio-muted">{prompt.length} 字</span></div>

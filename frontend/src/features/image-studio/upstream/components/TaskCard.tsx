@@ -3,7 +3,7 @@ import React from 'react'
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { taskDisplay, type StudioTask, type studioAPI } from '../../api'
 import { useNearViewport } from '../hooks/useNearViewport'
-import { CodeIcon } from './icons'
+import { modelPlatform } from '../../ModelPicker'
 import ViewportTooltip from './ViewportTooltip'
 function TaskActionButton({
   tooltip,
@@ -51,7 +51,6 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
  const [imageError, setImageError] = useState('')
  const display = taskDisplay(record)
  const task = { status: ['failed', 'cancelled', 'output_deleted'].includes(display.status) ? 'error' : ['success', 'completed'].includes(display.status) || record.item.image_count ? 'done' : 'running', outputImages: Array.from({length: record.item.image_count}, (_, i) => `${record.id}/${i}`), apiProvider: record.job.provider, apiProfileName: '', apiModel: record.job.model }
- const showModel = Boolean(task.apiModel)
  const isInterrupted = display.status === 'cancelled'
  useEffect(() => {
    if (!nearViewport || !record.item.image_count || record.job.status !== 'completed') return
@@ -66,7 +65,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
    <div ref={cardRef} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
       <div className="flex h-40">
         {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+        <div className="studio-card-preview w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
           {task.status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
@@ -117,8 +116,9 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
                 src={thumbSrc}
                 data-image-id={task.outputImages[0]}
                 data-output-image-ids={task.outputImages.join(',')}
-                className="saveable-image w-full h-full object-cover"
+                className="saveable-image w-full h-full object-contain"
                 loading="lazy"
+                decoding="async"
                 alt={record.item.prompt_preview || "生成图片"}
               />
               {(task.outputImages.length > 1) && (
@@ -147,50 +147,14 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
         </div>
 
         {/* 右侧信息区域 */}
-        <div className="flex-1 p-3 flex flex-col min-w-0">
-          <div className="flex-1 min-h-0 mb-2 overflow-hidden">
+        <div className="studio-card-body flex-1 p-3 flex flex-col min-w-0">
+          <div className="studio-card-caption flex-1 min-h-0 overflow-hidden">
             <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">{record.item.prompt_preview || '(无提示词)'}</p>
             {display.message && <p className="text-xs text-red-400 line-clamp-2">{display.message}</p>}
             {imageError && <p className="text-xs text-red-400">{imageError}</p>}
           </div>
-          <div className="mt-auto flex flex-col gap-1.5">
-            {/* 参数与信息：横向滚动 */}
-            <div 
-              data-tag-scroll-area
-              className="flex overflow-x-auto hide-scrollbar pt-0.5 gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2"
-              onTouchStart={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              onTouchEnd={(e) => e.stopPropagation()}
-              onTouchCancel={(e) => e.stopPropagation()}
-            >
-              {/* API Name */}
-              {(task.apiProfileName || task.apiProvider) && (
-                <span 
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
-                  title={task.apiProfileName || task.apiProvider}
-                >
-                  <CodeIcon className="w-3 h-3 flex-shrink-0 text-gray-400" />
-                  <span className="truncate max-w-[8rem]">
-                    {task.apiProfileName || task.apiProvider}
-                  </span>
-                </span>
-              )}
-              {/* Model */}
-              {showModel && (
-                <span 
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
-                  title={task.apiModel}
-                >
-                  <svg className="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-                  </svg>
-                  <span className="truncate max-w-[8rem]">
-                    {task.apiModel}
-                  </span>
-                </span>
-              )}
-
-            </div>
+          <div className="studio-card-footer mt-auto flex items-center gap-1.5">
+            <span className="studio-card-model" title={`${modelPlatform(task.apiProvider)} · ${task.apiModel}`}>{task.apiModel || modelPlatform(task.apiProvider)}</span>
             {/* 操作按钮 */}
             <div
               data-tag-scroll-area
@@ -204,7 +168,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
               <TaskActionButton
                 tooltip="查看详情"
                 onClick={onOpen}
-                className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                className="studio-card-action rounded-md transition"
               >
                 <svg
                   className="w-4 h-4"
@@ -223,7 +187,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
               <TaskActionButton
                 tooltip="继续改图"
                 onClick={onEditOutputs}
-                className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition disabled:opacity-30"
+                className="studio-card-action rounded-md transition"
                 disabled={!task.outputImages?.length}
               >
                 <svg

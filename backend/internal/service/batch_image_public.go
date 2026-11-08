@@ -896,12 +896,21 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				if !ok || modelPlatform != batchImageProviderPlatform(providerName) {
 					continue
 				}
+				identity := providerName + ":" + model
+				template, priced := priceTemplates[identity]
+				if !priced {
+					template = s.cataloguePrices(ctx, owner, providerName, model, nil)
+					priceTemplates[identity] = template
+				}
+				// Admission uses the same group/size quote as submission. A global
+				// token price need not have a flat conversion when a group card exists.
+				if len(template) == 0 {
+					continue
+				}
 				if providerName == BatchImageProviderMuse || providerName == BatchImageProviderWorkBuddy || isImageBridgeProvider(providerName) {
 					if !s.nativeImageCatalogPriceAvailable(ctx, owner, providerName, model, &account) {
 						continue
 					}
-				} else if _, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: providerName, Model: model}); err != nil {
-					continue
 				}
 				if !batchImageAccountSupportsProviderModel(providerName, &account, model) {
 					continue
@@ -915,12 +924,6 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				}
 				if pricesByProvider[providerName][model] == nil {
 					pricesByProvider[providerName][model] = make(map[string]BatchImageModelPriceRange)
-				}
-				identity := providerName + ":" + model
-				template, priced := priceTemplates[identity]
-				if !priced {
-					template = s.cataloguePrices(ctx, owner, providerName, model, nil)
-					priceTemplates[identity] = template
 				}
 				accountPrices := make(map[string]BatchImageModelPriceRange, len(template))
 				for size, price := range template {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { studioAPI, type StudioTask } from '../api'
 import { modelIdentity, workspaceAPI } from '../workspaceAPI'
+import { cacheStudioModels, cachedStudioModels } from '../cache'
 
 vi.mock('../api', () => ({ studioAPI: vi.fn() }))
 const model = (id: string, provider = 'fixture') => ({ id, provider, object: 'model' })
@@ -8,8 +9,75 @@ const task = (id: string) => ({ id: `${id}/one`, job: { id, model: 'image', prov
 function client(models = [model('image')]) {
   return { models: vi.fn(async () => models), tasks: vi.fn(async (_cursor = '') => ({ tasks: [] as StudioTask[], itemContinuations: [], nextCursor: null as string | null })), items: vi.fn(), image: vi.fn(), thumbnail: vi.fn(), cancel: vi.fn(), refreshPending: vi.fn(async (tasks: StudioTask[]) => tasks), submit: vi.fn() }
 }
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear() })
 describe('model-directed workspace', () => {
+  it('shows available works before a slow history channel completes, retaining its cursor', async () => {
+    const fast = client(), slow = client(), a = task('fast'), b = task('slow')
+    fast.tasks.mockResolvedValue({ tasks: [a], itemContinuations: [], nextCursor: null })
+    fast.thumbnail.mockResolvedValue(new Blob(['cover']))
+    let finish!: (page: Awaited<ReturnType<typeof slow.tasks>>) => void
+    slow.tasks.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    vi.mocked(studioAPI).mockImplementation(key => key === 1 ? fast : slow)
+    const api = workspaceAPI([1, 2], new AbortController().signal)
+    const update = vi.fn()
+    const pending = api.tasks('', undefined, update)
+    await vi.waitFor(() => expect(update).toHaveBeenCalledWith([a]))
+    await api.thumbnail(a)
+    expect(fast.thumbnail).toHaveBeenCalledWith(a, expect.any(AbortSignal))
+    finish({ tasks: [b], itemContinuations: [], nextCursor: 'next-slow' })
+    const page = await pending
+    expect(page.tasks).toEqual([a, b])
+    expect(JSON.parse(page.nextCursor!)).toEqual({ 1: null, 2: 'next-slow' })
+  })
+  it('publishes each channel without waiting for a slower catalogue', async () => {
+    const fast = client([model('fast')]), slow = client()
+    let finish!: (models: ReturnType<typeof model>[]) => void
+    slow.models.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    vi.mocked(studioAPI).mockImplementation(key => key === 1 ? fast : slow)
+    const api = workspaceAPI([1, 2], new AbortController().signal)
+    const update = vi.fn()
+    const pending = api.models(update)
+    await vi.waitFor(() => expect(update).toHaveBeenCalledWith([model('fast')]))
+    finish([model('slow')])
+    expect(await pending).toEqual([model('fast'), model('slow')])
+  })
+  it('shows cached models immediately but never authorizes a POST from stale admission', async () => {
+    cacheStudioModels(1, 1, [model('old')])
+    const source = client()
+    source.models.mockRejectedValue({ status: 403 })
+    vi.mocked(studioAPI).mockReturnValue(source)
+    const api = workspaceAPI([1], new AbortController().signal, { userId: 1, modelKeys: [1], historyKeys: [] })
+    expect(api.cachedModels()).toEqual([model('old')])
+    await expect(api.submit({ provider: 'fixture', model: 'old', items: [] }, 'attempt')).rejects.toThrow()
+    expect(source.submit).not.toHaveBeenCalled()
+    expect(api.cachedModels()).toEqual([])
+    expect(cachedStudioModels(1, 1)).toBeUndefined()
+  })
+  it('does not let an older refresh overwrite a newer cached directory', async () => {
+    const source = client()
+    let finish!: (models: ReturnType<typeof model>[]) => void
+    source.models.mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValueOnce([model('new')])
+    vi.mocked(studioAPI).mockReturnValue(source)
+    const api = workspaceAPI([1], new AbortController().signal, { userId: 1, modelKeys: [1], historyKeys: [] })
+    const old = api.models()
+    api.refreshDirectory()
+    await api.models()
+    finish([model('old')])
+    await old
+    expect(api.cachedModels()).toEqual([model('new')])
+    expect(cachedStudioModels(1, 1)).toEqual([model('new')])
+  })
+  it('keeps cached metadata on a transient read failure while blocking unverified generation', async () => {
+    cacheStudioModels(1, 1, [model('old')])
+    const source = client()
+    source.models.mockRejectedValue({ status: 503 })
+    vi.mocked(studioAPI).mockReturnValue(source)
+    const api = workspaceAPI([1], new AbortController().signal, { userId: 1, modelKeys: [1], historyKeys: [] })
+    expect(await api.models()).toEqual([model('old')])
+    expect(api.warnings().join()).toContain('最近记录')
+    await expect(api.submit({ provider: 'fixture', model: 'old', items: [] }, 'attempt')).rejects.toThrow()
+    expect(source.submit).not.toHaveBeenCalled()
+  })
   it('discovers eligible model keys and reads historical keys independently', async () => {
     // Given an image key, a historical disabled-group key and an unrelated key.
     const generation = client(), history = client(), unrelated = client()

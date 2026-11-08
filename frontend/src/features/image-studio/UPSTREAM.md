@@ -17,8 +17,8 @@ The exact retained line ranges and both SHA256 hashes are recorded in
 
 | Source | Retained behavior / integration |
 | --- | --- |
-| `components/TaskCard.tsx:25–63, 425–746` | TaskActionButton tooltip lifecycle; original h-40 horizontal image/content rendering, pending/error/success render branches, prompt clamp, metadata rail and original SVG actions. Server task props replace local store/cache. |
-| `components/TaskGrid.tsx:341–385` | Grid wrapper, 1/2/3 responsive column layout, measured visible slice and padding; props replace local-store filters/selection. |
+| `components/TaskCard.tsx:25–63, 425–746` | TaskActionButton tooltip lifecycle, pending/error/success render branches, prompt clamp and original SVG actions. Server task props replace local store/cache. The host replaces horizontal geometry/metadata chips with an uncropped square canvas and compact footer. |
+| `components/TaskGrid.tsx:341–385` | Grid wrapper, measured visible slice and padding; props replace local-store filters/selection. Host CSS chooses available-width columns and two phone columns; measurement remains authoritative. |
 | `hooks/useVirtualGrid.ts`, `lib/virtualGrid.ts` | Verbatim measurement, resize observation, anchored scrolling, overscan and range arithmetic. `pageScroll.ts` binds the host's document scroll. |
 | `hooks/useNearViewport.ts` | Verbatim shared IntersectionObserver gates authenticated card-image reads. |
 | `components/Lightbox.tsx:13–25, 325–918` | Original ref-based transform state, clamp, wheel anchoring, mouse drag, double click, pinch, pan, horizontal swipe thresholds, tap suppression, image-change reset, timers/listener cleanup, image/navigation/action rendering. Props replace global local-image store. |
@@ -160,3 +160,10 @@ Server ownership, retention and deletion gates precede cache/ETag responses;
 originals stay explicit. No VSO source was copied. Implementation, matching tests,
 storage requirements and archive-only differences are recorded in
 `docs/features/IMAGE_STUDIO_PERSISTENT_THUMBNAILS_20261108.md`.
+
+The November 9 entry cache contains owner/key-scoped display metadata only;
+fresh discovery still selects generation routes. Per-key model/first-gallery
+updates preserve the original ownership and cursor contracts. Conditional reads
+recheck authorization before 304; Gemini aliases are hidden only when equivalent.
+See `docs/features/IMAGE_STUDIO_CATALOGUE_CACHE_20261109.md` for limits, reference
+observations, intentional card geometry changes and the unavailable Gemini 4 CLI.

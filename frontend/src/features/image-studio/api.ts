@@ -1,7 +1,7 @@
 import apiClient from '@/api/client'
 import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
 
-export interface StudioKey { readonly id: number; readonly name: string; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean; readonly can_generate?: boolean; readonly has_history?: boolean }
+export interface StudioKey { readonly id: number; readonly name: string; readonly group_id?: number | null; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean; readonly can_generate?: boolean; readonly has_history?: boolean }
 export interface ItemContinuation { readonly job: BatchImageJob; readonly cursor: number }
 export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem }
 export interface GalleryFilters { readonly status: string; readonly search: string; readonly root?: string }

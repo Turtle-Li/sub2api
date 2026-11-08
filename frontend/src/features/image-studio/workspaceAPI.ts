@@ -1,12 +1,13 @@
 import type { BatchImageJob, BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
 import { studioAPI, type StudioTask, type GalleryFilters } from './api'
+import { cachedStudioModels, cacheStudioModels, forgetStudioModels } from './cache'
 
 export const modelIdentity = (model: Pick<BatchImageModel, 'provider' | 'id'>) => `${model.provider}:${model.id}`
 type Client = ReturnType<typeof studioAPI>
 
 // Discovery is read-only. All mutations and assets still pass through the original
 // key-scoped session API; a model choice never grants access to another key's task.
-export function workspaceAPI(keys: readonly number[], signal: AbortSignal, access?: { readonly modelKeys: readonly number[]; readonly historyKeys: readonly number[] }) {
+export function workspaceAPI(keys: readonly number[], signal: AbortSignal, access?: { readonly modelKeys: readonly number[]; readonly historyKeys: readonly number[]; readonly userId?: number }) {
   const clients = new Map([...new Set(keys)].sort((a, b) => a - b).map(key => [key, studioAPI(key, signal)]))
   const modelKeys = new Set(access?.modelKeys ?? keys)
   const historyKeys = new Set(access?.historyKeys ?? keys)
@@ -18,22 +19,41 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
   const thumbnails = new Map<string, Blob>()
   let thumbnailBytes = 0
   let directory: Promise<{ key: number; models: BatchImageModel[] }[]> | undefined
+  let directoryVersion = 0
+  const displayed = new Map([...clients.keys()].filter(key => modelKeys.has(key)).map(key => [key, cachedStudioModels(access?.userId, key) || []]))
+  const listeners = new Set<(models: BatchImageModel[]) => void>()
+  function visibleModels() {
+    const unique = new Map<string, BatchImageModel>()
+    for (const [, models] of [...displayed].sort(([a], [b]) => a - b)) for (const model of models) if (!unique.has(modelIdentity(model))) unique.set(modelIdentity(model), model)
+    return [...unique.values()]
+  }
+  function publish() { for (const listener of listeners) listener(visibleModels()) }
   let warnings: string[] = []
   let historyWarnings: string[] = []
   async function discover() {
     if (!directory) directory = (async () => {
+      const version = directoryVersion
       const entries = [...clients.entries()].filter(([key]) => modelKeys.has(key))
       const results: { key: number; models: BatchImageModel[] }[] = []
       warnings = []
       // Avoid unbounded catalogue requests for users with many API keys.
       for (let start = 0; start < entries.length; start += 6) {
         await Promise.all(entries.slice(start, start + 6).map(async ([key, client]) => {
-          try { results.push({ key, models: await client.models() }) }
+          try {
+            const models = await client.models()
+            signal.throwIfAborted()
+            results.push({ key, models })
+            if (version === directoryVersion) {
+              displayed.set(key, models); cacheStudioModels(access?.userId, key, models); publish()
+            }
+          }
           catch (error) {
             if (signal.aborted) throw error
             const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined
             // Non-image keys are expected to fail image admission.
-            if (status !== 403) warnings.push('部分模型暂时无法读取，请稍后刷新。')
+            if (version !== directoryVersion) return
+            if (status === 403) { displayed.delete(key); forgetStudioModels(access?.userId, key); publish() }
+            else warnings.push('部分模型暂时无法更新，显示最近记录；提交时会重新校验。')
           }
         }))
       }
@@ -60,17 +80,18 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
     return key
   }
   return {
-    refreshDirectory: () => { directory = undefined },
+    refreshDirectory: () => { directoryVersion++; directory = undefined },
+    cachedModels: visibleModels,
     warnings: () => [...new Set([...warnings, ...historyWarnings])],
     async canContinue(task: StudioTask, model: BatchImageModel) {
       try { await route(model, task.job.parent_batch_id || task.job.id); return true } catch { return false }
     },
-    async models() {
-      const unique = new Map<string, BatchImageModel>()
-      for (const entry of await discover()) for (const model of entry.models) if (!unique.has(modelIdentity(model))) unique.set(modelIdentity(model), model)
-      return [...unique.values()]
+    async models(onUpdate?: (models: BatchImageModel[]) => void) {
+      if (onUpdate) listeners.add(onUpdate)
+      try { await discover(); return visibleModels() }
+      finally { if (onUpdate) listeners.delete(onUpdate) }
     },
-    async tasks(cursor = '', filters?: GalleryFilters) {
+    async tasks(cursor = '', filters?: GalleryFilters, onUpdate?: (tasks: StudioTask[]) => void) {
       // History does not wait for every model catalogue to finish.
       const entries = [...clients.entries()].filter(([key]) => historyKeys.has(key))
       historyWarnings = []
@@ -82,8 +103,10 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
           if (cursor && offsets[key] === null) { next[key] = null; return }
           try {
             const page = filters ? await client.tasks(offsets[key] || '', filters) : await client.tasks(offsets[key] || '')
+            signal.throwIfAborted()
             remember(key, page.tasks)
             pages.push(page); next[key] = page.nextCursor
+            onUpdate?.(pages.flatMap(page => page.tasks))
           } catch (error) {
             if (signal.aborted) throw error
             const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined
