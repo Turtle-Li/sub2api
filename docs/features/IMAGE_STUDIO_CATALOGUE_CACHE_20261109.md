@@ -76,11 +76,13 @@ Pinned source and test references remain 88lin `5523a592af054bfe4cbee76c2ef8d866
 and VSO `4edef85ab3716fd43989b4a49561a148ba500d93`, as recorded in `UPSTREAM.md`
 and the November 8 gallery contract.
 
-The owner requested Gemini 4 through Antigravity. The configured official `agy`
-1.5.3 CLI listed the model but the actual request failed non-retryably with 404:
-the current account group does not support `gemini-4-argon`. Calls stopped.
-These changes are Codex implementation and visual verification, not a delivered
-Gemini 4 design. The unavailable Claude channel was not called again.
+The original cache/gallery release was implemented and visually verified by
+Codex. Its first official `agy` 1.5.3 request returned a non-retryable 404 through
+an inherited Gemini API provider override. That response did not establish native
+Antigravity model unavailability. The subsequent owner-requested native Gemini 4
+patch and UI verification are recorded in
+[the follow-up contract](IMAGE_STUDIO_GEMINI4_UI_20261109.md). The unavailable
+Claude channel was not called again.
 
 ## Verification scope
 

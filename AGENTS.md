@@ -73,6 +73,8 @@
   group-priced Image admission follow
   `docs/features/IMAGE_STUDIO_CATALOGUE_CACHE_20261109.md`; cached display never
   authorizes generation and conditional reads must recheck current admission.
+  The Gemini 4 card/picker refinement and corrected native Antigravity invocation
+  are recorded in `docs/features/IMAGE_STUDIO_GEMINI4_UI_20261109.md`.
   For eligible-key loading, Gemini output-token conversion and native per-model
   CNY tariffs/activation, read
   `docs/features/IMAGE_STUDIO_LOAD_AND_NATIVE_PRICES_20261108.md`.

@@ -62,7 +62,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
    return () => { active = false; controller.abort(); if (url) URL.revokeObjectURL(url) }
  }, [nearViewport, record, api])
  return <div className="relative rounded-xl">
-   <div ref={cardRef} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
+   <div ref={cardRef} data-status={isInterrupted ? 'cancelled' : task.status} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="studio-card-preview w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -143,7 +143,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
               />
             </svg>
           )}
-          <span className="absolute top-1.5 left-1.5 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">{display.label}</span>
+          <span className="studio-card-status absolute top-1.5 left-1.5 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">{display.label}</span>
         </div>
 
         {/* 右侧信息区域 */}
