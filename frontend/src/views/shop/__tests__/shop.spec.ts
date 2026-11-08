@@ -142,6 +142,7 @@ describe('automatic day-pass surfaces', () => {
     expect(article.text()).toContain('https://ds.turtleligpt.com/v1')
     expect(article.text()).toContain('deepseek-v4.1-flash')
     expect(article.text()).toContain('deepseek-v4-pro')
+    expect(article.text()).toContain('北京时间（UTC+8）')
     expect(article.text()).not.toContain('outlook')
     for (const link of wrapper.findAll('a[href^="#"]')) {
       expect(article.element.contains(wrapper.get(link.attributes('href')).element)).toBe(true)

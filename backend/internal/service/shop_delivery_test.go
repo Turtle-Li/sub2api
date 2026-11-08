@@ -10,6 +10,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,9 +79,8 @@ func TestShopLegacyDeliveryPresentationKeepsStoredCiphertext(t *testing.T) {
 	claim, err := s.claimDaypass(ctx, o.ID, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, s.deliverDaypass(ctx, claim))
-	detail, err := s.Order(ctx, o.ID, o.UserID, false)
-	require.NoError(t, err)
-	original := detail.DeliveryContent + "\n无需注册或登录New API。"
+	original := "API Key：sk-synthetic-legacy-key\n到期时间：2026-11-08 20:15:53（UTC）\n无需注册或登录New API。"
+	want := "API Key：sk-synthetic-legacy-key\n到期时间：2026-11-09 04:15:53（北京时间 UTC+8）"
 	ciphertext, err := s.encrypt(o.ID, "delivery", 1, original)
 	require.NoError(t, err)
 	f := s.client.ShopFulfillment.Query().Where(shopfulfillment.OrderIDEQ(o.ID)).OnlyX(ctx)
@@ -90,7 +90,7 @@ func TestShopLegacyDeliveryPresentationKeepsStoredCiphertext(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.RecoverNotifications(ctx))
 	// Then both presentations omit only that sentence without rewriting delivery history.
-	require.Equal(t, detail.DeliveryContent, visible.DeliveryContent)
+	require.Equal(t, want, visible.DeliveryContent)
 	stored := s.client.ShopFulfillment.GetX(ctx, f.ID)
 	require.Equal(t, ciphertext, stored.DeliveryCiphertext)
 	decrypted, err := s.decrypt(o.ID, "delivery", 1, stored.DeliveryCiphertext)
@@ -99,6 +99,21 @@ func TestShopLegacyDeliveryPresentationKeepsStoredCiphertext(t *testing.T) {
 	mail := s.email.(*shopTestMail)
 	require.Len(t, mail.bodies, 1)
 	require.NotContains(t, mail.bodies[0], "无需注册或登录New API。")
+	require.Contains(t, mail.bodies[0], "2026-11-09 04:15:53（北京时间 UTC+8）")
+	require.NotContains(t, mail.bodies[0], "（UTC）")
 	require.Contains(t, mail.bodies[0], "#usage-guide")
 	require.Equal(t, original, shopDeliveryContent(ShopProduct{FulfillmentMode: ShopAccountDelivery}, original), "manual delivery text is not rewritten")
+}
+
+func TestShopDeliveryExpiryUsesBeijingTimeAcrossDateBoundary(t *testing.T) {
+	// Given a native snapshot and an old UTC expiry crossing into the next Beijing day.
+	p := ShopProduct{PaymentActions: []shopaction.Binding{{Adapter: shopaction.Native}}}
+	legacy := "API Key：synthetic\n到期时间：2026-11-08 20:15:53（UTC）\n无需注册或登录New API。"
+	// When the existing encrypted delivery is presented to the buyer or email renderer.
+	got := shopDeliveryContent(p, legacy)
+	// Then only presentation changes, exactly once, without shifting the expiry instant.
+	require.Equal(t, "API Key：synthetic\n到期时间：2026-11-09 04:15:53（北京时间 UTC+8）", got)
+	require.Equal(t, got, shopDeliveryContent(p, got))
+	require.Equal(t, legacy, shopDeliveryContent(ShopProduct{FulfillmentMode: ShopAccountDelivery}, legacy))
+	require.Equal(t, "到期时间：invalid（UTC）", shopDeliveryContent(p, "到期时间：invalid（UTC）"))
 }
