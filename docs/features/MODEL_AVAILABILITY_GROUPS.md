@@ -276,7 +276,13 @@ from certifying a different group. This is provider readiness, not customer
 client/admission certification; ordinary client restrictions remain in force.
 Selected account model mappings to media are rejected before submission.
 
-Claude probes use a greeting and `max_tokens: 1`. Ordinary API-key accounts
+Claude probes retain the short `Reply with 1.` instruction and `max_tokens: 1`;
+restricted API-key accounts retain their native test greeting. A live bare-`Hi`
+candidate returned usage but failed completion validation, so lower usage alone
+does not qualify a probe as healthy. Rejected attempts log only HTTP status,
+byte count, booleans and a fixed structural verdict (`empty`, `incomplete`,
+`provider_error` or `valid`), never payloads, headers or error strings.
+Ordinary API-key accounts
 send no system prompt or client metadata. OAuth/setup-token accounts keep the
 normal OAuth forwarding, fingerprint, header and beta handling. Only the private
 operator-runner context selects the existing minimal billing-attribution and

@@ -33,10 +33,9 @@ func channelMonitorV3ProbeRequest(group *Group, account *Account, model string) 
 }
 
 func channelMonitorV3ProbeBody(platform, model string) []byte {
+	// Keep the proven one-token reply instruction: a bare greeting did not
+	// reliably pass completion validation with the one-token output budget.
 	prompt := "Reply with 1."
-	if platform == PlatformAnthropic {
-		prompt = "Hi"
-	}
 	payload := map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "stream": true, "max_tokens": 1}
 	if domain.UsesOpenAIGateway(platform) {
 		delete(payload, "max_tokens")

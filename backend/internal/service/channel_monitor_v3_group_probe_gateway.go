@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -137,7 +138,14 @@ func (p *channelMonitorV3GatewayProbe) checkAccount(ctx context.Context, group *
 		out.Category = "timeout"
 		return
 	}
-	if err != nil || writer.status >= 400 || writer.overflow || !channelMonitorV3ProbeResponseOK(writer.body.Bytes()) {
+	verdict := channelMonitorV3ProbeResponseVerdict(writer.body.Bytes())
+	if err != nil || writer.status >= 400 || writer.overflow || verdict != "valid" {
+		// Internal structural diagnostics only: never log response text, headers
+		// or the forwarding error, which may contain provider credentials.
+		slog.WarnContext(ctx, "group_probe_response_rejected", "group_id", group.ID,
+			"account_id", account.ID, "http_status", writer.status,
+			"forward_error", err != nil, "response_bytes", writer.body.Len(),
+			"overflow", writer.overflow, "response_verdict", verdict)
 		return
 	}
 	if firstTokenMs != nil && *firstTokenMs >= 0 {
@@ -200,6 +208,10 @@ func channelMonitorV3ProbeCacheReadTokens(body []byte, input, cached int64) *int
 // reasoning-only answer at length; this proves connectivity without requiring
 // a larger paid budget. Empty streams and provider errors still fail.
 func channelMonitorV3ProbeResponseOK(body []byte) bool {
+	return channelMonitorV3ProbeResponseVerdict(body) == "valid"
+}
+
+func channelMonitorV3ProbeResponseVerdict(body []byte) string {
 	text, terminal, bad := false, false, false
 	reasoning, budgetEnd := false, false
 	inspect := func(raw string) {
@@ -235,7 +247,16 @@ func channelMonitorV3ProbeResponseOK(body []byte) bool {
 			}
 		}
 	}
-	return (text || reasoning && budgetEnd) && terminal && !bad
+	if bad {
+		return "provider_error"
+	}
+	if !terminal {
+		return "incomplete"
+	}
+	if !(text || reasoning && budgetEnd) {
+		return "empty"
+	}
+	return "valid"
 }
 
 type channelMonitorV3ProbeWriter struct {

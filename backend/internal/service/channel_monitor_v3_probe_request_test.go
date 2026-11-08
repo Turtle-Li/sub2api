@@ -73,7 +73,11 @@ func TestChannelMonitorV3ProbeAnthropicKeepsWireInputSmall(t *testing.T) {
 				require.Len(t, blocks, 1)
 				content = blocks[0].Get("text")
 			}
-			require.LessOrEqual(t, len(content.String()), 3, "connectivity needs only a greeting")
+			if tc.kind == AccountTypeAPIKey && tc.restricted {
+				require.Equal(t, "hi", content.String(), "retain the native restricted-account test")
+			} else {
+				require.Equal(t, "Reply with 1.", content.String(), "retain the proven one-token response instruction")
+			}
 			system := gjson.GetBytes(upstream.lastBody, "system")
 			if account.IsOAuth() {
 				require.Equal(t, "Bearer oauth-token", getHeaderRaw(upstream.lastReq.Header, "Authorization"))
@@ -102,6 +106,22 @@ func TestChannelMonitorV3ProbeAnthropicKeepsWireInputSmall(t *testing.T) {
 				require.False(t, system.Exists())
 				require.False(t, gjson.GetBytes(upstream.lastBody, "metadata").Exists())
 			}
+		})
+	}
+}
+
+func TestChannelMonitorV3ProbeResponseVerdictHasNoResponseContent(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, verdict string
+	}{
+		{"empty", `data: {"type":"message_stop"}`, "empty"},
+		{"incomplete", `data: {"type":"content_block_delta","delta":{"text":"private-text"}}`, "incomplete"},
+		{"provider_error", `data: {"type":"error","error":{"message":"private-token"}}`, "provider_error"},
+		{"valid", "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"private-text\"}}\ndata: {\"type\":\"message_stop\"}", "valid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.verdict, channelMonitorV3ProbeResponseVerdict([]byte(tc.body)))
+			require.Equal(t, tc.verdict == "valid", channelMonitorV3ProbeResponseOK([]byte(tc.body)))
 		})
 	}
 }
