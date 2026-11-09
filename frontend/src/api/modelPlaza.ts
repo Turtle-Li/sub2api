@@ -122,9 +122,11 @@ export interface PlazaGroupAvailability {
 	window_minutes?: number
 	min_requests?: number
   status: 'operational' | 'degraded' | 'down' | 'unknown' | 'observed' | 'errors_observed' | 'collecting'
-  source: 'requests' | 'probe' | 'none'
+  source: 'requests' | 'probe' | 'shared_probe' | 'none'
   checked_at: string | null
   probe_enabled: boolean
+  shared_probe?: boolean
+  shared_probe_source_name?: string
   probe_model?: string
   request_success_rate: number | null
   probe_success_rate: number | null

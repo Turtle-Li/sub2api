@@ -38,6 +38,49 @@ beforeEach(() => {
   mocks.models.mockReset().mockResolvedValue(['new-owner-model', 'deepseek-chat'])
 })
 describe('status group cards', () => {
+  it('labels shared upstream evidence without borrowing cache capability or timings', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ shared_probe: true, shared_probe_source_name: 'DeepSeek shared',
+      source: 'shared_probe', request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null,
+      cache_sample_state: 'none', cache_peak_hour_rate: null, probe_ttft_p50_ms: 200, probe_latency_p50_ms: 1000,
+      probe_cache_verification_version: 1, probe_cache_verification_window_hours: 24, probe_cache_verified_at: new Date().toISOString(),
+      cells: [{ start: new Date().toISOString(), status: 'operational', source: 'shared_probe' }] }) } })
+    expect(wrapper.get('[data-testid="shared-probe-notice"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.sharedSuccess')
+    expect(wrapper.get('[data-metric="ttft"]').text()).toBe('—')
+    expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
+    expect(wrapper.get('.status-timeline button').attributes('aria-label')).toContain('channelMonitorV3.cards.sharedSource')
+    wrapper.unmount()
+  })
+  it('retains the shared group’s independent real cache measurement', () => {
+    const wrapper = mount(GroupStatusCard, { props: { group: group({ shared_probe: true, cache_peak_hour_rate: 80 }) } })
+    expect(wrapper.get('[data-metric="cache"]').text()).toBe('80.0%')
+    expect(wrapper.get('[data-metric="success"]').text()).toBe('99.9%')
+    wrapper.unmount()
+  })
+  it('configures a follower without losing its model or starting an independent check', async () => {
+    mocks.settings.mockResolvedValue({ config: { version: 5, public_enabled: true, group_probe: { enabled: true, groups: [
+      { group_id: 17, model: 'deepseek-chat', enabled: true, listed: true },
+      { group_id: 18, model: 'kimi-original', enabled: true, listed: true },
+    ] } } })
+    mocks.groups.mockResolvedValue([
+      { id: 17, name: 'DeepSeek', platform: 'deepseek', status: 'active' },
+      { id: 18, name: 'Kimi', platform: 'kimi', status: 'active' },
+    ])
+    mocks.update.mockImplementation(async next => ({ ...next, version: 6 }))
+    const wrapper = mountControls()
+    await flushPromises()
+    await wrapper.get('#probe-source-18').setValue('17')
+    expect(wrapper.find('#probe-model-18').exists()).toBe(false)
+    await wrapper.get('[data-testid="status-save-controls"]').trigger('click')
+    await flushPromises()
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ group_probe: { enabled: true, groups: [
+      { group_id: 17, model: 'deepseek-chat', enabled: true, listed: true },
+      { group_id: 18, model: 'kimi-original', enabled: false, listed: true, source_group_id: 17 },
+    ] } }))
+    await wrapper.get('#probe-source-18').setValue('0')
+    expect(wrapper.get('[data-status-group="18"] input[type="checkbox"]').element).toHaveProperty('checked', false)
+    wrapper.unmount()
+  })
   const probeCache = { cache_sample_state: 'none', cache_peak_hour_rate: null, probe_cache_read_rate: 96.5,
     probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens' }
   it.each([

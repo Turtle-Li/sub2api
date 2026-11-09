@@ -116,7 +116,7 @@ export interface MonitorV3Config {
 
 export interface MonitorV3GroupProbeConfig {
   enabled: boolean
-  groups: Array<{ group_id: number; model: string; enabled: boolean; display_name?: string; listed?: boolean }>
+  groups: Array<{ group_id: number; model: string; enabled: boolean; display_name?: string; listed?: boolean; source_group_id?: number }>
 }
 
 export interface MonitorV3Category {

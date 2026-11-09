@@ -108,7 +108,7 @@ func (p *ChannelMonitorV3GroupProber) RunDue(ctx context.Context, now time.Time)
 		if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() {
 			return
 		}
-		if !target.Enabled || !target.IsListed() {
+		if !target.Enabled || !target.IsListed() || target.SourceGroupID != 0 {
 			continue
 		}
 		if p.authorizedGroup(ctx, target) == nil {
@@ -220,7 +220,7 @@ func (p *ChannelMonitorV3GroupProber) retryDelay(previousCategory string) time.D
 }
 
 func (p *ChannelMonitorV3GroupProber) authorizedGroup(ctx context.Context, target ChannelMonitorV3GroupProbeTarget) *Group {
-	if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() {
+	if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() || target.SourceGroupID != 0 {
 		return nil
 	}
 	cfg, err := p.repo.GetConfig(ctx)
@@ -240,7 +240,16 @@ func (p *ChannelMonitorV3GroupProber) authorizedGroup(ctx context.Context, targe
 }
 
 func (p *ChannelMonitorV3GroupProber) allowed(ctx context.Context, cfg *ChannelMonitorV3Config) bool {
-	return cfg != nil && cfg.GroupProbe.Enabled && len(cfg.GroupProbe.Groups) <= 10 && p.settings != nil && p.settings.GetChannelMonitorRuntime(ctx).V3Active() && runtimegate.SharedWorkAllowed()
+	if cfg == nil || len(cfg.GroupProbe.Groups) > 1000 {
+		return false
+	}
+	independent := 0
+	for _, target := range cfg.GroupProbe.Groups {
+		if target.Enabled && target.SourceGroupID == 0 {
+			independent++
+		}
+	}
+	return cfg.GroupProbe.Enabled && independent <= 10 && p.settings != nil && p.settings.GetChannelMonitorRuntime(ctx).V3Active() && runtimegate.SharedWorkAllowed()
 }
 
 // Use the existing ops recipient/template preferences. A group/outcome/hour

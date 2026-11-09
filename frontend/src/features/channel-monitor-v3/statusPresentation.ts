@@ -1,7 +1,7 @@
 import type { PlazaGroupAvailability } from '@/api/modelPlaza'
 
 export function cacheCapability(status: PlazaGroupAvailability | null | undefined, now: number): 'verified' | 'pending' | null {
-  if (status?.probe_cache_verification_version !== 1 || status.probe_cache_verification_window_hours !== 24 || !status.probe_enabled) return null
+  if (status?.shared_probe || status?.probe_cache_verification_version !== 1 || status.probe_cache_verification_window_hours !== 24 || !status.probe_enabled) return null
   const verified = Date.parse(status.probe_cache_verified_at ?? '')
   return Number.isFinite(verified) && verified <= now && now - verified <= 86400000 ? 'verified' : 'pending'
 }

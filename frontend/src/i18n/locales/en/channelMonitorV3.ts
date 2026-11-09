@@ -2,6 +2,9 @@
 export default {
   channelMonitorV3: {
     cards: {
+      sharedSuccess: 'Upstream check success', sharedScope: 'Shared upstream check', sharedSource: 'Shared upstream check',
+      sharedFrom: 'Following {group} · indicates shared upstream connectivity', sharedUnavailable: 'Shared check paused or source unavailable',
+      sharedEvery: 'Reuses upstream checks · no separate requests', sharedFallback: 'Availability uses a shared upstream check; this group’s real failures, cache and latency remain independent.',
       title: 'Model status', description: 'Service health, whole-group requests and recent history for public groups.',
       manage: 'Manage checks', manageHere: 'Manage checks in Model status', publicAccess: 'Publish status for publicly visible groups',
       search: 'Search groups', refreshIn: 'Refresh in {seconds}s',
@@ -22,6 +25,9 @@ export default {
       state: { operational: 'Operational', degraded: 'Degraded', down: 'Check failed', unknown: 'No recent data', insufficient: 'Insufficient samples', observed: 'Successful request observed', errors_observed: 'Failed request observed', collecting: 'Current slot collecting' },
     },
     probes: {
+      source: 'Check source', sourceFor: 'Check source for {group}', independent: 'Independent check', sourceUnavailableOption: 'Original source unavailable (retained)',
+      sharedHelp: 'Reuse the selected group’s check without a separate request. Matching account pools are verified on save; cache, latency and real traffic remain independent.',
+      sourceUnavailable: 'The source is paused or removed; no check will run. Choose another shared source, or switch to independent checks and enable them explicitly.',
       title: 'Group status configuration', description: 'Only groups added below appear on user status pages. Removing a group hides it and pauses checks while retaining its model and name. Save to apply.', enabled: 'Enable scheduled checks',
       cost: 'One check round per group every 10 minutes, up to 144 daily; stop on success or after three failed attempts. Use an inexpensive text model with minimal output. Cache usage comes from real requests; checks are counted separately.',
       group: 'Group', model: 'Request model', modelHint: 'Choose a text model available to this group', groupEnabled: 'Scheduled check', add: 'Add group',

@@ -1,5 +1,53 @@
 # Public group availability module
 
+## Shared upstream checks — November9
+
+An administrator may set a listed group's `source_group_id` to another listed,
+enabled independent group's ID. The follower retains its exact model and name,
+but must have `enabled=false`: only the source issues scheduled requests. This
+also keeps a rollback binary from accidentally probing followers. Returning to
+independent mode leaves the check paused until explicitly enabled. Listed references
+are one level only; self-references, chains and missing source rows are rejected.
+A paused/removed source preserves the reference and publishes no shared result.
+Unlisted references stay dormant and cannot block later source edits; readding
+them revalidates their choices before publication.
+
+Active sharing requires identical, nonempty account bindings in active public
+groups. Compare private account IDs when enabling/changing sharing and every status read;
+matching a URL or provider name alone is insufficient. Changed/deleted bindings,
+private/inactive sources, unavailable source models and lookup failures stop
+inheritance. Never automatically start a replacement paid check. Source and
+follower must both be visible to the current viewer. Account identities and the
+source's selected model remain private.
+Previously active references may be retained after a binding change without
+blocking unrelated configuration saves; this never bypasses read-time admission.
+
+The follower reads the source's existing, current-model check receipts without
+creating follower checks, attempts or usage. `shared_probe`,
+`shared_probe_source_name` and cell `source=shared_probe` label this as shared
+upstream connectivity, not an individual model test. Existing freshness and
+minimum-sample rules apply. A recent failure observed in the follower's real
+traffic wins over a newer source success. Its real-request denominator remains
+its own. Shared checks provide no follower cache proof, cache percentage, first
+token timing or whole-request latency. Real cache remains the independently
+qualified account-pool/platform best complete hour below; no random offsets,
+copied probe cache rates or invented request samples are published.
+
+This is an intentional local extension to the pinned `ranxi2001/sub2api` reference
+`5f0b6321a50153a738aef3fbade57c969dbe710c` (LGPL-3.0), whose
+`backend/internal/service/channel_monitor_v3_probe.go` and `_test.go` keep probe
+execution separate from real traffic. Preserve those contracts and attribution;
+the reference does not infer per-model cache or timing from another model.
+Local implementation is in `channel_monitor_v3_shared_probe.go` in service and
+repository, with dedicated service and PostgreSQL integration tests. The editor
+reuses the incumbent Select; cards and immutable homepagev10 expose the same
+source labels. No WorkBuddy runtime fork, prompt change or database migration
+is needed. Rollback preserves JSON choices/history with followers disabled;
+upgrade again before editing those choices with an older client.
+Older binaries also stop all scheduled checks when total configured rows exceed
+ten, including paused rows; the current seven-row production setup is below that
+limit. Retain configuration and history when rolling back.
+
 Current owner correction, November8: scheduled ten-minute checks also supply
 explicitly labelled card metrics when real traffic is insufficient. Success and
 first-token latency independently prefer qualified real group traffic. Otherwise,

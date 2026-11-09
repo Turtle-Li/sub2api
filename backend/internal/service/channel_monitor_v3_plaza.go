@@ -29,6 +29,8 @@ type ChannelMonitorV3GroupStatus struct {
 	Source                            string     `json:"source"`
 	CheckedAt                         *time.Time `json:"checked_at"`
 	ProbeEnabled                      bool       `json:"probe_enabled"`
+	SharedProbe                       bool       `json:"shared_probe,omitempty"`
+	SharedProbeSourceName             string     `json:"shared_probe_source_name,omitempty"`
 	ProbeModel                        string     `json:"-"`
 	DisplayName                       string     `json:"-"`
 	RequestSuccessRate                *float64   `json:"request_success_rate"`
@@ -116,6 +118,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	for _, target := range cfg.GroupProbe.Groups {
 		targets[target.GroupID] = target
 	}
+	sharedSources := s.sharedProbeSources(ctx, cfg.GroupProbe, groupIDs)
 	byGroup := map[int64][]ChannelMonitorV3GroupProbeResult{}
 	for _, probe := range probes {
 		byGroup[probe.GroupID] = append(byGroup[probe.GroupID], probe)
@@ -129,7 +132,18 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 	}
 	for _, id := range groupIDs {
 		target := targets[id]
-		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: cfg.GroupProbe.Enabled && target.Enabled, ProbeModel: target.Model, ProbeMetricsVersion: 1,
+		probeTarget, probeSource, groupProbes := target, "probe", byGroup[id]
+		shared := target.SourceGroupID > 0
+		probeEnabled := cfg.GroupProbe.Enabled && target.Enabled && !shared
+		sharedName := ""
+		if shared {
+			groupProbes = nil
+			if source, ok := sharedSources[id]; ok {
+				probeTarget, probeSource, groupProbes = source.target, "shared_probe", byGroup[source.target.GroupID]
+				probeEnabled, sharedName = true, source.name
+			}
+		}
+		item := &ChannelMonitorV3GroupStatus{Status: ChannelMonitorV3StatusUnknown, Source: "none", ProbeEnabled: probeEnabled, SharedProbe: shared, SharedProbeSourceName: sharedName, ProbeModel: target.Model, ProbeMetricsVersion: 1,
 			DisplayName: target.DisplayName, RequestSampleState: "none", ProbeSampleState: "none", ProbeCacheState: "none", ProbeCacheScope: "group_probe", ProbeCacheStatistic: "weighted_tokens", CacheSampleState: "none", CacheScope: "shared_account_pool", CacheStatistic: "best_complete_hour", CacheLookbackHours: channelMonitorV3CacheLookbackHours, WindowMinutes: ChannelMonitorV3GroupWindowMinutes, MinRequests: max(ChannelMonitorV3GroupMinRequests, cfg.MinRequests), Cells: make([]ChannelMonitorV3GroupCell, channelMonitorV3GroupCells)}
 		item.HistoryWindowMinutes = int(time.Duration(channelMonitorV3GroupCells) * interval / time.Minute)
 		item.ProbeCacheVerificationVersion, item.ProbeCacheVerificationWindowHours = 1, 24
@@ -193,11 +207,11 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		var probeCacheInput, probeCacheRead float64
 		probeLatency, probeTTFT := map[int64]int64{}, map[int64]int64{}
 		var latestProbeAt *time.Time
-		for _, probe := range byGroup[id] {
-			if probe.Model != target.Model || probe.Slot.Before(now.Add(-24*time.Hour)) || probe.Slot.After(now) || probe.FinishedAt == nil || probe.FinishedAt.Before(probe.Slot) || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
+		for _, probe := range groupProbes {
+			if probe.Model != probeTarget.Model || probe.Slot.Before(now.Add(-24*time.Hour)) || probe.Slot.After(now) || probe.FinishedAt == nil || probe.FinishedAt.Before(probe.Slot) || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
 				continue
 			}
-			if item.ProbeEnabled && probe.Outcome == "success" && probe.CacheInputTokens != nil && probe.CacheReadTokens != nil && *probe.CacheInputTokens > 0 && *probe.CacheReadTokens > 0 && *probe.CacheReadTokens <= *probe.CacheInputTokens && (item.ProbeCacheVerifiedAt == nil || probe.FinishedAt.After(*item.ProbeCacheVerifiedAt)) {
+			if !shared && item.ProbeEnabled && probe.Outcome == "success" && probe.CacheInputTokens != nil && probe.CacheReadTokens != nil && *probe.CacheInputTokens > 0 && *probe.CacheReadTokens > 0 && *probe.CacheReadTokens <= *probe.CacheInputTokens && (item.ProbeCacheVerifiedAt == nil || probe.FinishedAt.After(*item.ProbeCacheVerifiedAt)) {
 				at := *probe.FinishedAt
 				item.ProbeCacheVerifiedAt = &at
 			}
@@ -208,7 +222,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 					if probe.Outcome == "success" {
 						state = ChannelMonitorV3StatusOperational
 					}
-					item.Cells[index].Status, item.Cells[index].Source = state, "probe"
+					item.Cells[index].Status, item.Cells[index].Source = state, probeSource
 				}
 			}
 			if probe.Slot.Before(metricsFirst) {
@@ -220,15 +234,15 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			}
 			if probe.Outcome == "success" {
 				successes++
-				if probe.LatencyMs > 0 {
+				if !shared && probe.LatencyMs > 0 {
 					probeLatency[probe.LatencyMs]++
 					latencySamples++
 				}
-				if probe.FirstTokenMs != nil && *probe.FirstTokenMs >= 0 && *probe.FirstTokenMs <= probe.LatencyMs {
+				if !shared && probe.FirstTokenMs != nil && *probe.FirstTokenMs >= 0 && *probe.FirstTokenMs <= probe.LatencyMs {
 					probeTTFT[*probe.FirstTokenMs]++
 					ttftSamples++
 				}
-				if probe.CacheInputTokens != nil && probe.CacheReadTokens != nil && *probe.CacheInputTokens > 0 && *probe.CacheReadTokens >= 0 && *probe.CacheReadTokens <= *probe.CacheInputTokens {
+				if !shared && probe.CacheInputTokens != nil && probe.CacheReadTokens != nil && *probe.CacheInputTokens > 0 && *probe.CacheReadTokens >= 0 && *probe.CacheReadTokens <= *probe.CacheInputTokens {
 					cacheSamples++
 					probeCacheInput += float64(*probe.CacheInputTokens)
 					probeCacheRead += float64(*probe.CacheReadTokens)
@@ -269,15 +283,15 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			if now.Sub(cell.Start) > 15*time.Minute {
 				break
 			}
-			if cell.Source == "requests" && !passiveFresh || cell.Source == "probe" && !item.ProbeEnabled {
+			if cell.Source == "requests" && !passiveFresh || (cell.Source == "probe" || cell.Source == "shared_probe") && !item.ProbeEnabled {
 				continue
 			}
 			item.Status, item.Source = cell.Status, cell.Source
 			at := cell.Start
 			item.CheckedAt = &at
-			if cell.Source == "probe" {
-				for _, probe := range byGroup[id] {
-					if probe.Model == target.Model && probe.Slot.Equal(cell.Start) && probe.FinishedAt != nil && !probe.FinishedAt.After(now) {
+			if cell.Source == "probe" || cell.Source == "shared_probe" {
+				for _, probe := range groupProbes {
+					if probe.Model == probeTarget.Model && probe.Slot.Equal(cell.Start) && probe.FinishedAt != nil && !probe.FinishedAt.After(now) {
 						item.CheckedAt = probe.FinishedAt
 					}
 				}
@@ -286,14 +300,14 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		}
 		// A fresh check remains useful when the real-traffic collector is stale.
 		if item.Source == "none" && item.ProbeEnabled {
-			for _, probe := range byGroup[id] {
-				if probe.Model != target.Model || probe.FinishedAt == nil || now.Sub(*probe.FinishedAt) > 15*time.Minute || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
+			for _, probe := range groupProbes {
+				if probe.Model != probeTarget.Model || probe.FinishedAt == nil || now.Sub(*probe.FinishedAt) > 15*time.Minute || probe.FinishedAt.After(now) || (probe.Outcome != "success" && probe.Outcome != "failure") {
 					continue
 				}
 				if item.CheckedAt != nil && !probe.FinishedAt.After(*item.CheckedAt) {
 					continue
 				}
-				item.Source, item.CheckedAt = "probe", probe.FinishedAt
+				item.Source, item.CheckedAt = probeSource, probe.FinishedAt
 				item.Status = ChannelMonitorV3StatusDown
 				if probe.Outcome == "success" {
 					item.Status = ChannelMonitorV3StatusOperational
@@ -303,6 +317,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 		if item.Cells[len(item.Cells)-1].Source == "none" {
 			item.Cells[len(item.Cells)-1].Status = "collecting"
 		}
+		channelMonitorV3PreferOwnSharedErrors(item, now, passiveFresh)
 		out[id] = item
 	}
 	return out, nil

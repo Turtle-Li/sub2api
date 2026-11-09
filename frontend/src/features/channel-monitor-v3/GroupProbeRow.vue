@@ -4,12 +4,17 @@
       <p class="min-w-0 break-words text-sm font-semibold text-gray-900 dark:text-dark-100">{{ group.name }}</p>
       <button type="button" class="btn btn-secondary btn-sm shrink-0" :aria-label="t('channelMonitorV3.probes.removeGroup', { group: group.name })" @click="$emit('remove')">{{ t('channelMonitorV3.probes.remove') }}</button>
     </div>
-    <div class="mt-4 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+    <div class="mt-4 grid items-start gap-4 md:grid-cols-2">
       <div class="min-w-0">
         <label :for="`status-name-${group.id}`" class="input-label">{{ t('channelMonitorV3.probes.displayName') }}</label>
         <input :id="`status-name-${group.id}`" v-model.trim="target.display_name" class="input" maxlength="100" :placeholder="group.name" />
       </div>
       <div v-if="supportsCheck" class="min-w-0">
+        <label :for="`probe-source-${group.id}`" class="input-label">{{ t('channelMonitorV3.probes.source') }}</label>
+        <Select :id="`probe-source-${group.id}`" :model-value="target.source_group_id || 0" :options="sourceOptions" :aria-label="t('channelMonitorV3.probes.sourceFor', { group: group.name })" searchable @update:model-value="selectSource" />
+      </div>
+      <p v-if="following" class="text-xs leading-6 text-gray-600 dark:text-dark-200 md:col-span-2" :class="{ 'text-amber-800 dark:text-amber-300': sourceUnavailable }" role="status">{{ t(sourceUnavailable ? 'channelMonitorV3.probes.sourceUnavailable' : 'channelMonitorV3.probes.sharedHelp') }}</p>
+      <div v-if="supportsCheck && !following" class="min-w-0">
         <label :for="`probe-model-${group.id}`" class="input-label">{{ t('channelMonitorV3.probes.model') }}</label>
         <Select :id="`probe-model-${group.id}`" :model-value="target.model" :options="modelOptions" :loading="loading" :disabled="loading" searchable :placeholder="t('channelMonitorV3.probes.modelHint')" :aria-label="t('channelMonitorV3.probes.modelFor', { group: group.name })" :aria-describedby="`probe-help-${group.id}`" :empty-text="t('channelMonitorV3.probes.noModels')" @update:model-value="selectModel" />
         <div :id="`probe-help-${group.id}`" class="mt-2 text-xs leading-6">
@@ -19,14 +24,14 @@
           <p v-else-if="!models.length" class="text-gray-600 dark:text-dark-200">{{ t('channelMonitorV3.probes.noModels') }}</p>
         </div>
       </div>
-      <label v-if="supportsCheck" class="flex min-h-10 items-center gap-2 text-sm md:mt-7"><input v-model="target.enabled" type="checkbox" :disabled="!target.enabled && (loading || !models.includes(target.model))" />{{ t('channelMonitorV3.probes.groupEnabled') }}</label>
+      <label v-if="supportsCheck && !following" class="flex min-h-10 items-center gap-2 text-sm md:mt-7"><input v-model="target.enabled" type="checkbox" :disabled="!target.enabled && (loading || !models.includes(target.model))" />{{ t('channelMonitorV3.probes.groupEnabled') }}</label>
     </div>
-    <p class="mt-2 text-xs leading-6 text-gray-600 dark:text-dark-200">{{ t(supportsCheck ? 'channelMonitorV3.probes.requestHelp' : 'channelMonitorV3.probes.passiveOnly') }}</p>
+    <p v-if="!following" class="mt-2 text-xs leading-6 text-gray-600 dark:text-dark-200">{{ t(supportsCheck ? 'channelMonitorV3.probes.requestHelp' : 'channelMonitorV3.probes.passiveOnly') }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { MonitorV3GroupProbeConfig } from '@/api/channelMonitorV3'
@@ -35,7 +40,7 @@ import { getPlatformSpec } from '@/constants/platformCatalog'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import Select from '@/components/common/Select.vue'
 
-const props = defineProps<{ group: AdminGroup; target: MonitorV3GroupProbeConfig['groups'][number] }>()
+const props = defineProps<{ group: AdminGroup; target: MonitorV3GroupProbeConfig['groups'][number]; sources: ReadonlyArray<{ readonly value: number; readonly label: string }> }>()
 defineEmits<{ remove: [] }>()
 const { t } = useI18n()
 const models = ref<string[]>([])
@@ -44,6 +49,13 @@ const error = ref('')
 let mounted = true
 onBeforeUnmount(() => { mounted = false })
 const supportsCheck = computed(() => ['openai', 'anthropic'].includes(props.group.platform) || getPlatformSpec(props.group.platform)?.cn_provider === true)
+const following = computed(() => (props.target.source_group_id ?? 0) > 0)
+const sourceUnavailable = computed(() => following.value && !props.sources.some(source => source.value === props.target.source_group_id && source.value !== props.group.id))
+const sourceOptions = computed(() => [
+  { value: 0, label: t('channelMonitorV3.probes.independent'), disabled: false },
+  ...(sourceUnavailable.value ? [{ value: props.target.source_group_id ?? 0, label: t('channelMonitorV3.probes.sourceUnavailableOption'), disabled: true }] : []),
+  ...props.sources.filter(source => source.value !== props.group.id).map(source => ({ ...source, disabled: false })),
+])
 const unavailable = computed(() => !!props.target.model && !models.value.includes(props.target.model))
 const modelOptions = computed(() => [
   ...(unavailable.value ? [{ value: props.target.model, label: props.target.model, disabled: true }] : []),
@@ -62,5 +74,11 @@ async function loadModels() {
 function selectModel(value: string | number | boolean | null) {
   if (typeof value === 'string' && models.value.includes(value)) props.target.model = value
 }
-onMounted(() => { if (supportsCheck.value) void loadModels() })
+function selectSource(value: string | number | boolean | null) {
+  if (typeof value !== 'number' || !sourceOptions.value.some(option => option.value === value && !option.disabled)) return
+  props.target.source_group_id = value || undefined
+  if (value > 0) props.target.enabled = false
+}
+watch(following, value => { if (!value && supportsCheck.value && !loading.value && !models.value.length) void loadModels() })
+onMounted(() => { if (supportsCheck.value && !following.value) void loadModels() })
 </script>

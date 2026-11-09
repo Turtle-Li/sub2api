@@ -17,11 +17,12 @@ type ChannelMonitorV3GroupProbeConfig struct {
 }
 
 type ChannelMonitorV3GroupProbeTarget struct {
-	GroupID     int64  `json:"group_id"`
-	Model       string `json:"model"`
-	Enabled     bool   `json:"enabled"`
-	DisplayName string `json:"display_name,omitempty"`
-	Listed      *bool  `json:"listed,omitempty"`
+	GroupID       int64  `json:"group_id"`
+	Model         string `json:"model"`
+	Enabled       bool   `json:"enabled"`
+	DisplayName   string `json:"display_name,omitempty"`
+	Listed        *bool  `json:"listed,omitempty"`
+	SourceGroupID int64  `json:"source_group_id,omitempty"`
 }
 
 // Legacy checked targets were the owner's selection. Blank/paused legacy rows
@@ -35,7 +36,7 @@ func (t ChannelMonitorV3GroupProbeTarget) IsListed() bool {
 
 func (t ChannelMonitorV3GroupProbeTarget) sameCheck(other ChannelMonitorV3GroupProbeTarget) bool {
 	return t.GroupID == other.GroupID && t.Model == other.Model && t.Enabled == other.Enabled &&
-		t.DisplayName == other.DisplayName && t.IsListed() == other.IsListed()
+		t.DisplayName == other.DisplayName && t.IsListed() == other.IsListed() && t.SourceGroupID == other.SourceGroupID
 }
 
 type ChannelMonitorV3GroupProbeResult struct {
@@ -80,6 +81,9 @@ func (s *ChannelMonitorV3Service) validateGroupProbes(ctx context.Context, cfg *
 		target := &cfg.Groups[i]
 		target.Model = strings.TrimSpace(target.Model)
 		target.DisplayName = strings.TrimSpace(target.DisplayName)
+		if target.SourceGroupID < 0 || (target.SourceGroupID > 0 && target.Enabled) {
+			return channelMonitorV3Invalid("shared checks cannot also run independently")
+		}
 		if target.GroupID <= 0 || len(target.Model) > 200 || seen[target.GroupID] || utf8.RuneCountInString(target.DisplayName) > 100 {
 			return channelMonitorV3Invalid("status groups must be unique and display names at most 100 characters")
 		}
@@ -104,7 +108,7 @@ func (s *ChannelMonitorV3Service) validateGroupProbes(ctx context.Context, cfg *
 			return channelMonitorV3Invalid("probe group or text model is unavailable")
 		}
 	}
-	return nil
+	return s.validateSharedGroupProbes(ctx, *cfg)
 }
 
 func channelMonitorV3ProbeGroupSupported(group *Group) bool {

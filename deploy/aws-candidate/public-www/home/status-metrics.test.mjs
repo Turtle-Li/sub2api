@@ -1,9 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statusMetrics, statusMetricDetails, cacheCapability, quotaNotice } from '../help/turtleroute-status-20261109-v9/group-availability.mjs';
+import { statusMetrics, statusMetricDetails, cacheCapability, quotaNotice } from '../help/turtleroute-status-20261109-v10/group-availability.mjs';
 const cacheStatus = (overrides = {}) => ({ cache_sample_state: 'ready', cache_scope: 'shared_account_pool', cache_statistic: 'best_complete_hour', cache_lookback_hours: 24, cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z', cache_read_rate: null, cache_peak_hour_rate: 97.2, ...overrides });
 const probeStatus = (overrides = {}) => ({ request_sample_state: 'none', probe_metrics_version: 1, probe_enabled: true, probe_sample_state: 'ready', probe_success_rate: 100, probe_ttft_p50_ms: 1200, probe_latency_p50_ms: 4500, ...overrides });
 const probeCache = (overrides = {}) => probeStatus({ window_minutes: 180, probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens', probe_cache_read_rate: 96.5, ...overrides });
+test('shared upstream status cannot borrow cache proof or per-model latency', () => {
+  const status = probeCache({ shared_probe: true, probe_cache_verification_version: 1, probe_cache_verification_window_hours: 24, probe_cache_verified_at: new Date().toISOString() });
+  const details = statusMetricDetails(status);
+  assert.equal(cacheCapability(status), null);
+  assert.equal(details[0].value, null);
+  assert.equal(details[1].scope, '同源上游 · 共享检测');
+  assert.equal(details[1].value, '100.0%');
+  assert.equal(details[2].value, '—');
+  assert.equal(statusMetricDetails({ ...status, ...cacheStatus({ cache_peak_hour_rate: 80 }) })[0].value, '80.0%');
+});
 test('a dated native cache proof verifies capability without rewriting its low ratio', () => {
   const now = Date.now();
   for (const rate of [0, 16, 50, 100]) {

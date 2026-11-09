@@ -18,7 +18,7 @@
     <section v-for="section in sections" :key="section.platform" class="mt-6" :aria-label="platformLabel(section.platform)">
       <h4 class="mb-3 flex items-center gap-2 text-sm font-semibold"><PlatformIcon :platform="section.platform" size="sm" />{{ platformLabel(section.platform) }} <span class="text-gray-500">{{ section.rows.length }}</span></h4>
       <div class="divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-600 dark:border-dark-600">
-        <GroupProbeRow v-for="row in section.rows" :key="row.group.id" :group="row.group" :target="row.target" @remove="removeGroup(row.target)" />
+        <GroupProbeRow v-for="row in section.rows" :key="row.group.id" :group="row.group" :target="row.target" :sources="sourceOptions" @remove="removeGroup(row.target)" />
       </div>
     </section>
     <p v-if="!sections.length" class="py-10 text-center text-sm leading-6 text-gray-600 dark:text-dark-200" data-testid="status-groups-empty">{{ t('channelMonitorV3.probes.empty') }}</p>
@@ -44,6 +44,11 @@ const { t } = useI18n()
 const selectedGroupId = ref<string | number | boolean | null>(null)
 const publicGroups = computed(() => props.groups.filter(group => group.status === 'active' && !group.is_exclusive))
 const isListed = (target: MonitorV3GroupProbeConfig['groups'][number]) => target.listed ?? target.enabled
+const sourceOptions = computed(() => draft.value.groups.flatMap(target => {
+  const group = publicGroups.value.find(item => item.id === target.group_id)
+  return group && isListed(target) && target.enabled && !target.source_group_id
+    ? [{ value: group.id, label: target.display_name || group.name }] : []
+}))
 const addOptions = computed(() => publicGroups.value
   .filter(group => !draft.value.groups.some(target => target.group_id === group.id && isListed(target)))
   .map(group => ({ value: group.id, label: `${platformLabel(group.platform)} · ${group.name}` })))
