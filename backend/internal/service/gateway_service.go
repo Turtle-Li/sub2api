@@ -663,6 +663,11 @@ type ForwardResult struct {
 	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
 	// 存储单价折算为费用后叠加在 token 费用之上。
 	CacheStorageTokenHours float64
+
+	// CacheTTLFromClient 表示本次请求的提示缓存 TTL 由客户端显式指定
+	// （逐块 cache_control.ttl 或 X-Cache-TTL 请求头）。此时上游回报的
+	// cache_creation 明细就是真实分类，计费不得再用账号级/全局 override 改写。
+	CacheTTLFromClient bool
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is

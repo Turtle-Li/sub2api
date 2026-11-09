@@ -106,6 +106,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	// 客户端 TTL 意图（逐块 cache_control.ttl / X-Cache-TTL 头）在入口统一解析：
+	// 下游注入、响应 usage 改写、计费分类都以它为最高优先级。
+	clientCacheTTL := ResolveClientCacheTTL(c, parsed.Body.Bytes())
+	if clientCacheTTL.Present() {
+		ctx = WithClientCacheTTL(ctx, clientCacheTTL)
+	}
 	// API-key mappings and OAuth native IDs are resolved before mimicry.
 	validationModel := parsed.Model
 	if account != nil {
@@ -335,8 +341,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
 
-	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
-		if err := replaceBody(injectAnthropicCacheControlTTL1h(body)); err != nil {
+	// 提示缓存 TTL 优先级：客户端（逐块 ttl / X-Cache-TTL 头）> 账号 override > 全局 1h 注入。
+	// 客户端已经写死的块永远不覆盖；这里只给没有 ttl 的块补默认值。
+	if defaultTTL := s.resolveDefaultCacheTTL(ctx, account, clientCacheTTL); defaultTTL != "" {
+		if err := replaceBody(applyDefaultCacheTTL(body, defaultTTL)); err != nil {
 			return nil, err
 		}
 	}
@@ -868,6 +876,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		CacheTTLFromClient:            clientCacheTTL.Present(),
 	}, nil
 }
 

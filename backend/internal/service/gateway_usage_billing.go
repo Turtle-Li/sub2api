@@ -829,10 +829,13 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// Cache TTL Override: 确保计费时 token 分类与账号设置一致。
 	// 账号级设置优先；全局 1h 请求注入开启时，默认把 usage 计费归回 5m。
+	// 客户端显式指定过 TTL 的请求跳过改写：上游回报的分类才是真实计费依据。
 	cacheTTLOverridden := false
-	if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account); ok {
-		applyCacheTTLOverride(&result.Usage, overrideTarget)
-		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
+	if !result.CacheTTLFromClient {
+		if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account); ok {
+			applyCacheTTLOverride(&result.Usage, overrideTarget)
+			cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
+		}
 	}
 
 	multiplier, imageMultiplier, pricingAt := s.recordUsageMultipliers(ctx, apiKey, user, input.PricingAt)

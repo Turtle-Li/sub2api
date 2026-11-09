@@ -1193,7 +1193,22 @@ func injectAnthropicCacheControlTTL1h(body []byte) []byte {
 	return forceEphemeralCacheControlTTL(body, cacheTTLTarget1h)
 }
 
+// applyDefaultCacheTTL 只给没有自带 ttl 的 ephemeral 块补默认值。
+// 客户端自己写死的 cache_control.ttl 一律保留：客户端优先级高于账号与全局设置。
+func applyDefaultCacheTTL(body []byte, ttl string) []byte {
+	return rewriteEphemeralCacheControlTTL(body, ttl, true)
+}
+
+// forceEphemeralCacheControlTTL 把所有 ephemeral 块的 ttl 改写为指定值（忽略客户端自带值）。
+//
+// Deprecated: 请求链路上使用 applyDefaultCacheTTL，保留此函数只为兼容既有调用与测试。
 func forceEphemeralCacheControlTTL(body []byte, ttl string) []byte {
+	return rewriteEphemeralCacheControlTTL(body, ttl, false)
+}
+
+// rewriteEphemeralCacheControlTTL 是两种 TTL 写入策略的共同实现。
+// preserveClient=true 时跳过已经有显式 ttl 的块。
+func rewriteEphemeralCacheControlTTL(body []byte, ttl string, preserveClient bool) []byte {
 	if len(body) == 0 || ttl == "" {
 		return body
 	}
@@ -1204,6 +1219,10 @@ func forceEphemeralCacheControlTTL(body []byte, ttl string) []byte {
 		if !cc.Exists() || cc.Get("type").String() != "ephemeral" {
 			return
 		}
+		if preserveClient && cc.Get("ttl").String() != "" {
+			// 客户端已经指定了该块的 TTL，最高优先级，不覆盖。
+			return
+		}
 		if cc.Get("ttl").String() == ttl {
 			return
 		}
@@ -1211,7 +1230,9 @@ func forceEphemeralCacheControlTTL(body []byte, ttl string) []byte {
 	}
 
 	if topCC := gjson.GetBytes(body, "cache_control"); topCC.Exists() && topCC.Get("type").String() == "ephemeral" && topCC.Get("ttl").String() != ttl {
-		paths = append(paths, "cache_control.ttl")
+		if !preserveClient || topCC.Get("ttl").String() == "" {
+			paths = append(paths, "cache_control.ttl")
+		}
 	}
 
 	system := gjson.GetBytes(body, "system")

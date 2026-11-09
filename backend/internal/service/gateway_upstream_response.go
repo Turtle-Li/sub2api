@@ -1393,6 +1393,11 @@ func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context,
 	if account == nil {
 		return "", false
 	}
+	// 客户端已经声明过 TTL（逐块 ttl 或 X-Cache-TTL 头）时，上游回报的
+	// cache_creation 明细就是真实分类，任何账号级/全局改写都会把账算错。
+	if clientTTL, ok := ClientCacheTTLFromContext(ctx); ok && clientTTL.Present() {
+		return "", false
+	}
 	if account.IsCacheTTLOverrideEnabled() {
 		return account.GetCacheTTLOverrideTarget(), true
 	}
