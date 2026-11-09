@@ -166,7 +166,10 @@ fresh discovery still selects generation routes. Per-key model/first-gallery
 updates preserve the original ownership and cursor contracts. Conditional reads
 recheck authorization before 304; Gemini aliases are hidden only when equivalent.
 See `docs/features/IMAGE_STUDIO_CATALOGUE_CACHE_20261109.md` for limits, reference
-observations and intentional card geometry changes. The later Gemini 4 refinement
-uses a taller uncropped canvas, compact fixed-height metadata and a horizontal
-phone platform picker; see `docs/features/IMAGE_STUDIO_GEMINI4_UI_20261109.md` for
-the corrected native CLI route, returned patch and accessibility adaptations.
+observations and intentional card geometry changes. The later Gemini 4 refinement uses an adaptive preview frame matching the decoded
+image aspect ratio (clamped between 9:16 and 16:9), multi-column waterfall layout
+with sentinel-driven downward loading, compact platform badges with short model
+labels (such as `G · 3.1 Pro`), fixed-height model trigger/parameter slots and
+fixed-height model picker dialog so switching models or platforms never shifts
+layout position, and a horizontal phone platform picker; see
+`docs/features/IMAGE_STUDIO_GEMINI4_UI_20261109.md` for details.

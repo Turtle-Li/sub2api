@@ -8,6 +8,72 @@ const platforms: Readonly<Record<string, string>> = {
   muse_images: 'Muse', workbuddy_images: '腾讯混元',
 }
 export const modelPlatform = (provider: string) => platforms[provider] || provider
+
+const tierWords: Readonly<Record<string, string>> = {
+  pro: 'Pro', flash: 'Flash', lite: 'Lite', alpha: 'Alpha', edit: 'Edit', image: 'Image',
+}
+
+export function shortModelName(model: string, provider = ''): string {
+  const raw = model.trim()
+  if (!raw) return modelPlatform(provider) || 'AI'
+  const cleaned = raw
+    .replace(/^(?:cn|global):/i, '')
+    .replace(/-image-preview$/i, '')
+    .replace(/-preview$/i, '')
+    .replace(/-\d{6,8}$/, '')
+  if (/^gemini-/i.test(cleaned)) {
+    const core = cleaned.replace(/^gemini-/i, '').replace(/-image$/i, '').replace(/flash-lite/i, 'lite')
+    return core.split('-').filter(Boolean).map(part => tierWords[part.toLowerCase()] || part).join(' ')
+  }
+  if (/^gpt-image-/i.test(cleaned)) {
+    return `GPT ${cleaned.replace(/^gpt-image-/i, '')}`
+  }
+  if (/^dall-e-/i.test(cleaned)) {
+    return `DALL·E ${cleaned.replace(/^dall-e-/i, '')}`
+  }
+  if (/^(?:doubao-)?seedream-/i.test(cleaned)) {
+    const core = cleaned.replace(/^(?:doubao-)?seedream-/i, '').replace(/^(\d+)-(\d+)(?=-|$)/, '$1.$2')
+    return core.split('-').filter(Boolean).map(part => tierWords[part.toLowerCase()] || part).join(' ')
+  }
+  if (/^wan/i.test(cleaned)) {
+    const core = cleaned.replace(/^wanx?-?/i, '').replace(/-image(?=-|$)/i, '')
+    return core.split('-').filter(Boolean).map(part => tierWords[part.toLowerCase()] || part).join(' ')
+  }
+  if (/^muse(?:-image)?$/i.test(cleaned)) return 'Muse'
+  if (/^(?:hunyuan-image-|hy-image-|hunyuan-)/i.test(cleaned)) {
+    const core = cleaned.replace(/^(?:hunyuan-image-|hy-image-|hunyuan-)/i, '')
+    return core.split('-').filter(Boolean).map(part => tierWords[part.toLowerCase()] || part).join(' ')
+  }
+  const fallback = cleaned.replace(/-image$/i, '') || cleaned
+  return fallback.split('-').filter(Boolean).map(part => tierWords[part.toLowerCase()] || part).join(' ')
+}
+
+export function modelBadge(provider: string, model = ''): {
+  readonly key: string; readonly mark: string; readonly label: string; readonly title: string
+} {
+  const platform = modelPlatform(provider)
+  const lowerModel = model.trim().toLowerCase()
+  const key = provider === 'gemini_api' || provider === 'vertex' || lowerModel.startsWith('gemini-')
+    ? 'gemini'
+    : provider === 'openai_images' || lowerModel.startsWith('gpt-image') || lowerModel.startsWith('dall-e')
+      ? 'openai'
+      : provider === 'seedream_images' || lowerModel.includes('seedream')
+        ? 'seedream'
+        : provider === 'wan_images' || lowerModel.startsWith('wan')
+          ? 'wan'
+          : provider === 'muse_images' || lowerModel.startsWith('muse')
+            ? 'muse'
+            : provider === 'workbuddy_images' || /(^|:)(hunyuan|hy-image)/.test(lowerModel)
+              ? 'hunyuan'
+              : 'generic'
+  const marks: Readonly<Record<string, string>> = {
+    gemini: 'G', openai: 'O', seedream: 'S', wan: 'W', muse: 'M', hunyuan: 'H',
+  }
+  const mark = marks[key] || (platform || model || 'AI').trim().slice(0, 1).toUpperCase()
+  const label = shortModelName(model, provider)
+  const title = model && platform ? `${platform} · ${model}` : model || platform || 'AI'
+  return { key, mark, label, title }
+}
 function pickerModels(models: readonly BatchImageModel[]) {
   return models.filter(model => {
     if (!['gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'].includes(model.id)) return true
@@ -44,15 +110,20 @@ export function ModelPicker({ models, value, size, disabled, loading = false, on
   }
   const active = groups.has(platform) ? platform : groups.keys().next().value
   const visible = active ? groups.get(active) || [] : []
+  const selectedBadge = selected ? modelBadge(selected.provider, selected.id) : null
   function close() { dialog.current?.close(); setOpen(false); trigger.current?.focus() }
   return <div className="studio-model-picker">
     <span className="studio-field-label" id="studio-model-label">图片模型</span>
-    <button ref={trigger} type="button" aria-label="图片模型" aria-haspopup="dialog" aria-expanded={open} className="studio-model-trigger" disabled={disabled || !models.length} onClick={() => {
+    {/* Fixed-height, single-line trigger: long model IDs must not change the rail height. */}
+    <button ref={trigger} type="button" aria-label="图片模型" aria-haspopup="dialog" aria-expanded={open} title={selectedBadge?.title} className="studio-model-trigger" disabled={disabled || !models.length} onClick={() => {
       setSearch(''); setPlatform(selected ? modelPlatform(selected.provider) : '')
       setOpen(true); dialog.current?.showModal(); dialog.current?.querySelector<HTMLInputElement>('input')?.focus()
     }}>
-      <span className="studio-model-mark" aria-hidden="true">{(selected ? modelPlatform(selected.provider) : 'AI').slice(0, 1)}</span>
-      <span className="studio-model-copy"><small>{selected ? modelPlatform(selected.provider) : '生图模型'}</small><strong>{selected?.id || (loading ? '正在加载模型…' : '暂无可用模型')}</strong></span>
+      <span className="studio-model-mark" data-platform={selectedBadge?.key || 'generic'} aria-hidden="true">{selectedBadge?.mark || 'AI'}</span>
+      <span className="studio-model-copy">
+        <strong>{selectedBadge?.label || (loading ? '正在加载模型…' : '暂无可用模型')}</strong>
+        <small>{selected ? `${modelPlatform(selected.provider)} · ${selected.id}` : '生图模型'}</small>
+      </span>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
     </button>
     <div className="studio-model-current-price" aria-live="polite"><span>{size || selected?.capabilities?.default_image_size || '1K'} 分辨率{selected && loading ? ' · 更新中' : ''}</span><span><strong>{!selected && loading ? '正在读取价格…' : modelPrice(selected, size)}</strong>{modelPrice(selected, size) !== '价格待配置' && ' 额度 / 张'}</span></div>
@@ -72,7 +143,9 @@ export function ModelPicker({ models, value, size, disabled, loading = false, on
           {visible.map(model => {
             const optionSize = model.capabilities?.image_sizes.includes(size) ? size : model.capabilities?.default_image_size || size || '1K'
             const price = modelPrice(model, optionSize)
-            return <button type="button" role="option" aria-selected={selected && modelIdentity(model) === modelIdentity(selected)} key={modelIdentity(model)} className="studio-model-option" onClick={() => { onChange(modelIdentity(model)); close() }}>
+            const badge = modelBadge(model.provider, model.id)
+            return <button type="button" role="option" aria-selected={selected && modelIdentity(model) === modelIdentity(selected)} key={modelIdentity(model)} className="studio-model-option" title={badge.title} onClick={() => { onChange(modelIdentity(model)); close() }}>
+            <span className="studio-model-mark" data-platform={badge.key} aria-hidden="true">{badge.mark}</span>
             <span className="studio-model-option-copy"><strong>{model.id}</strong><small>{modelPlatform(model.provider)}{model.capabilities?.max_reference_images ? ` · 最多 ${model.capabilities.max_reference_images} 张参考图` : ''}</small></span>
             <span className="studio-model-option-price"><strong>{price}</strong><small>{price === '价格待配置' ? `${optionSize} 分辨率` : `${optionSize} · 额度 / 张`}</small></span>
             <svg className="studio-model-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>

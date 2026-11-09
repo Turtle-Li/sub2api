@@ -37,9 +37,30 @@ The reusable personal entry is `auto_work/docs/AntigravityCLI调用约定.md`.
 
 ## Applied UI behavior
 
-- A 4:4.5 preview canvas gives artwork more space while retaining `contain` and
-  explicit original retrieval. Metadata remains uniform within each breakpoint:
-  84px on desktop and 96px on phones, measured by the existing virtual grid.
+- Each card preview frame adapts to its decoded thumbnail aspect ratio (clamped
+  to `[9:16, 16:9]` with a `4:3` placeholder before decode) inside responsive
+  waterfall columns (`studio-gallery-column`) so landscape, square and portrait
+  images fill their frames without letterbox/pillarbox blank areas or row-stretch
+  gaps. Scrolling toward the bottom sentinel triggers incremental downward
+  rendering and page continuation while retaining explicit load-more controls.
+- Card footers render a platform mark badge (`G`, `O`, `S`, `W`, `M`, `H`) paired
+  with a concise model short name (e.g., `G` + `3.1 Pro`, `G` + `3.1 Lite`,
+  `O` + `GPT 2.5`, `S` + `5.0 Pro`, `W` + `2.7 Pro`, `H` + `Alpha Edit`) while
+  keeping the full platform and model ID in the `title` tooltip.
+- The left creation rail (`.studio-composer`) and model picker dialog
+  (`.studio-model-dialog`) maintain fixed-height slots across model and platform
+  changes so neither the rail controls nor the modal window jump vertically:
+  - `.studio-model-trigger` is locked to `52px` height with single-line ellipsis,
+    platform mark badge, concise model short name (`strong`), and `platform · id`
+    subtitle (`small`) plus full `title` tooltip.
+  - `.studio-parameters` is grouped directly beneath the model picker inside
+    `.studio-model-group` and keeps two fixed `40px` slots (`画面比例` and `分辨率`),
+    rendering `.studio-field-static` (`模型默认`) when a selected model omits
+    capability options.
+  - `.studio-model-dialog` uses a fixed dialog height (`min(540px, calc(100dvh - 32px))`
+    on desktop and `min(80dvh, 640px)` bottom sheet on mobile) with a flex-filling
+    `.studio-model-browser` so switching between platforms with different option
+    counts never shifts the modal window position.
 - The status badge uses host theme tokens. Running tasks use the accent color,
   errors use the danger color, and cancelled/interrupted tasks remain neutral.
   Error captions clamp the prompt to one line so the failure message fits.

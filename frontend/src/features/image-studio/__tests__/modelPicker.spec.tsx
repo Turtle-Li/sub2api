@@ -2,7 +2,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BatchImageModel } from '@/api/batchImage'
-import { ModelPicker, modelPrice } from '../ModelPicker'
+import { ModelPicker, modelBadge, modelPrice } from '../ModelPicker'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 Object.defineProperties(HTMLDialogElement.prototype, {
@@ -74,5 +74,26 @@ describe('image model selection', () => {
     expect(change).toHaveBeenCalledWith('openai_images:image-b')
     expect(document.activeElement).toBe(trigger)
     expect(host.querySelector('dialog')?.open).toBe(false)
+  })
+  it('formats platform marks and concise model short names for gallery cards', () => {
+    expect(modelBadge('vertex', 'gemini-3.1-pro-image')).toMatchObject({ key: 'gemini', mark: 'G', label: '3.1 Pro' })
+    expect(modelBadge('gemini_api', 'gemini-3.1-flash-lite-image')).toMatchObject({ key: 'gemini', mark: 'G', label: '3.1 Lite' })
+    expect(modelBadge('openai_images', 'gpt-image-2.5')).toMatchObject({ key: 'openai', mark: 'O', label: 'GPT 2.5' })
+    expect(modelBadge('seedream_images', 'doubao-seedream-5-0-pro-260628')).toMatchObject({ key: 'seedream', mark: 'S', label: '5.0 Pro' })
+    expect(modelBadge('wan_images', 'wan2.7-image-pro')).toMatchObject({ key: 'wan', mark: 'W', label: '2.7 Pro' })
+    expect(modelBadge('muse_images', 'muse-image')).toMatchObject({ key: 'muse', mark: 'M', label: 'Muse' })
+    expect(modelBadge('workbuddy_images', 'cn:hunyuan-image-alpha-edit')).toMatchObject({ key: 'hunyuan', mark: 'H', label: 'Alpha Edit' })
+  })
+  it('renders the trigger as a platform mark plus short name, keeping the full ID in a tooltip', async () => {
+    const long: BatchImageModel = { id: 'doubao-seedream-5-0-pro-260628', provider: 'seedream_images', object: 'model' }
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    cleanup = () => { act(() => root.unmount()); host.remove() }
+    await act(async () => root.render(<ModelPicker models={[long]} value="seedream_images:doubao-seedream-5-0-pro-260628" size="1K" disabled={false} onChange={vi.fn()} />))
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')
+    expect(trigger?.querySelector('.studio-model-mark')?.textContent).toBe('S')
+    expect(trigger?.querySelector('.studio-model-copy strong')?.textContent).toBe('5.0 Pro')
+    expect(trigger?.querySelector('.studio-model-copy small')?.textContent).toBe('豆包 Seedream · doubao-seedream-5-0-pro-260628')
+    expect(trigger?.title).toBe('豆包 Seedream · doubao-seedream-5-0-pro-260628')
   })
 })

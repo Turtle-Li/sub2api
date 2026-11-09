@@ -106,6 +106,10 @@ it('omits all optional parameters for models without capabilities', async () => 
  const { host, submit } = await mount()
  await change(host, '图片尺寸', '4K'); await change(host, '图片模型', legacy.id)
  expect(host.querySelector('select[aria-label="图片尺寸"]')).toBeNull()
+ // Fixed slots stay in place so switching to a model without capabilities never shifts the composer.
+ expect(host.querySelectorAll('.studio-parameters .studio-field')).toHaveLength(2)
+ expect(host.querySelectorAll('.studio-parameters .studio-field-static')).toHaveLength(2)
+ expect(host.querySelector('.studio-input-hint')?.textContent).toBe('该模型使用服务端默认尺寸与比例。')
  await act(async () => generate(host).click())
  for (const key of ['image_size', 'aspect_ratio', 'response_mime_type']) expect(submit.mock.calls[0]?.[0]).not.toHaveProperty(key)
 })

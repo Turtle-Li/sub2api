@@ -3,7 +3,7 @@ import React from 'react'
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { taskDisplay, type StudioTask, type studioAPI } from '../../api'
 import { useNearViewport } from '../hooks/useNearViewport'
-import { modelPlatform } from '../../ModelPicker'
+import { modelBadge } from '../../ModelPicker'
 import ViewportTooltip from './ViewportTooltip'
 function TaskActionButton({
   tooltip,
@@ -48,16 +48,20 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
  const cardRef = useRef<HTMLDivElement>(null)
  const nearViewport = useNearViewport(cardRef)
  const [thumbSrc, setThumbSrc] = useState('')
+ const [aspectRatio, setAspectRatio] = useState<number | null>(null)
  const [imageError, setImageError] = useState('')
  const display = taskDisplay(record)
  const task = { status: ['failed', 'cancelled', 'output_deleted'].includes(display.status) ? 'error' : ['success', 'completed'].includes(display.status) || record.item.image_count ? 'done' : 'running', outputImages: Array.from({length: record.item.image_count}, (_, i) => `${record.id}/${i}`), apiProvider: record.job.provider, apiProfileName: '', apiModel: record.job.model }
+ const badge = modelBadge(task.apiProvider, task.apiModel)
  const isInterrupted = display.status === 'cancelled'
+ const hasPreviewImage = task.status === 'done' && Boolean(thumbSrc)
  useEffect(() => {
    if (!nearViewport || !record.item.image_count || record.job.status !== 'completed') return
    const controller = new AbortController()
    let active = true; let url = ''
    setImageError('')
    setThumbSrc('')
+   setAspectRatio(null)
    api.thumbnail(record, controller.signal).then(blob => { if (active) { url = URL.createObjectURL(blob); setThumbSrc(url) } }).catch(error => { if (active) setImageError(error instanceof Error ? error.message : '图片加载失败') })
    return () => { active = false; controller.abort(); if (url) URL.revokeObjectURL(url) }
  }, [nearViewport, record, api])
@@ -65,7 +69,11 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
    <div ref={cardRef} data-status={isInterrupted ? 'cancelled' : task.status} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
       <div className="flex h-40">
         {/* 左侧图片区域 */}
-        <div className="studio-card-preview w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+        <div
+          data-has-image={hasPreviewImage ? 'true' : undefined}
+          style={hasPreviewImage && aspectRatio ? { aspectRatio: String(aspectRatio) } : undefined}
+          className="studio-card-preview w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0"
+        >
           {task.status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
@@ -116,10 +124,16 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
                 src={thumbSrc}
                 data-image-id={task.outputImages[0]}
                 data-output-image-ids={task.outputImages.join(',')}
-                className="saveable-image w-full h-full object-contain"
+                className="saveable-image w-full h-auto block object-cover"
                 loading="lazy"
                 decoding="async"
                 alt={record.item.prompt_preview || "生成图片"}
+                onLoad={event => {
+                  const { naturalWidth, naturalHeight } = event.currentTarget
+                  if (naturalWidth > 0 && naturalHeight > 0) {
+                    setAspectRatio(Math.min(16 / 9, Math.max(9 / 16, naturalWidth / naturalHeight)))
+                  }
+                }}
               />
               {(task.outputImages.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
@@ -154,7 +168,10 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
             {imageError && <p className="text-xs text-red-400">{imageError}</p>}
           </div>
           <div className="studio-card-footer mt-auto flex items-center gap-1.5">
-            <span className="studio-card-model" title={`${modelPlatform(task.apiProvider)} · ${task.apiModel}`}>{task.apiModel || modelPlatform(task.apiProvider)}</span>
+            <span className="studio-card-model" title={badge.title}>
+              <span className="studio-card-model-mark" data-platform={badge.key} aria-hidden="true">{badge.mark}</span>
+              <span className="studio-card-model-name">{badge.label}</span>
+            </span>
             {/* 操作按钮 */}
             <div
               data-tag-scroll-area
