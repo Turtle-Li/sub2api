@@ -160,6 +160,35 @@ func TestChannelMonitorV3GroupProbeFailsOnlyAfterThreeAttempts(t *testing.T) {
 	require.Equal(t, 3, repo.results[0].AttemptCount)
 }
 
+func TestChannelMonitorV3GroupProbeRetryDelayWaitsOutSchedulerCooldown(t *testing.T) {
+	// Given the production retry policy.
+	_, p, _ := groupProbeFixture()
+	// Then a scheduler cooldown waits past the default 429 fallback cooldown,
+	// while any other failure keeps the tight retry.
+	require.Equal(t, channelMonitorV3ProbeCooldownRetryWait, p.retryDelay("no_available_account"))
+	require.Equal(t, channelMonitorV3ProbeRetryBaseDelay, p.retryDelay("upstream_error"))
+	require.Equal(t, channelMonitorV3ProbeRetryBaseDelay, p.retryDelay(""))
+}
+
+func TestChannelMonitorV3GroupProbeRecoversAfterSchedulerCooldown(t *testing.T) {
+	// Given a group whose only account cools down after an upstream 429, so the
+	// next attempt cannot select any account.
+	repo, p, exec := groupProbeFixture()
+	p.retryBase, p.retryCooldown = time.Millisecond, 2*time.Millisecond
+	exec.steps = []ChannelMonitorV3GroupProbeResult{
+		{Outcome: "failure", Category: "no_available_account", LatencyMs: 160},
+		{Outcome: "success", LatencyMs: 900, InputTokens: 12, OutputTokens: 2},
+	}
+	// When one scheduled slot is processed.
+	p.RunDue(context.Background(), time.Now())
+	// Then the probe spends the cooldown and publishes the recovered slot
+	// instead of a false availability failure.
+	require.Equal(t, 2, exec.calls)
+	require.Len(t, repo.results, 1)
+	require.Equal(t, "success", repo.results[0].Outcome)
+	require.Equal(t, 2, repo.results[0].AttemptCount)
+}
+
 func TestChannelMonitorV3GroupProbeStopsWhenProgressCannotBeSaved(t *testing.T) {
 	// Given a failed attempt whose consumption receipt cannot be saved.
 	repo, p, exec := groupProbeFixture()

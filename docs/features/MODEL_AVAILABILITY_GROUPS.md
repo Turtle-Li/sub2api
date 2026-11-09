@@ -252,7 +252,7 @@ selected-account attempts, stopping at the first success. The normal scheduler
 and account concurrency admission run for every attempt. Only three completed
 failures publish a failed check. Configuration withdrawal, execution fencing,
 shutdown, or failure to persist progress stops further spending and leaves the
-check unknown. Each attempt retains the45-second deadline; retries wait250ms.
+check unknown. Each attempt retains the45-second deadline; retries normally wait250ms. When the scheduler reports no_available_account because the selected account sits in a short upstream429 cooldown, the next attempt waits6s instead - past the default5s 429 fallback - so one transient429 cannot publish a false failure for every group that shares a single account.
 The runner remains serial, so persistent timeouts can delay later groups and
 freshness then becomes unknown. It never reclaims an unfinished slot to catch up.
 

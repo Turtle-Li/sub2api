@@ -14,26 +14,39 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 )
 
+const (
+	// A fast upstream blip should still resolve inside one scheduled slot.
+	channelMonitorV3ProbeRetryBaseDelay = 250 * time.Millisecond
+	// A 429 without a reset header parks the selected account in a short
+	// scheduler cooldown. A retry inside that window never reaches the upstream:
+	// the scheduler reports no_available_account instead, which would publish a
+	// false availability failure for every group sharing the account. Wait past
+	// the default 5s cooldown before spending the next attempt.
+	channelMonitorV3ProbeCooldownRetryWait = 6 * time.Second
+)
+
 type channelMonitorV3ProbeExecutor interface {
 	Check(context.Context, *Group, string) ChannelMonitorV3GroupProbeResult
 }
 
 type ChannelMonitorV3GroupProber struct {
-	repo         ChannelMonitorV3Repository
-	probes       ChannelMonitorV3GroupProbeRepository
-	groups       channelMonitorV3Groups
-	settings     channelMonitorRuntimeReader
-	executor     channelMonitorV3ProbeExecutor
-	lock         *singletonJobLock
-	ops          *OpsService
-	email        *NotificationEmailService
-	emailLimiter *slidingWindowLimiter
-	ctx          context.Context
-	cancel       context.CancelFunc
-	startOnce    sync.Once
-	stopOnce     sync.Once
-	tick         sync.Mutex
-	wg           sync.WaitGroup
+	repo          ChannelMonitorV3Repository
+	probes        ChannelMonitorV3GroupProbeRepository
+	groups        channelMonitorV3Groups
+	settings      channelMonitorRuntimeReader
+	executor      channelMonitorV3ProbeExecutor
+	lock          *singletonJobLock
+	ops           *OpsService
+	email         *NotificationEmailService
+	emailLimiter  *slidingWindowLimiter
+	ctx           context.Context
+	cancel        context.CancelFunc
+	retryBase     time.Duration
+	retryCooldown time.Duration
+	startOnce     sync.Once
+	stopOnce      sync.Once
+	tick          sync.Mutex
+	wg            sync.WaitGroup
 }
 
 func NewChannelMonitorV3GroupProber(repo ChannelMonitorV3Repository, groups GroupRepository, settings *SettingService,
@@ -43,7 +56,8 @@ func NewChannelMonitorV3GroupProber(repo ChannelMonitorV3Repository, groups Grou
 	return &ChannelMonitorV3GroupProber{repo: repo, probes: probes, groups: groups, settings: settings,
 		executor: &channelMonitorV3GatewayProbe{gateway: gateway, openai: openai, concurrency: concurrency},
 		lock:     newSingletonJobLock(nil, db, "channel-monitor-v3-group-probes", 2*time.Minute), ops: ops, email: email,
-		emailLimiter: newSlidingWindowLimiter(0, time.Hour), ctx: ctx, cancel: cancel}
+		emailLimiter: newSlidingWindowLimiter(0, time.Hour), ctx: ctx, cancel: cancel,
+		retryBase: channelMonitorV3ProbeRetryBaseDelay, retryCooldown: channelMonitorV3ProbeCooldownRetryWait}
 }
 
 func (p *ChannelMonitorV3GroupProber) Start() {
@@ -138,7 +152,7 @@ func (p *ChannelMonitorV3GroupProber) checkWithRetries(ctx context.Context, id i
 			case <-ctx.Done():
 				result.Outcome, result.Category = "cancelled", ""
 				return result
-			case <-time.After(250 * time.Millisecond):
+			case <-time.After(p.retryDelay(result.Category)):
 			}
 		}
 		group := p.authorizedGroup(ctx, target)
@@ -182,6 +196,27 @@ func (p *ChannelMonitorV3GroupProber) checkWithRetries(ctx context.Context, id i
 		}
 	}
 	return result
+}
+
+// retryDelay returns how long to wait before spending the next paid attempt.
+// A scheduler cooldown reported as no_available_account needs the longer wait;
+// any other failure keeps the tight retry.
+func (p *ChannelMonitorV3GroupProber) retryDelay(previousCategory string) time.Duration {
+	base := p.retryBase
+	if base <= 0 {
+		base = channelMonitorV3ProbeRetryBaseDelay
+	}
+	if previousCategory != "no_available_account" {
+		return base
+	}
+	wait := p.retryCooldown
+	if wait <= 0 {
+		wait = channelMonitorV3ProbeCooldownRetryWait
+	}
+	if wait < base {
+		return base
+	}
+	return wait
 }
 
 func (p *ChannelMonitorV3GroupProber) authorizedGroup(ctx context.Context, target ChannelMonitorV3GroupProbeTarget) *Group {
