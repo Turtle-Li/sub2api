@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statusMetrics, statusMetricDetails, cacheCapability, quotaNotice } from '../help/turtleroute-status-20261109-v10/group-availability.mjs';
+import { statusMetrics, statusMetricDetails, cacheCapability, quotaNotice } from '../help/turtleroute-status-20261109-v11/group-availability.mjs';
 const cacheStatus = (overrides = {}) => ({ cache_sample_state: 'ready', cache_scope: 'shared_account_pool', cache_statistic: 'best_complete_hour', cache_lookback_hours: 24, cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z', cache_read_rate: null, cache_peak_hour_rate: 97.2, ...overrides });
 const probeStatus = (overrides = {}) => ({ request_sample_state: 'none', probe_metrics_version: 1, probe_enabled: true, probe_sample_state: 'ready', probe_success_rate: 100, probe_ttft_p50_ms: 1200, probe_latency_p50_ms: 4500, ...overrides });
 const probeCache = (overrides = {}) => probeStatus({ window_minutes: 180, probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens', probe_cache_read_rate: 96.5, ...overrides });
@@ -9,7 +9,7 @@ test('shared upstream status cannot borrow cache proof or per-model latency', ()
   const details = statusMetricDetails(status);
   assert.equal(cacheCapability(status), null);
   assert.equal(details[0].value, null);
-  assert.equal(details[1].scope, '同源上游 · 共享检测');
+  assert.equal(details[1].scope, '可用性检测');
   assert.equal(details[1].value, '100.0%');
   assert.equal(details[2].value, '—');
   assert.equal(statusMetricDetails({ ...status, ...cacheStatus({ cache_peak_hour_rate: 80 }) })[0].value, '80.0%');
@@ -69,7 +69,7 @@ test('quiet groups use separately labelled qualified check metrics, preserving r
   const metrics = statusMetricDetails(status);
   assert.equal(metrics[1].label, '检测成功率');
   assert.equal(metrics[2].label, '检测首 Token P50');
-  assert.equal(metrics[2].scope, '本分组 · 定时检测');
+  assert.equal(metrics[2].scope, '可用性检测');
   assert.equal(metrics[0].probe, false);
 });
 test('legacy checks expose total duration without claiming a first-token measurement', () => {

@@ -7,7 +7,6 @@
       </div>
       <span class="status-badge" :data-state="quota?.state === 'exhausted' ? 'quota' : status?.status ?? 'unknown'">{{ stateLabel }}</span>
     </header>
-    <p v-if="status?.shared_probe" class="mt-3 text-xs leading-5 text-gray-500 dark:text-dark-300" data-testid="shared-probe-notice">{{ status.probe_enabled && status.shared_probe_source_name ? t('channelMonitorV3.cards.sharedFrom', { group: status.shared_probe_source_name }) : t('channelMonitorV3.cards.sharedUnavailable') }}</p>
 
     <div v-if="quota" class="status-quota" data-testid="pool-quota-notice">
       <p class="font-medium">{{ t(`channelMonitorV3.cards.quota.${quota.state}`) }}</p>
@@ -35,12 +34,6 @@
       <p class="mt-4 min-h-5 text-xs leading-5 text-gray-500 dark:text-dark-300" role="status">{{ selected !== null && cells[selected] ? cellLabel(cells[selected]) : sampleLabel }}</p>
     </div>
 
-    <footer class="mt-4 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-dark-600 dark:text-dark-300">
-      <template v-if="status?.probe_enabled">
-        <span>{{ t(status.shared_probe ? 'channelMonitorV3.cards.sharedEvery' : 'channelMonitorV3.cards.probeEvery') }}</span>
-      </template>
-      <span v-else>{{ t('channelMonitorV3.cards.probeOff') }}</span>
-    </footer>
   </article>
 </template>
 
@@ -84,7 +77,7 @@ const metrics = computed(() => {
   const probeLatency = !s?.shared_probe && !realTime && !probeTTFT && probeReady.value && validTime(s?.probe_latency_p50_ms)
   return [
     ...(cacheVisible.value ? [{ key: 'cache', label: realCacheReady.value ? 'cache' : 'cacheCapability', scope: realCacheReady.value ? 'cacheScope' : 'cacheCapabilityScope', value: realCacheReady.value ? percent(s?.cache_peak_hour_rate) : t(`channelMonitorV3.cards.cache${capability.value === 'verified' ? 'Verified' : 'Pending'}`), probe: false }] : []),
-    { key: 'success', label: probeSuccess ? (s?.shared_probe ? 'sharedSuccess' : 'probeSuccess') : 'success', scope: probeSuccess ? (s?.shared_probe ? 'sharedScope' : 'probeScope') : 'groupScope', value: realSuccess ? percent(s?.request_success_rate) : probeSuccess ? percent(s?.probe_success_rate) : '—', probe: probeSuccess },
+    { key: 'success', label: probeSuccess ? 'probeSuccess' : 'success', scope: probeSuccess ? 'probeScope' : 'groupScope', value: realSuccess ? percent(s?.request_success_rate) : probeSuccess ? percent(s?.probe_success_rate) : '—', probe: probeSuccess },
     { key: 'ttft', label: probeTTFT ? 'probeTTFT' : probeLatency ? 'probeLatency' : 'ttft', scope: probeTTFT || probeLatency ? 'probeScope' : 'groupScope', value: realTime && validTime(s?.ttft_p50_ms) ? seconds(s.ttft_p50_ms) : probeTTFT && validTime(s?.probe_ttft_p50_ms) ? seconds(s.probe_ttft_p50_ms) : probeLatency && validTime(s?.probe_latency_p50_ms) ? seconds(s.probe_latency_p50_ms) : '—', probe: probeTTFT || probeLatency },
   ]
 })
@@ -94,12 +87,12 @@ const cacheHourLabel = computed(() => realCacheReady.value ? `${new Date(status.
 const cacheHourTitle = computed(() => realCacheReady.value ? t('channelMonitorV3.cards.cacheHour', { start: new Date(status.value!.cache_hour_start!).toLocaleString(locale.value), end: new Date(status.value!.cache_hour_end!).toLocaleString(locale.value) }) : '')
 const checkedLabel = computed(() => status.value?.checked_at ? t(`channelMonitorV3.cards.${status.value.source === 'probe' || status.value.source === 'shared_probe' ? 'checked' : 'observed'}`, { time: time(status.value.checked_at) }) : t('channelMonitorV3.cards.noRecent'))
 const sampleLabel = computed(() => {
-  if (metrics.value.some(metric => metric.probe)) return t(status.value?.shared_probe ? 'channelMonitorV3.cards.sharedFallback' : 'channelMonitorV3.cards.probeFallback')
+  if (metrics.value.some(metric => metric.probe)) return ''
   const key = status.value?.request_sample_state
   return t(`channelMonitorV3.cards.${key === 'ready' ? 'requestReady' : key === 'insufficient' ? 'insufficient' : key === 'stale' || !status.value ? 'unavailable' : 'waiting'}`, { count: status.value?.min_requests ?? 20 })
 })
 const cells = computed<PlazaGroupAvailability['cells']>(() => status.value?.cells.length ? status.value.cells : Array.from({ length: 72 }, (_, i) => ({ start: `unknown-${i}`, status: 'unknown', source: 'none' })))
-const cellLabel = (cell: PlazaGroupAvailability['cells'][number]) => `${Number.isNaN(Date.parse(cell.start)) ? '' : time(cell.start) + ' · '}${t(`channelMonitorV3.cards.state.${cell.status}`)} · ${t(`channelMonitorV3.cards.${cell.source === 'shared_probe' ? 'sharedSource' : cell.source === 'probe' ? 'probeSource' : cell.source === 'requests' ? 'requestSource' : 'noData'}`)}`
+const cellLabel = (cell: PlazaGroupAvailability['cells'][number]) => `${Number.isNaN(Date.parse(cell.start)) ? '' : time(cell.start) + ' · '}${t(`channelMonitorV3.cards.state.${cell.status}`)}`
 function moveSlot(event: KeyboardEvent, index: number) {
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? cells.value.length - 1 : event.key === 'ArrowLeft' ? Math.max(0, index - 1) : event.key === 'ArrowRight' ? Math.min(cells.value.length - 1, index + 1) : null
   if (next === null) return

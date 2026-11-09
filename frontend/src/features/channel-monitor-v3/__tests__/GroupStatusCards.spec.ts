@@ -38,17 +38,19 @@ beforeEach(() => {
   mocks.models.mockReset().mockResolvedValue(['new-owner-model', 'deepseek-chat'])
 })
 describe('status group cards', () => {
-  it('labels shared upstream evidence without borrowing cache capability or timings', () => {
+  it('keeps sharing internals out of public cards without borrowing cache or timings', () => {
     const wrapper = mount(GroupStatusCard, { props: { group: group({ shared_probe: true, shared_probe_source_name: 'DeepSeek shared',
       source: 'shared_probe', request_sample_state: 'none', request_success_rate: null, ttft_p50_ms: null,
       cache_sample_state: 'none', cache_peak_hour_rate: null, probe_ttft_p50_ms: 200, probe_latency_p50_ms: 1000,
       probe_cache_verification_version: 1, probe_cache_verification_window_hours: 24, probe_cache_verified_at: new Date().toISOString(),
       cells: [{ start: new Date().toISOString(), status: 'operational', source: 'shared_probe' }] }) } })
-    expect(wrapper.get('[data-testid="shared-probe-notice"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('channelMonitorV3.cards.sharedSuccess')
+    expect(wrapper.find('[data-testid="shared-probe-notice"]').exists()).toBe(false)
+    expect(wrapper.find('footer').exists()).toBe(false)
+    expect(wrapper.text()).toContain('channelMonitorV3.cards.probeSuccess')
+    expect(wrapper.text()).not.toContain('DeepSeek shared')
     expect(wrapper.get('[data-metric="ttft"]').text()).toBe('—')
     expect(wrapper.find('[data-metric="cache"]').exists()).toBe(false)
-    expect(wrapper.get('.status-timeline button').attributes('aria-label')).toContain('channelMonitorV3.cards.sharedSource')
+    expect(wrapper.get('.status-timeline button').attributes('aria-label')).not.toContain('shared')
     wrapper.unmount()
   })
   it('retains the shared group’s independent real cache measurement', () => {

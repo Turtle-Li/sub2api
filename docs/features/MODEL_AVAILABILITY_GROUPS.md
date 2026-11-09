@@ -1,5 +1,17 @@
 # Public group availability module
 
+Latest owner correction, November9: public cards on the homepage, `/status`
+and `/monitor` show service status and qualified metrics without check cadence,
+shared-source names or reuse explanations. This also applies to timeline
+tooltips, accessible names, metric subtitles and the public rules disclosure.
+Use neutral "检测成功率 / 可用性检测" labels; never relabel checks as real
+requests. Source configuration and frequency explanations stay in the inline
+administrator editor. Backend provenance, independent cache/timing rules,
+statistics and execution are unchanged. Homepage assets use immutablev11.
+Remove public group search from the status dashboard/homepage section. Signed-in
+users and administrators enter status from the existing top header; no duplicate
+status item appears in either sidebar. Keep the admin add-group searchable Select.
+
 ## Shared upstream checks — November9
 
 An administrator may set a listed group's `source_group_id` to another listed,
@@ -24,8 +36,9 @@ blocking unrelated configuration saves; this never bypasses read-time admission.
 
 The follower reads the source's existing, current-model check receipts without
 creating follower checks, attempts or usage. `shared_probe`,
-`shared_probe_source_name` and cell `source=shared_probe` label this as shared
-upstream connectivity, not an individual model test. Existing freshness and
+`shared_probe_source_name` and cell `source=shared_probe` retain observation
+provenance in the DTO; public presentation follows the latest correction above.
+Existing freshness and
 minimum-sample rules apply. A recent failure observed in the follower's real
 traffic wins over a newer source success. Its real-request denominator remains
 its own. Shared checks provide no follower cache proof, cache percentage, first
@@ -40,8 +53,8 @@ execution separate from real traffic. Preserve those contracts and attribution;
 the reference does not infer per-model cache or timing from another model.
 Local implementation is in `channel_monitor_v3_shared_probe.go` in service and
 repository, with dedicated service and PostgreSQL integration tests. The editor
-reuses the incumbent Select; cards and immutable homepagev10 expose the same
-source labels. No WorkBuddy runtime fork, prompt change or database migration
+reuses the incumbent Select; cards and the immutable homepage use the same
+public presentation rules. No WorkBuddy runtime fork, prompt change or database migration
 is needed. Rollback preserves JSON choices/history with followers disabled;
 upgrade again before editing those choices with an older client.
 Older binaries also stop all scheduled checks when total configured rows exceed

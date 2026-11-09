@@ -8,13 +8,12 @@
       </div>
     </header>
     <GroupStatusControls v-if="auth.isAdmin && manageOpen" id="model-status-controls" class="mt-6" @saved="load" @close="manageOpen = false" />
-    <div class="my-7 flex flex-wrap items-center justify-between gap-3">
-      <label class="relative block w-full sm:w-72"><span class="sr-only">{{ t('channelMonitorV3.cards.search') }}</span><Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-3 text-gray-400" /><input v-model="query" type="search" class="input pl-9" :placeholder="t('channelMonitorV3.cards.search')" /></label>
+    <div class="my-5 flex justify-end">
       <span class="text-xs text-gray-500 dark:text-dark-300" aria-live="off">{{ t('channelMonitorV3.cards.refreshIn', { seconds: remaining }) }}</span>
     </div>
     <p v-if="error" class="mb-6 rounded-xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-200" role="alert">{{ t('channelMonitorV3.cards.loadFailed') }}</p>
     <div v-if="loading && !data" class="grid gap-5 md:grid-cols-2 xl:grid-cols-3" aria-busy="true"><div v-for="n in 3" :key="n" class="h-80 animate-pulse rounded-2xl bg-gray-200 dark:bg-dark-800"></div></div>
-    <p v-else-if="sections.length === 0" class="py-16 text-center text-sm text-gray-500 dark:text-dark-300">{{ t(query ? 'channelMonitorV3.cards.noMatch' : 'channelMonitorV3.cards.empty') }}</p>
+    <p v-else-if="sections.length === 0" class="py-16 text-center text-sm text-gray-500 dark:text-dark-300">{{ t('channelMonitorV3.cards.empty') }}</p>
     <div class="status-sections">
       <section v-for="section in sections" :key="section.platform" class="min-w-0" :class="{ 'status-section-expanded': section.groups.length > 1 }" :aria-label="section.label">
         <h2 class="mb-4 flex items-center gap-2.5 text-lg font-semibold text-gray-900 dark:text-dark-100"><PlatformIcon :platform="section.platform" size="lg" />{{ section.label }}<span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-dark-200">{{ section.groups.length }}</span></h2>
@@ -43,16 +42,13 @@ const app = useAppStore()
 const data = ref<ModelStatusResponse | null>(null)
 const loading = ref(false)
 const error = ref(false)
-const query = ref('')
 const manageOpen = ref(false)
 const remaining = ref(60)
 const controller = new AbortController()
 let timer: ReturnType<typeof setInterval> | undefined
 const sections = computed(() => {
   const groups = new Map<string, ModelStatusGroup[]>()
-  const term = query.value.trim().toLocaleLowerCase()
   for (const group of data.value?.groups ?? []) {
-    if (term && !group.name.toLocaleLowerCase().includes(term)) continue
     const list = groups.get(group.platform) ?? []
     list.push(group)
     groups.set(group.platform, list)

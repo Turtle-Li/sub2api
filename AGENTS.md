@@ -27,8 +27,9 @@
   also read `docs/features/MODEL_AVAILABILITY_GROUPS.md`. Keep synthetic checks
   separate from user traffic and preserve exact group admission and slot claims.
   Shared checks require the same nonempty public account pool and an independent
-  enabled source; followers remain disabled for execution. Label shared evidence,
-  preserve own request failures, and never inherit cache or timing measurements.
+  enabled source; followers remain disabled for execution. Preserve own request
+  failures and never inherit cache or timing measurements. Public cards omit
+  check frequency and source identities; these details belong in the admin editor.
 
 ## WorkBuddy Hunyuan image batches
 
