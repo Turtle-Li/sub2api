@@ -68,11 +68,15 @@ The reusable personal entry is `auto_work/docs/AntigravityCLI调用约定.md`.
   Model prices remain aligned and visible. Search, keyboard selection, Escape
   and focus return keep their existing behavior.
 
-Codex adapted the proposal to preserve 44px phone action/platform targets, an
-opaque neutral completion badge, a named status class and room for error text.
-The proposed smaller touch targets and translucent low-contrast label were not
-adopted. Existing desktop actions remain 32px. No provider, billing, task,
-thumbnail, cache, schema, dependency or generation code changed.
+The applied card footer keeps an opaque neutral completion badge, a named status
+class and a reserved two-line hint area, and rejects the proposed translucent
+low-contrast label. Card action targets measure 28px on desktop and 32px on
+phones rather than the proposal's 44px phone targets: at the 162px two-column
+phone card width, 44px targets squeeze the model label to `G 3 …` (measured in
+Chrome at 390×844), and the denser footer keeps the label readable. This
+supersedes the earlier 44px claim recorded while the proposal was still under
+review; the rail's own control heights are documented above. No provider,
+billing, task, thumbnail, cache, schema, dependency or generation code changed.
 
 ## Reference and validation
 
@@ -83,13 +87,17 @@ a presentation refinement, not a new upstream source adoption.
 
 Validation of the final source:
 
-- `pnpm exec vitest run src/features/image-studio`: 12 files, 79 tests passed.
+- `pnpm exec vitest run src/features/image-studio`: 12 files, 83 tests passed
+  (re-run on `0ba96a59e` before release).
 - Scoped TaskCard ESLint, `pnpm build` and `git diff --check` passed.
 - One scoped Impeccable detector pass returned no findings for the two UI files.
 - Real Chrome synthetic QA at 1440×900 and 390×844 covered light/dark gallery
-  and phone picker screenshots, equal-height cards, uncropped images, no page
-  overflow, visible error text and neutral cancelled badges/icons.
-- Phone action/platform targets measured 44px; OpenAI and Seedream prices fit.
+  and phone picker screenshots, aspect-accurate card previews without
+  letterboxing, no page overflow, visible error text and neutral cancelled
+  badges/icons.
+- Card action targets measured 28px (desktop) and 32px (phones); the creation
+  rail held a constant 788px height across four model switches, with no control
+  jump. OpenAI and Seedream prices fit.
   Gemini search and arrow-key selection passed; Escape returned focus to the
   trigger. Fixture aliases reduced to three canonical options in that fixture;
   production's separate four-option catalogue remains the release smoke target.
