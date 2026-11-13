@@ -94,6 +94,21 @@ durable dedup record showed a single 0.30 wallet debit at 1×, with a CNY
 settlement marker. The four foreign models were all denied on the Muse Key.
 Monitor unpolled native work before expanding beyond the initial group.
 
+## Reference image production acceptance — 2026-11-14 CST
+
+Revision `185fe30b4ad00d2b7bbe0c91f259c72dc7afb037` was built in
+[run 43488941641](https://github.com/Turtle-Li/sub2api/actions/runs/43488941641)
+and activated on green by the canonical image receiver. The three origin
+health checks returned 200. The existing Caddy configuration matched after
+normalizing the active application slot; the independent route was preserved.
+
+The public API rejected a remote reference with 400, accepted one inline PNG
+with 202, and served the completed H.264/AAC MP4 with 200. Full decode passed:
+5 seconds, 1280×704, 24 fps, 504952 bytes. Early and middle frames showed
+the uploaded illustration's distinctive shapes and their movement. Anonymous
+and different-key downloads were denied with 401 and 404. Repeated reads
+left one dedup entry and one 0.30 wallet debit at 1× (usage row 1016941).
+
 ## Pinned reference
 
 `czg86389-hub/muse2api`, revision
