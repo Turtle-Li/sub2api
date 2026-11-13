@@ -236,3 +236,7 @@ type UsageBillingRepository interface {
 	CaptureBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error)
 	ReleaseBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error)
 }
+
+type museImageSettlementHistory interface {
+	HasAppliedMuseImageUsage(ctx context.Context, requestID string, keyID int64) (bool, error)
+}

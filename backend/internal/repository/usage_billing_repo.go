@@ -19,6 +19,16 @@ func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB) service.UsageBill
 	return &usageBillingRepository{db: sqlDB}
 }
 
+func (r *usageBillingRepository) HasAppliedMuseImageUsage(ctx context.Context, requestID string, keyID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2
+		UNION ALL
+		SELECT 1 FROM usage_billing_dedup_archive WHERE request_id = $1 AND api_key_id = $2
+	)`, requestID, keyID).Scan(&exists)
+	return exists, err
+}
+
 func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBillingCommand) (_ *service.UsageBillingApplyResult, err error) {
 	if cmd == nil {
 		return &service.UsageBillingApplyResult{}, nil

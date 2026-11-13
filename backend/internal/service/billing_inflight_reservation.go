@@ -373,6 +373,7 @@ type InflightEstimateRequest struct {
 	BodyBytes int
 	MaxTokens int
 	Kind      InflightEstimateKind
+	ImageSize string
 	// Units 按次/按张数量（<=0 视为 1）。
 	Units int
 	// SearchCalls 叠加的搜索次数（按分组 search_price_per_1k 计）。
@@ -387,11 +388,12 @@ type InflightEstimateRequest struct {
 
 // inflightEstimateDeps 两种网关 service 共用的估算依赖。
 type inflightEstimateDeps struct {
-	cfg            *config.Config
-	billing        *BillingService
-	resolver       *ModelPricingResolver
-	resolveMapping func(ctx context.Context, groupID int64, model string) ChannelMappingResult
-	userGroupRate  func(ctx context.Context, userID, groupID int64, groupDefault float64) float64
+	cfg                  *config.Config
+	billing              *BillingService
+	resolver             *ModelPricingResolver
+	museImageWalletPrice func(context.Context, *APIKey, string) (string, float64)
+	resolveMapping       func(ctx context.Context, groupID int64, model string) ChannelMappingResult
+	userGroupRate        func(ctx context.Context, userID, groupID int64, groupDefault float64) float64
 	// accountMappedModels 返回调度器可选账号对 model 的账号级映射结果（去重，不含 model 本身）。
 	// 准入时账号尚未选定，计费侧 billableModelWithFallback 会回退到实际转发模型（UpstreamModel，
 	// 即账号映射后的模型），因此这里取所有候选映射模型的最高估算。
@@ -569,6 +571,13 @@ func (d inflightEstimateDeps) estimateOne(ctx context.Context, apiKey *APIKey, m
 	units := req.Units
 	if units <= 0 {
 		units = 1
+	}
+	if req.Kind == InflightEstimateImage && req.Model == MuseImageModel && d.museImageWalletPrice != nil {
+		if model != MuseImageModel {
+			return 0
+		}
+		_, price := d.museImageWalletPrice(ctx, apiKey, req.ImageSize)
+		return price * float64(units) * math.Max(0, imageRate)
 	}
 	var resolved *ResolvedPricing
 	if d.resolver != nil {
@@ -778,7 +787,7 @@ func (s *GatewayService) EstimateInflightReservation(ctx context.Context, apiKey
 }
 
 func (s *OpenAIGatewayService) inflightEstimateDeps() inflightEstimateDeps {
-	d := inflightEstimateDeps{cfg: s.cfg, billing: s.billingService, resolver: s.resolver}
+	d := inflightEstimateDeps{cfg: s.cfg, billing: s.billingService, resolver: s.resolver, museImageWalletPrice: s.museImageWalletPrice}
 	if s.channelService != nil {
 		d.resolveMapping = s.channelService.ResolveChannelMapping
 	}

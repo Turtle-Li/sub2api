@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -632,6 +633,15 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	pricingAt time.Time,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
+	if result != nil && result.museImageUnitPrice > 0 {
+		// Muse's native image cards are already in wallet units, as in Image Studio.
+		// Skip the generic CNY-to-reference-price normalization for this quote.
+		return &CostBreakdown{
+			settlementCurrency: s.billingService.SettlementCurrency(), settlementRate: 1,
+			TotalCost: result.museImageUnitPrice, ActualCost: result.museImageUnitPrice * math.Max(0, imageMultiplier),
+			BillingMode: string(BillingModeImage),
+		}, nil
+	}
 	if result != nil && result.WebSearchCalls > 0 {
 		// Codex alpha/search 网页搜索按次计费：上游不返回 usage/token 字段，单价只取
 		// 分组覆盖价（nil 时默认 0.01 = 官方 $10/1000 次），不参与渠道级模型定价。

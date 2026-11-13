@@ -53,9 +53,13 @@ the ownership check still apply. The task lookup is retained at least 24 hours.
 
 A positive configured media price is required to submit. Images use one
 configured image unit and the existing image rate; completion settles before
-returning image bytes or a result URL. A requested image tier uses its own
-positive group price when configured, otherwise the existing positive Muse
-image card (1K, then 2K, then 4K). Video retains the configured 720p rate
+returning image bytes or a result URL. A positive Muse CNY-authored tier or
+default card takes precedence over the flat price at the same size. If the
+requested size has no price, use the first positive configured tier in 1K, 2K,
+4K order. The authored number is a wallet-unit price, as in Image Studio, and
+is not divided by the exchange rate. The same quote is used for admission
+and settlement. After a pricing change, the durable settlement record keeps
+previously paid tasks readable without a new charge. Video retains the configured 720p rate
 and bills the requested seconds within the supported billing range of 5–15,
 independent of the actual output dimensions. First completed status/content
 observation schedules one video charge. Failed or unobserved tasks do not

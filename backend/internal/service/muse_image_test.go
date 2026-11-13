@@ -24,6 +24,15 @@ type museImageLedgerCache struct {
 	claims  map[string]bool
 }
 
+type museImageSettledHistoryStub struct {
+	openAIRecordUsageBillingRepoStub
+	applied bool
+}
+
+func (s *museImageSettledHistoryStub) HasAppliedMuseImageUsage(_ context.Context, id string, keyID int64) (bool, error) {
+	return s.applied && id == "muse-image:task_0123456789abcdef0123" && keyID == 20, nil
+}
+
 func (c *museImageLedgerCache) GetGrokVideoPendingBilling(_ context.Context, key string) ([]byte, error) {
 	return c.pending[key], nil
 }
@@ -100,40 +109,59 @@ func TestMuseImageNativeTaskIdempotencyIsScopedAndPostCannotBeReplayed(t *testin
 	require.False(t, w.Flushed)
 }
 
-func TestMuseImagePriceUsesWalletMediaRate(t *testing.T) {
+func TestMuseImageUsesTieredNativeQuoteForAdmission(t *testing.T) {
 	billing := NewBillingService(&config.Config{}, nil)
-	billing.currencyPolicy.Store(PricingCurrencySettings{SettlementCurrency: "CNY", USDToCNYRate: 6.75})
-	price := 0.10
-	key := &APIKey{Group: &Group{Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard, ImagePrice2K: &price}}
-	svc := &OpenAIGatewayService{billingService: billing}
-	require.True(t, svc.HasMuseImagePrice(t.Context(), key, ImageBillingSize2K))
-	result := (&MuseImageTask{NativeID: "task_0123456789abcdef0123", CreatedAt: time.Now().Unix()}).UsageResult()
-	cost := svc.calculateOpenAIImageCost(t.Context(), MuseImageModel, key, result, 0.5)
-	finalizeUsageCurrency(cost, key, false)
-	require.Equal(t, "CNY", costCurrency(cost))
-	require.InDelta(t, 0.05, cost.ActualCost, 1e-10)
+	billing.currencyPolicy.Store(PricingCurrencySettings{SettlementCurrency: "CNY", USDToCNYRate: 7})
+	price1K, price2K := 0.10, 0.18
+	group := &Group{ID: 27, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 0.5,
+		ModelPricing: []ChannelModelPricing{{Models: []string{MuseImageModel}, Currency: PricingCurrencyCNY, BillingMode: BillingModeImage,
+			Intervals: []PricingInterval{{TierLabel: ImageBillingSize1K, PerRequestPrice: &price1K}, {TierLabel: ImageBillingSize2K, PerRequestPrice: &price2K}},
+		}},
+	}
+	key := &APIKey{GroupID: &group.ID, Group: group, User: &User{ID: 10, Balance: 1}}
+	svc := &OpenAIGatewayService{billingService: billing, resolver: NewModelPricingResolver(nil, billing)}
+	for _, test := range []struct {
+		size string
+		cost float64
+	}{{ImageBillingSize2K, 0.09}, {ImageBillingSize4K, 0.05}} {
+		require.True(t, svc.HasMuseImagePrice(t.Context(), key, test.size))
+		reserve, ok := svc.EstimateInflightReservation(t.Context(), key, InflightEstimateRequest{Model: MuseImageModel, Kind: InflightEstimateImage, ImageSize: test.size})
+		require.True(t, ok)
+		require.InDelta(t, test.cost, reserve, 1e-10)
+	}
 }
 
 func TestMuseImageSettlesOneWalletDebitAcrossStatusAndContentReads(t *testing.T) {
 	logs := &openAIRecordUsageLogRepoStub{inserted: true}
-	ledger := &openAIRecordUsageBillingRepoStub{}
+	ledger := &museImageSettledHistoryStub{}
 	svc := newOpenAIRecordUsageServiceForTest(logs, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
 	svc.usageBillingRepo = ledger
 	svc.cache = &museImageLedgerCache{pending: map[string][]byte{}, claims: map[string]bool{}}
-	svc.billingService.currencyPolicy.Store(PricingCurrencySettings{SettlementCurrency: "CNY", USDToCNYRate: 6.75})
-	price := 0.10
-	group := &Group{ID: 27, Platform: PlatformOpenAI, RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard, ImagePrice1K: &price}
+	svc.billingService.currencyPolicy.Store(PricingCurrencySettings{SettlementCurrency: "CNY", USDToCNYRate: 7})
+	svc.resolver = NewModelPricingResolver(nil, svc.billingService)
+	price, legacyPrice := 0.10, 0.08
+	group := &Group{ID: 27, Platform: PlatformOpenAI, RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard, ImagePrice1K: &legacyPrice,
+		ModelPricing: []ChannelModelPricing{{Models: []string{MuseImageModel}, Currency: PricingCurrencyCNY, BillingMode: BillingModeImage,
+			Intervals: []PricingInterval{{TierLabel: ImageBillingSize1K, PerRequestPrice: &price}},
+		}},
+	}
 	user := &User{ID: 249, Balance: 1}
 	key := &APIKey{ID: 20, UserID: user.ID, GroupID: &group.ID, Group: group, User: user}
 	account := &Account{ID: 227, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	task := &MuseImageTask{NativeID: "task_0123456789abcdef0123", CreatedAt: time.Now().Unix(), Size: "2K"}
 	require.True(t, svc.HasMuseImagePrice(t.Context(), key, ImageBillingSize2K))
-	for _, requestID := range []string{"status-poll", "repeat-poll", "content"} {
+	for i, requestID := range []string{"status-poll", "repeat-poll", "content"} {
+		if i == 2 {
+			// Simulate cache loss after an already-paid task's price changes.
+			svc.cache = &museImageLedgerCache{pending: map[string][]byte{}, claims: map[string]bool{}}
+			price = 0.12
+		}
 		ctx := context.WithValue(t.Context(), ctxkey.ClientRequestID, requestID)
 		require.NoError(t, svc.SettleMuseImage(ctx, &OpenAIRecordUsageInput{
 			Result: task.UsageResult(), APIKey: key, Account: account, User: user,
 			RequestPayloadHash: HashUsageRequestPayload([]byte(task.ID())),
 		}))
+		ledger.applied = true
 	}
 	require.Equal(t, 1, ledger.calls)
 	require.Equal(t, 1, logs.calls)
@@ -141,5 +169,6 @@ func TestMuseImageSettlesOneWalletDebitAcrossStatusAndContentReads(t *testing.T)
 	require.Equal(t, 1, ledger.lastCmd.ImageCount)
 	require.NotNil(t, logs.lastLog.ImageSize)
 	require.Equal(t, ImageBillingSize1K, *logs.lastLog.ImageSize)
+	require.Equal(t, "CNY", logs.lastLog.Currency)
 	require.InDelta(t, 0.10, ledger.lastCmd.BalanceCost, 1e-10)
 }

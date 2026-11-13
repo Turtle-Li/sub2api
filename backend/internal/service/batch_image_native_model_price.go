@@ -14,19 +14,37 @@ func batchImageNativeModelPrice(group *Group, req BatchImageSubmitRequest, provi
 		(provider != BatchImageProviderMuse && provider != BatchImageProviderWorkBuddy && !isImageBridgeProvider(provider)) {
 		return 0, false, nil
 	}
-	card := matchGroupModelPricing(group, req.Model)
-	if card == nil || card.Currency != PricingCurrencyCNY || (card.BillingMode != BillingModeImage && card.BillingMode != BillingModePerRequest) {
+	card := nativeWalletImagePriceCard(group, req.Model)
+	if card == nil {
 		return 0, false, nil
 	}
-	price := card.PerRequestPrice
-	for _, tier := range card.Intervals {
-		if strings.EqualFold(tier.TierLabel, req.ImageSize) && tier.PerRequestPrice != nil {
-			price = tier.PerRequestPrice
-			break
-		}
-	}
-	if price == nil || *price <= 0 || math.IsNaN(*price) || math.IsInf(*price, 0) {
+	price := nativeWalletImageTierPrice(card, req.ImageSize)
+	if !positiveNativeImagePrice(price) {
 		return 0, true, ErrBatchImageSettlementPricingMissing
 	}
 	return *price, true, nil
+}
+
+func nativeWalletImagePriceCard(group *Group, model string) *ChannelModelPricing {
+	card := matchGroupModelPricing(group, model)
+	if card == nil || card.Currency != PricingCurrencyCNY || (card.BillingMode != BillingModeImage && card.BillingMode != BillingModePerRequest) {
+		return nil
+	}
+	return card
+}
+
+func nativeWalletImageTierPrice(card *ChannelModelPricing, size string) *float64 {
+	if card == nil {
+		return nil
+	}
+	for _, tier := range card.Intervals {
+		if strings.EqualFold(tier.TierLabel, size) && tier.PerRequestPrice != nil {
+			return tier.PerRequestPrice
+		}
+	}
+	return card.PerRequestPrice
+}
+
+func positiveNativeImagePrice(price *float64) bool {
+	return price != nil && *price > 0 && !math.IsInf(*price, 0)
 }

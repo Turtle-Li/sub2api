@@ -306,7 +306,8 @@ type OpenAIForwardResult struct {
 	// BillableImageSize keeps per-image pricing on the downstream requested
 	// tier even when an over-delivered upstream image reports a different size.
 	// Empty preserves the legacy behavior of pricing from ImageSize.
-	BillableImageSize string
+	BillableImageSize  string
+	museImageUnitPrice float64
 	// ImageEndpoint scopes image_count_billing to dedicated image endpoints.
 	ImageEndpoint      bool
 	ImageSize          string

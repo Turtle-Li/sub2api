@@ -52,20 +52,25 @@ func IsMuseImageTaskID(id string) bool {
 }
 
 func (s *OpenAIGatewayService) HasMuseImagePrice(ctx context.Context, key *APIKey, tier string) bool {
-	return s.museImageBillingTier(ctx, key, tier) != ""
+	_, price := s.museImageWalletPrice(ctx, key, tier)
+	return price > 0
 }
 
-func (s *OpenAIGatewayService) museImageBillingTier(ctx context.Context, key *APIKey, requested string) string {
+func (s *OpenAIGatewayService) museImageWalletPrice(ctx context.Context, key *APIKey, requested string) (string, float64) {
 	if key == nil || key.Group == nil {
-		return ""
+		return "", 0
 	}
 	key = s.apiKeyWithFreshGroupMediaPricing(ctx, key)
+	card := nativeWalletImagePriceCard(key.Group, MuseImageModel)
 	for _, tier := range []string{NormalizeImageBillingTierOrDefault(requested), ImageBillingSize1K, ImageBillingSize2K, ImageBillingSize4K} {
-		if price := key.Group.GetImagePrice(tier); price != nil && *price > 0 {
-			return tier
+		if price := nativeWalletImageTierPrice(card, tier); positiveNativeImagePrice(price) {
+			return tier, *price
+		}
+		if price := key.Group.GetImagePrice(tier); positiveNativeImagePrice(price) {
+			return tier, *price
 		}
 	}
-	return ""
+	return "", 0
 }
 
 // Native Muse keys are global to one installation. Scope them to the public
@@ -299,8 +304,22 @@ func (s *OpenAIGatewayService) SettleMuseImage(ctx context.Context, input *OpenA
 	if settled, err := s.cache.GetGrokVideoPendingBilling(ctx, task); err != nil || len(settled) != 0 {
 		return err
 	}
-	result.BillableImageSize = s.museImageBillingTier(ctx, key, result.ImageSize)
-	if result.BillableImageSize == "" {
+	markSettled := func() error {
+		return s.cache.SetGrokVideoPendingBilling(ctx, task, []byte("settled"), grokVideoPendingBillingTTL(s.cfg))
+	}
+	// A lost cache entry must not reprice work already charged under an older
+	// price or binary. Keep the generic SQL fingerprint check for new debits.
+	if history, ok := s.usageBillingRepo.(museImageSettlementHistory); ok {
+		applied, err := history.HasAppliedMuseImageUsage(ctx, result.RequestID, key.ID)
+		if err != nil {
+			return err
+		}
+		if applied {
+			return markSettled()
+		}
+	}
+	result.BillableImageSize, result.museImageUnitPrice = s.museImageWalletPrice(ctx, key, result.ImageSize)
+	if result.museImageUnitPrice <= 0 {
 		return errors.New("Muse image price is unavailable")
 	}
 	claimed, err := s.cache.ClaimGrokVideoBilled(ctx, task, 20*time.Second)
@@ -310,6 +329,5 @@ func (s *OpenAIGatewayService) SettleMuseImage(ctx context.Context, input *OpenA
 	if err := s.RecordUsage(ctx, input); err != nil {
 		return err
 	}
-	// The durable ledger deduplicates if Redis loses this completion marker.
-	return s.cache.SetGrokVideoPendingBilling(ctx, task, []byte("settled"), grokVideoPendingBillingTTL(s.cfg))
+	return markSettled()
 }
