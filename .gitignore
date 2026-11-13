@@ -203,6 +203,7 @@ docs/features/*
 !docs/features/SHOP_UNIFIED_SKU_20261108.md
 !docs/features/ACCOUNT_DAILY_REQUEST_LIMIT.md
 !docs/features/ACCOUNT_IDLE_KEEPALIVE.md
+!docs/features/MUSE_PUBLIC_VIDEO.md
 !docs/features/evidence/
 docs/features/evidence/*
 !docs/features/evidence/daily-request-quota/

@@ -48,7 +48,12 @@
   admission, stdin-only secrets and no replay after uncertain submission.
   The optional Python runtime defaults disabled; installation is separate from activation.
 
-## Muse batch images
+## Muse video and batch images
+
+- Before changing `muse-video`, read
+  `docs/features/MUSE_PUBLIC_VIDEO.md` for the pinned native contract, task
+  ownership, media URL boundary and settlement policy. A Muse key must not
+  inherit another provider's models through the Image Studio catalogue.
 
 - Before changing `muse_images` / `muse-image`, read
   `docs/features/MUSE_BATCH_PROVIDER_20261107.md` for the pinned native Muse task

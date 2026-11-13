@@ -210,6 +210,10 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 			accounts[i].Platform = platforms[0]
 			accounts[i].Credentials["base_url"] = "https://ark.cn-beijing.volces.com/api/v3"
 			accounts[i].Credentials["openai_capabilities"] = []string{"seedance"}
+			if len(platforms) > 1 && platforms[1] == service.MuseVideoModel {
+				accounts[i].Credentials["base_url"] = "https://muse.example/v1"
+				accounts[i].Credentials["model_mapping"] = map[string]any{"muse-video": "muse-video"}
+			}
 		}
 		if oauth {
 			accounts[i].Type = service.AccountTypeOAuth
@@ -371,6 +375,57 @@ func TestGrokMediaEligibilityReleasesBeforeSwitch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMuseVideoSubmissionBindsOwnerBeforeLookup(t *testing.T) {
+	h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI, service.MuseVideoModel)
+	const nativeID = "task_0123456789abcdef0123"
+	const publicID = "muse_" + nativeID
+	upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
+		body := `{"id":"` + nativeID + `","status":"queued"}`
+		switch req.Method {
+		case http.MethodPost:
+			require.Equal(t, "/v1/videos", req.URL.Path)
+		case http.MethodGet:
+			require.Equal(t, "/v1/videos/"+nativeID, req.URL.Path)
+			body = `{"id":"` + nativeID + `","status":"processing","progress":15}`
+		default:
+			t.Fatalf("unexpected method %s", req.Method)
+		}
+		require.Equal(t, int64(1), accountID)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	c, w := grokMediaSlotContext(t.Context(), true)
+	key, ok := middleware2.GetAPIKeyFromContext(c)
+	require.True(t, ok)
+	key.Group.Platform = service.PlatformOpenAI
+	price := 0.06
+	key.Group.VideoPrice720P = &price
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"muse-video","prompt":"waves"}`))
+	h.MuseVideoGeneration(c)
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), publicID)
+	require.NotEmpty(t, bindings.pending)
+
+	for _, keyID := range []int64{21, 20} {
+		c, w := grokMediaSlotContext(t.Context(), false)
+		key, ok := middleware2.GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		key.ID = keyID
+		key.Group.Platform = service.PlatformOpenAI
+		c.Params = gin.Params{{Key: "request_id", Value: publicID}}
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/"+publicID, nil)
+		h.MuseVideoStatus(c)
+		if keyID == 20 {
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), "processing")
+		} else {
+			require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+			require.Equal(t, 1, upstream.calls)
+		}
+	}
+	require.Equal(t, 2, upstream.calls)
+	slots.assertReleased(t)
 }
 
 func TestGrokMediaVideoLookupOwnerIsolation(t *testing.T) {

@@ -50,6 +50,50 @@ func TestAPIKeyAuthRejectsOversizedCredentialsBeforeLookup(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
+func TestMuseVideoReadAfterWalletDepletionStillRequiresValidKey(t *testing.T) {
+	const id = "muse_task_0123456789abcdef0123"
+	group := &service.Group{ID: 27, Platform: service.PlatformOpenAI, Status: service.StatusActive,
+		Hydrated: true, SubscriptionType: service.SubscriptionTypeStandard}
+	repo := &stubApiKeyRepo{getByKey: func(_ context.Context, credential string) (*service.APIKey, error) {
+		status := map[string]string{
+			"owner": service.StatusAPIKeyQuotaExhausted, "active": service.StatusActive,
+			"expired": service.StatusAPIKeyExpired, "disabled": service.StatusDisabled,
+		}[credential]
+		if status == "" {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		return &service.APIKey{ID: 100, UserID: 7, Key: credential, Status: status, Group: group, GroupID: &group.ID,
+			User: &service.User{ID: 7, Status: service.StatusActive, Balance: 0}}, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	router := gin.New()
+	auth := gin.HandlerFunc(NewAPIKeyAuthMiddleware(service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg), nil, cfg))
+	accepted := func(c *gin.Context) { c.Status(http.StatusOK) }
+	router.GET("/v1/videos/:request_id", auth, accepted)
+	router.GET("/v1/videos/:request_id/content", auth, accepted)
+	router.POST("/v1/videos", auth, accepted)
+	for _, tc := range []struct {
+		method, path, key string
+		want              int
+	}{
+		{http.MethodGet, "/v1/videos/" + id, "active", http.StatusOK},
+		{http.MethodGet, "/v1/videos/" + id + "/content", "owner", http.StatusOK},
+		{http.MethodGet, "/v1/videos/" + id, "expired", http.StatusForbidden},
+		{http.MethodGet, "/v1/videos/" + id, "disabled", http.StatusUnauthorized},
+		{http.MethodGet, "/v1/videos/" + id, "", http.StatusUnauthorized},
+		{http.MethodGet, "/v1/videos/other", "active", http.StatusForbidden},
+		{http.MethodPost, "/v1/videos", "active", http.StatusForbidden},
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.key != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.key)
+		}
+		router.ServeHTTP(w, req)
+		require.Equal(t, tc.want, w.Code, "%s %s %s: %s", tc.method, tc.path, tc.key, w.Body.String())
+	}
+}
+
 func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

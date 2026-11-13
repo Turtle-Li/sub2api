@@ -29,7 +29,7 @@ func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, subscriptionS
 //   - 鉴权（Authentication）：验证 Key 有效性、用户状态、IP 限制 —— 始终执行
 //   - 计费执行（Billing Enforcement）：过期/配额/订阅/余额检查 —— skipBilling 时整块跳过
 //
-// /v1/usage、/v1/sub2api/billing 端点与异步生图任务查询只需鉴权，不需要计费执行。
+// /v1/usage、/v1/sub2api/billing 端点与已提交的异步生图和 Muse 视频查询只需鉴权。
 // usage 允许过期/配额耗尽的 Key 查询自身用量，billing 用于读取当前 Key 的倍率配置，
 // 异步生图查询允许已耗尽额度的 Key 拉取自身任务结果。
 func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) gin.HandlerFunc {
@@ -173,10 +173,15 @@ func admitLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService api
 	ctx := service.WithPaidFallbackAPIKey(context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID), apiKey.ID)
 	c.Request = c.Request.WithContext(ctx)
 	billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
-	// Async image task polling only reads data that already belongs to the
-	// authenticated key and must remain available after the completed
-	// generation consumes the key's remaining balance.
-	skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
+	// A completed task can consume the last of the key's quota or balance.
+	// Reads still require an authenticated, bound key; expired Muse keys stay denied.
+	museVideoRead := isMuseVideoTaskRead(c, apiKey)
+	if museVideoRead && (apiKey.Status == service.StatusAPIKeyExpired || apiKey.IsExpired()) {
+		AbortWithError(c, 403, "API_KEY_EXPIRED", "API key 已过期")
+		return
+	}
+	skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest ||
+		isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) || museVideoRead
 
 	// ── 4. SimpleMode → early return ─────────────────────────────
 
@@ -415,6 +420,21 @@ func isAsyncImageTaskRead(method, path string) bool {
 		return false
 	}
 	return strings.HasPrefix(path, "/v1/images/tasks/") || strings.HasPrefix(path, "/images/tasks/")
+}
+
+func isMuseVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
+	if c.Request.Method != http.MethodGet || key.Group == nil || key.Group.Platform != service.PlatformOpenAI || key.Group.IsSubscriptionType() {
+		return false
+	}
+	switch c.FullPath() {
+	case "/v1/videos/:request_id", "/v1/videos/:request_id/content",
+		"/v1/videos/generations/:request_id", "/v1/videos/generations/:request_id/content",
+		"/videos/:request_id", "/videos/:request_id/content",
+		"/videos/generations/:request_id", "/videos/generations/:request_id/content":
+		return service.IsMuseVideoTaskID(c.Param("request_id"))
+	default:
+		return false
+	}
 }
 
 // GetAPIKeyFromContext 从上下文中获取API key
