@@ -142,6 +142,41 @@ the uploaded illustration's distinctive shapes and their movement. Anonymous
 and different-key downloads were denied with 401 and 404. Repeated reads
 left one dedup entry and one 0.30 wallet debit at 1× (usage row 1016941).
 
+## Native media parity production acceptance — 2026-11-14 CST
+
+Media support was activated at `b427226151d13c34910bfff2d54b245b1c1c3058`
+([build 43511316864](https://github.com/Turtle-Li/sub2api/actions/runs/43511316864)).
+The first live ledger read showed that the generic price resolver divided the
+authored Muse image amount by the reference exchange rate. Revision
+`f7a95716dee07f7afbe93b4992374dfc744013c0`
+([build 43514906192](https://github.com/Turtle-Li/sub2api/actions/runs/43514906192))
+fixed the wallet calculation and was activated on green. All three origin
+health probes and public health passed. The normalized Caddy configuration and
+Muse group membership, account and rates were preserved.
+
+- A synchronous image with a public URL reference returned a 1600×1600 WebP.
+  A multipart edit accepted two PNGs plus a WAV and returned a 2096×1152 WebP;
+  the Base64 result matched the authenticated download byte for byte.
+- A gzipped video request with two ordered PNG references returned a six-second
+  H.264/AAC MP4 (1280×704, 144 video frames, full decode passed). Both compositions
+  appear in the output, with differences from the supplied frames. The ledger
+  recorded exactly one 0.36 wallet debit at 1× (usage row 1017342).
+- After the price fix, two submissions with the same image idempotency key
+  returned the same receipt. Polling and downloads left exactly one 0.10 wallet
+  debit at 1× (usage row 1017484). Earlier smoke images stayed readable without
+  repricing (rows 1017318 and 1017328). Anonymous downloads returned 401; an
+  unrelated valid Key received 404. A foreign model and a private reference URL
+  were rejected before forwarding.
+- A local envelope check verified 100 MiB of decoded references over gzip;
+  production did not need a maximum-size generation. The gateway and targeted
+  race tests passed, as did a local Postgres check against active and archived
+  billing receipts.
+
+The preceding blue image can still serve media using the former image pricing
+calculation. Preserve all task receipts and wallet rows if it is needed for
+emergency rollback; verify the Muse image charge before considering billing
+accepted on a rollback image.
+
 ## Pinned reference
 
 Current reference: [`czg86389-hub/muse2api` revision
