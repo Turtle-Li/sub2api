@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"image"
 	"image/jpeg"
-	"image/png"
 	"io"
 	"net/http"
 	"strings"
@@ -30,9 +29,15 @@ func TestParseMuseVideoReferenceImage(t *testing.T) {
 	} {
 		body, err := json.Marshal(map[string]any{"model": MuseVideoModel, "prompt": "Animate the object", "reference_image": imageURL})
 		require.NoError(t, err)
-		info, nativeBody, err := ParseMuseVideoRequest(body)
+		req, err := ParseMuseMediaRequest(MuseVideoCreate, "application/json", body)
 		require.NoError(t, err)
-		require.JSONEq(t, `{"model":"muse-video","prompt":"Animate the object","duration":5,"size":"16:9","reference_image":"`+imageURL+`"}`, string(nativeBody))
+		images, err := req.PrepareReferences(t.Context())
+		require.NoError(t, err)
+		nativeBody, err := json.Marshal(req)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"model":"muse-video","prompt":"Animate the object","duration":6,"images":["`+imageURL+`"]}`, string(nativeBody))
+		info := req.Info()
+		info.InputImageURLs = images
 		require.Equal(t, VideoBillingResolution720P, info.Resolution)
 		moderation := ExtractContentModerationInput(ContentModerationProtocolOpenAIImages, info.ModerationBody())
 		require.Equal(t, "Animate the object", moderation.Text)
@@ -41,39 +46,39 @@ func TestParseMuseVideoReferenceImage(t *testing.T) {
 }
 
 func TestParseMuseVideoTextRequestOmitsReferenceImage(t *testing.T) {
-	info, nativeBody, err := ParseMuseVideoRequest([]byte(`{"model":"muse-video","prompt":" waves ","size":"9:16"}`))
+	req, err := ParseMuseMediaRequest(MuseVideoCreate, "application/json", []byte(`{"model":"muse-video","prompt":"waves","size":"9:16"}`))
 	require.NoError(t, err)
-	require.False(t, info.HasInputImage())
-	require.JSONEq(t, `{"model":"muse-video","prompt":"waves","duration":5,"size":"9:16"}`, string(nativeBody))
+	images, err := req.PrepareReferences(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, images)
+	nativeBody, err := json.Marshal(req)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"muse-video","prompt":"waves","duration":6,"size":"9:16"}`, string(nativeBody))
 }
 
 func TestParseMuseVideoRejectsInvalidReferenceImages(t *testing.T) {
-	var widePNG bytes.Buffer
-	require.NoError(t, png.Encode(&widePNG, image.NewRGBA(image.Rect(0, 0, 4097, 1))))
-	oversized := make([]byte, (8<<20)+1)
-	require.Equal(t, base64.StdEncoding.EncodedLen(8<<20), base64.StdEncoding.EncodedLen(len(oversized)))
 	for _, test := range []struct {
 		name, field string
 		value       any
 		message     string
 	}{
-		{"remote URL", "reference_image", "http://169.254.169.254/latest/meta-data", "base64 data URL"},
-		{"local file", "reference_image", "/etc/passwd", "base64 data URL"},
-		{"empty string", "reference_image", "", "base64 data URL"},
-		{"multiple images", "reference_image", []string{"first", "second"}, "one optional reference_image string"},
-		{"unsupported field", "images", []string{"first"}, "one optional reference_image string"},
-		{"unsupported format", "reference_image", "data:image/svg+xml;base64,PHN2Zz4=", "base64 data URL"},
-		{"invalid base64", "reference_image", "data:image/png;base64,@@@=", "invalid base64"},
+		{"metadata URL", "reference_image", "http://169.254.169.254/latest/meta-data", "public address"},
+		{"local file", "reference_image", "/etc/passwd", "local paths are not supported"},
+		{"invalid field type", "reference_image", []string{"first", "second"}, "invalid Muse request fields"},
+		{"unsupported field", "last_frame", "second", "invalid Muse request fields"},
+		{"unsupported format", "reference_image", "data:image/svg+xml;base64,PHN2Zz4=", "unsupported Muse reference format"},
+		{"invalid base64", "reference_image", "data:image/png;base64,@@@=", "valid Base64"},
 		{"mismatched MIME", "reference_image", "data:image/jpeg;base64," + museTestPNG(t), "declared image format"},
-		{"decoded size over limit", "reference_image", "data:image/png;base64," + base64.StdEncoding.EncodeToString(oversized), "exceeds 8 MiB"},
-		{"dimension over limit", "reference_image", "data:image/png;base64," + base64.StdEncoding.EncodeToString(widePNG.Bytes()), "dimensions"},
+		{"image mislabeled as audio", "audios", []string{"data:audio/wav;base64," + museTestPNG(t)}, "declared image format"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body, err := json.Marshal(map[string]any{"model": MuseVideoModel, "prompt": "Animate the object", test.field: test.value})
 			require.NoError(t, err)
-			_, nativeBody, err := ParseMuseVideoRequest(body)
+			req, err := ParseMuseMediaRequest(MuseVideoCreate, "application/json", body)
+			if err == nil {
+				_, err = req.PrepareReferences(t.Context())
+			}
 			require.ErrorContains(t, err, test.message)
-			require.Nil(t, nativeBody)
 		})
 	}
 }
@@ -89,9 +94,10 @@ func TestMuseVideoExplicitAccountAndNativeSubmission(t *testing.T) {
 	upstream := &grokMediaContentUpstreamStub{response: grokMediaContentStatusResponse(`{"id":"task_0123456789abcdef0123","status":"queued"}`)}
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
 	c, w := grokMediaContentTestContext(http.MethodPost, "/v1/videos", nil)
-	result, err := svc.ForwardMuseVideo(context.Background(), c, a, MuseVideoCreate, "", []byte(`{"model":"muse-video","prompt":"waves"}`))
+	result, receipt, err := svc.ForwardMuseVideo(context.Background(), c, a, MuseVideoCreate, "", []byte(`{"model":"muse-video","prompt":"waves"}`))
 	require.NoError(t, err)
 	require.Equal(t, "muse_task_0123456789abcdef0123", result.ResponseID)
+	require.Equal(t, result.ResponseID, receipt["task_id"])
 	require.False(t, w.Flushed)
 	require.Empty(t, w.Body.String(), "the handler persists ownership before returning the receipt")
 	require.Equal(t, "https://muse.example/v1/videos", upstream.request.URL.String())
@@ -111,7 +117,7 @@ func TestMuseVideoStatusExposesOnlyPublicDownload(t *testing.T) {
 	}}
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
 	c, w := grokMediaContentTestContext(http.MethodGet, "/v1/videos/muse_task_0123456789abcdef0123", nil)
-	result, err := svc.ForwardMuseVideo(context.Background(), c, a, MuseVideoStatus, "muse_task_0123456789abcdef0123", nil)
+	result, _, err := svc.ForwardMuseVideo(context.Background(), c, a, MuseVideoStatus, "muse_task_0123456789abcdef0123", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.VideoCount)
 	require.Contains(t, w.Body.String(), "/v1/videos/muse_task_0123456789abcdef0123/content")
@@ -133,7 +139,7 @@ func TestMuseVideoDownloadUsesOnlyBoundOriginAndSendsNoCredential(t *testing.T) 
 	}}
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
 	c, w := grokMediaContentTestContext(http.MethodGet, "/v1/videos/muse_task_0123456789abcdef0123/content", nil)
-	result, err := svc.ForwardMuseVideo(t.Context(), c, a, MuseVideoContent, "muse_task_0123456789abcdef0123", nil)
+	result, _, err := svc.ForwardMuseVideo(t.Context(), c, a, MuseVideoContent, "muse_task_0123456789abcdef0123", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.VideoCount)
 	require.Equal(t, payload, w.Body.String())
@@ -165,7 +171,7 @@ func TestMuseWalletPricesWithZeroTextTokensAndFiveSecondVideo(t *testing.T) {
 	require.InDelta(t, 0.0025, text.ActualCost, 1e-10)
 
 	video := svc.calculateOpenAIVideoCost(t.Context(), MuseVideoModel, key, &OpenAIForwardResult{
-		VideoCount: 1, VideoDurationSeconds: museVideoDuration, VideoResolution: VideoBillingResolution720P,
+		VideoCount: 1, VideoDurationSeconds: 5, VideoResolution: VideoBillingResolution720P,
 	}, 0.5)
 	finalizeUsageCurrency(video, key, false)
 	require.Equal(t, "CNY", costCurrency(video))

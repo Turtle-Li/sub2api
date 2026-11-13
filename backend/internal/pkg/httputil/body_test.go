@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -37,6 +38,31 @@ func TestReadRequestBodyWithPrealloc_PassesThroughIdentity(t *testing.T) {
 	}
 }
 
+func TestReadRequestBodyWithPrealloc_EnforcesDecompressedRouteLimit(t *testing.T) {
+	var compressed bytes.Buffer
+	w := gzip.NewWriter(&compressed)
+	_, err := w.Write([]byte(samplePayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int64{int64(len(samplePayload)), int64(len(samplePayload) - 1)} {
+		req := WithDecompressedRequestLimit(newRequestWithBody(t, compressed.Bytes(), "gzip"), limit)
+		got, err := ReadRequestBodyWithPrealloc(req)
+		if int(limit) == len(samplePayload) {
+			if err != nil || string(got) != samplePayload {
+				t.Fatalf("exact decompressed limit: %v", err)
+			}
+			continue
+		}
+		var maxErr *http.MaxBytesError
+		if !errors.As(err, &maxErr) || maxErr.Limit != limit || got != nil {
+			t.Fatalf("expected size error without truncated JSON, got %v", err)
+		}
+	}
+}
 func TestReadRequestBodyWithPrealloc_DecodesZstd(t *testing.T) {
 	enc, _ := zstd.NewWriter(nil)
 	compressed := enc.EncodeAll([]byte(samplePayload), nil)

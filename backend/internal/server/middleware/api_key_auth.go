@@ -176,7 +176,8 @@ func admitLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService api
 	// A completed task can consume the last of the key's quota or balance.
 	// Reads still require an authenticated, bound key; expired Muse keys stay denied.
 	museVideoRead := isMuseVideoTaskRead(c, apiKey)
-	if museVideoRead && (apiKey.Status == service.StatusAPIKeyExpired || apiKey.IsExpired()) {
+	museImageRead := isMuseImageTaskRead(c)
+	if (museVideoRead || museImageRead) && (apiKey.Status == service.StatusAPIKeyExpired || apiKey.IsExpired()) {
 		AbortWithError(c, 403, "API_KEY_EXPIRED", "API key 已过期")
 		return
 	}
@@ -432,6 +433,19 @@ func isMuseVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
 		"/videos/:request_id", "/videos/:request_id/content",
 		"/videos/generations/:request_id", "/videos/generations/:request_id/content":
 		return service.IsMuseVideoTaskID(c.Param("request_id"))
+	default:
+		return false
+	}
+}
+
+func isMuseImageTaskRead(c *gin.Context) bool {
+	if c.Request.Method != http.MethodGet || !service.IsMuseImageTaskID(c.Param("task_id")) {
+		return false
+	}
+	switch c.FullPath() {
+	case "/v1/images/tasks/:task_id", "/v1/images/tasks/:task_id/content",
+		"/images/tasks/:task_id", "/images/tasks/:task_id/content":
+		return true
 	default:
 		return false
 	}

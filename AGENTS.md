@@ -50,7 +50,7 @@
 
 ## Muse video and batch images
 
-- Before changing `muse-video`, read
+- Before changing public `muse-video` or `muse-image`, read
   `docs/features/MUSE_PUBLIC_VIDEO.md` for the pinned native contract, task
   ownership, media URL boundary and settlement policy. A Muse key must not
   inherit another provider's models through the Image Studio catalogue.

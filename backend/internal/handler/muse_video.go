@@ -24,7 +24,7 @@ func (h *OpenAIGatewayHandler) MuseVideoContent(c *gin.Context) {
 	h.handleGrokMedia(c, service.MuseVideoContent, c.Param("request_id"))
 }
 
-func (h *OpenAIGatewayHandler) completeMuseVideoCreate(c *gin.Context, key *service.APIKey, subject middleware.AuthSubject, result *service.OpenAIForwardResult, accountID int64, startedAt string, log *zap.Logger) {
+func (h *OpenAIGatewayHandler) completeMuseVideoCreate(c *gin.Context, key *service.APIKey, subject middleware.AuthSubject, result *service.OpenAIForwardResult, receipt gin.H, accountID int64, startedAt string, log *zap.Logger) {
 	ctx := c.Request.Context()
 	id := result.ResponseID
 	pending := service.GrokVideoPendingBilling{
@@ -42,5 +42,6 @@ func (h *OpenAIGatewayHandler) completeMuseVideoCreate(c *gin.Context, key *serv
 		h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Muse accepted the task but its receipt could not be saved")
 		return
 	}
-	service.WriteMuseVideoReceipt(c, id)
+	c.Header("Cache-Control", "private, no-store")
+	c.JSON(http.StatusAccepted, receipt)
 }

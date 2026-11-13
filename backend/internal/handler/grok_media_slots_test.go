@@ -210,9 +210,9 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 			accounts[i].Platform = platforms[0]
 			accounts[i].Credentials["base_url"] = "https://ark.cn-beijing.volces.com/api/v3"
 			accounts[i].Credentials["openai_capabilities"] = []string{"seedance"}
-			if len(platforms) > 1 && platforms[1] == service.MuseVideoModel {
+			if len(platforms) > 1 && (platforms[1] == service.MuseVideoModel || platforms[1] == service.MuseImageModel) {
 				accounts[i].Credentials["base_url"] = "https://muse.example/v1"
-				accounts[i].Credentials["model_mapping"] = map[string]any{"muse-video": "muse-video"}
+				accounts[i].Credentials["model_mapping"] = map[string]any{platforms[1]: platforms[1]}
 			}
 		}
 		if oauth {
@@ -389,7 +389,8 @@ func TestMuseVideoSubmissionBindsOwnerBeforeLookup(t *testing.T) {
 			require.Equal(t, "/v1/videos", req.URL.Path)
 			var payload map[string]any
 			require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
-			require.Equal(t, referenceImage, payload["reference_image"])
+			require.Equal(t, []any{referenceImage}, payload["images"])
+			require.Equal(t, float64(6), payload["duration"])
 		case http.MethodGet:
 			require.Equal(t, "/v1/videos/"+nativeID, req.URL.Path)
 			body = `{"id":"` + nativeID + `","status":"processing","progress":15}`
@@ -432,6 +433,60 @@ func TestMuseVideoSubmissionBindsOwnerBeforeLookup(t *testing.T) {
 	}
 	require.Equal(t, 2, upstream.calls)
 	slots.assertReleased(t)
+}
+
+func TestMuseImageTaskUsesSameKeyAndModel(t *testing.T) {
+	h, slots, _, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI, service.MuseImageModel)
+	const nativeID = "task_0123456789abcdef0123"
+	const publicID = "muse_image_" + nativeID
+	upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
+		require.Equal(t, int64(1), accountID)
+		require.Equal(t, "muse.example", req.URL.Host)
+		var body string
+		switch req.Method {
+		case http.MethodPost:
+			require.Equal(t, "/v1/images/tasks", req.URL.Path)
+			payload, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"model":"muse-image","prompt":"Draw a circle","n":1,"response_format":"url","async":true}`, string(payload))
+			body = `{"id":"` + nativeID + `","status":"queued","account":"private"}`
+		case http.MethodGet:
+			require.Equal(t, "/v1/images/tasks/"+nativeID, req.URL.Path)
+			body = `{"id":"` + nativeID + `","kind":"image","status":"processing","progress":5}`
+		default:
+			t.Fatalf("unexpected method %s", req.Method)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	c, w := grokMediaSlotContext(t.Context(), true)
+	key, _ := middleware2.GetAPIKeyFromContext(c)
+	key.Group.Platform = service.PlatformOpenAI
+	price := 0.10
+	key.Group.ImagePrice2K = &price
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"muse-image","prompt":"Draw a circle","async":true}`))
+	h.MuseImages(c)
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.Equal(t, publicID, w.Header().Get("X-Muse-Task-ID"))
+	require.NotContains(t, w.Body.String(), "private")
+
+	for _, otherKey := range []int64{21, 20} {
+		c, w := grokMediaSlotContext(t.Context(), false)
+		key, _ := middleware2.GetAPIKeyFromContext(c)
+		key.ID = otherKey
+		key.Group.Platform = service.PlatformOpenAI
+		c.Params = gin.Params{{Key: "task_id", Value: publicID}}
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/images/tasks/"+publicID, nil)
+		h.MuseImageStatus(c)
+		if otherKey == 21 {
+			require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+			require.Equal(t, 1, upstream.calls)
+		} else {
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), "processing")
+		}
+	}
+	slots.assertReleased(t)
+	require.Equal(t, 2, upstream.calls)
 }
 
 func TestGrokMediaVideoLookupOwnerIsolation(t *testing.T) {

@@ -1985,10 +1985,14 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return configured["seedance"] && a.Platform == PlatformOpenAI && a.Type == AccountTypeAPIKey &&
 			strings.TrimSpace(a.GetCredential("base_url")) != ""
 	}
-	if capability == OpenAIEndpointCapabilityMuseVideo {
+	if capability == OpenAIEndpointCapabilityMuseVideo || capability == OpenAIEndpointCapabilityMuseImage {
+		model := MuseVideoModel
+		if capability == OpenAIEndpointCapabilityMuseImage {
+			model = MuseImageModel
+		}
 		return a.Platform == PlatformOpenAI && a.Type == AccountTypeAPIKey &&
 			strings.TrimSpace(a.GetCredential("base_url")) != "" &&
-			a.GetModelMapping()[MuseVideoModel] == MuseVideoModel
+			a.GetModelMapping()[model] == model
 	}
 	if capability == "" {
 		return true

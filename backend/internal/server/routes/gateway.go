@@ -3,6 +3,7 @@ package routes
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -90,6 +91,48 @@ func RegisterGatewayRoutes(
 		}
 	}
 	batchImagesHandler := h.AsyncImage.AutoSubmitBatch(imagesHandler)
+	museImagesOr := func(fallback gin.HandlerFunc) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			key, ok := middleware.GetAPIKeyFromContext(c)
+			if ok && key != nil && key.Group != nil && key.Group.Platform == service.PlatformOpenAI &&
+				key.Group.ModelAllowlist.Allows(service.MuseImageModel) {
+				body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+				if err != nil {
+					status := http.StatusBadRequest
+					var limit *http.MaxBytesError
+					if errors.As(err, &limit) {
+						status = http.StatusRequestEntityTooLarge
+					}
+					c.JSON(status, gin.H{"error": gin.H{"type": "invalid_request_error", "message": "Could not read image request body"}})
+					return
+				}
+				requestmodel.ResetRequestBody(c.Request, body)
+				models := requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body)
+				if slices.Contains(models, service.MuseImageModel) || (len(models) == 0 && groupExplicitlyAllowsMuse(key.Group, service.MuseImageModel)) {
+					h.OpenAIGateway.MuseImages(c)
+					return
+				}
+			}
+			fallback(c)
+		}
+	}
+	museImagesGeneration := museImagesOr(batchImagesHandler)
+	museImagesEdit := museImagesOr(imagesHandler)
+	museImagesAsync := museImagesOr(h.AsyncImage.Submit)
+	imageTaskStatus := func(c *gin.Context) {
+		if service.IsMuseImageTaskID(c.Param("task_id")) {
+			h.OpenAIGateway.MuseImageStatus(c)
+			return
+		}
+		h.AsyncImage.Get(c)
+	}
+	imageTaskContent := func(c *gin.Context) {
+		if !service.IsMuseImageTaskID(c.Param("task_id")) {
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Image task not found"}})
+			return
+		}
+		h.OpenAIGateway.MuseImageContent(c)
+	}
 	videoGenerationHandler := func(c *gin.Context) {
 		if key, ok := middleware.GetAPIKeyFromContext(c); ok && key != nil && key.Group != nil && key.Group.Platform == service.PlatformOpenAI {
 			h.OpenAIGateway.MuseVideoGeneration(c)
@@ -196,6 +239,7 @@ func RegisterGatewayRoutes(
 	gateway.Use(opsErrorLogger)
 	gateway.Use(endpointNorm)
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))
+	gateway.Use(museMediaCompressedBodyLimit)
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
 	gateway.Use(groupModelAllowlist)
 	gateway.Use(compositeTarget)
@@ -263,11 +307,13 @@ func RegisterGatewayRoutes(
 			}
 			h.OpenAIGateway.Embeddings(c)
 		})
-		gateway.POST("/images/generations", batchImagesHandler)
-		gateway.POST("/images/edits", imagesHandler)
-		gateway.POST("/images/generations/async", h.AsyncImage.Submit)
-		gateway.POST("/images/edits/async", h.AsyncImage.Submit)
-		gateway.GET("/images/tasks/:task_id", h.AsyncImage.Get)
+		gateway.POST("/images/generations", museImagesGeneration)
+		gateway.POST("/images/edits", museImagesEdit)
+		gateway.POST("/images/generations/async", museImagesAsync)
+		gateway.POST("/images/edits/async", museImagesAsync)
+		gateway.POST("/images/tasks", h.OpenAIGateway.MuseImages)
+		gateway.GET("/images/tasks/:task_id", imageTaskStatus)
+		gateway.GET("/images/tasks/:task_id/content", imageTaskContent)
 		gateway.POST("/images/batches", h.BatchImage.Submit)
 		gateway.GET("/images/batches", h.BatchImage.List)
 		gateway.GET("/images/batches/models", h.BatchImage.Models)
@@ -382,7 +428,7 @@ func RegisterGatewayRoutes(
 	// 根路径别名共用中间件链：白名单准入在 apiKeyAuth 之后、compositeTarget
 	// 之前，避免逐条路由手工维护链导致漏挂。
 	rootRoute := func(method, path string, limit gin.HandlerFunc, handler gin.HandlerFunc) {
-		r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, compositeTarget, requireGroupAnthropic, handler)
+		r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), museMediaCompressedBodyLimit, groupModelAllowlist, compositeTarget, requireGroupAnthropic, handler)
 	}
 	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
 		rootRoute(http.MethodPost, prefix+"/contents/generations/tasks", bodyLimit, h.OpenAIGateway.SeedanceTasks)
@@ -432,11 +478,13 @@ func RegisterGatewayRoutes(
 		}
 		h.OpenAIGateway.Embeddings(c)
 	})
-	rootRoute(http.MethodPost, "/images/generations", bodyLimit, batchImagesHandler)
-	rootRoute(http.MethodPost, "/images/edits", bodyLimit, imagesHandler)
-	rootRoute(http.MethodPost, "/images/generations/async", bodyLimit, h.AsyncImage.Submit)
-	rootRoute(http.MethodPost, "/images/edits/async", bodyLimit, h.AsyncImage.Submit)
-	rootRoute(http.MethodGet, "/images/tasks/:task_id", bodyLimit, h.AsyncImage.Get)
+	rootRoute(http.MethodPost, "/images/generations", bodyLimit, museImagesGeneration)
+	rootRoute(http.MethodPost, "/images/edits", bodyLimit, museImagesEdit)
+	rootRoute(http.MethodPost, "/images/generations/async", bodyLimit, museImagesAsync)
+	rootRoute(http.MethodPost, "/images/edits/async", bodyLimit, museImagesAsync)
+	rootRoute(http.MethodPost, "/images/tasks", bodyLimit, h.OpenAIGateway.MuseImages)
+	rootRoute(http.MethodGet, "/images/tasks/:task_id", bodyLimit, imageTaskStatus)
+	rootRoute(http.MethodGet, "/images/tasks/:task_id/content", bodyLimit, imageTaskContent)
 	rootRoute(http.MethodPost, "/videos", bodyLimit, videoGenerationHandler)
 	rootRoute(http.MethodPost, "/videos/generations", bodyLimit, videoGenerationHandler)
 	rootRoute(http.MethodPost, "/videos/edits", bodyLimit, videoEditHandler)
@@ -547,6 +595,30 @@ func dispatchCodexModelsGateway(c *gin.Context, openAIHandler, generatedHandler 
 }
 
 // getGroupPlatform extracts the group platform from the API Key stored in context.
+func groupExplicitlyAllowsMuse(group *service.Group, model string) bool {
+	return group != nil && group.Platform == service.PlatformOpenAI && group.ModelAllowlist.Enabled &&
+		slices.Contains(group.ModelAllowlist.Models, model)
+}
+
+func museMediaCompressedBodyLimit(c *gin.Context) {
+	if c.Request.Method == http.MethodPost && c.GetHeader("Content-Encoding") != "" {
+		key, ok := middleware.GetAPIKeyFromContext(c)
+		if ok && key != nil {
+			var model string
+			switch strings.TrimPrefix(c.FullPath(), "/v1") {
+			case "/images/generations", "/images/edits", "/images/generations/async", "/images/edits/async", "/images/tasks":
+				model = service.MuseImageModel
+			case "/videos", "/videos/generations":
+				model = service.MuseVideoModel
+			}
+			if model != "" && groupExplicitlyAllowsMuse(key.Group, model) {
+				c.Request = pkghttputil.WithDecompressedRequestLimit(c.Request, service.MuseMediaRequestMaxBytes)
+			}
+		}
+	}
+	c.Next()
+}
+
 func getGroupPlatform(c *gin.Context) string {
 	apiKey, ok := middleware.GetAPIKeyFromContext(c)
 	if !ok || apiKey.Group == nil {

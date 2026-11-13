@@ -37,11 +37,15 @@ const (
 )
 
 func (e GrokMediaEndpoint) RequiresRequestBody() bool {
-	return !e.IsVideoLookupRequest()
+	return !e.IsTaskLookupRequest()
 }
 
 func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
 	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete || e == MuseVideoStatus || e == MuseVideoContent
+}
+
+func (e GrokMediaEndpoint) IsTaskLookupRequest() bool {
+	return e.IsVideoLookupRequest() || e == MuseImageStatus || e == MuseImageContent
 }
 
 func (e GrokMediaEndpoint) IsGenerationRequest() bool {
@@ -49,7 +53,8 @@ func (e GrokMediaEndpoint) IsGenerationRequest() bool {
 		return true
 	}
 	switch e {
-	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
+	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions,
+		MuseImageGenerate, MuseImageEdit, MuseImageCreate:
 		return true
 	default:
 		return false

@@ -1,36 +1,63 @@
-# Muse public video and model isolation
+# Muse public image and video
 
-Sub2 uses the existing OpenAI-compatible Muse account with an explicit
-`muse-video → muse-video` mapping. The customer sends their existing Sub2 Key.
-Muse2API remains private; its upstream base URL and credential stay server-side.
+Send the existing Muse group Sub2 Key to the public API. Sub2 schedules only
+accounts explicitly mapping the requested Muse model to itself. Muse2API and
+its credential remain private.
 
-- Submit: `POST /v1/videos` with `{"model":"muse-video","prompt":"...","duration":5,"size":"16:9"}`.
-  Add `"reference_image":"data:image/png;base64,<base64>"` to animate one image.
-  Use JPEG (`image/jpeg`), PNG, or WebP with standard padded Base64, up to
-  8 MiB decoded and 4096 pixels per side. The gateway checks the declared image
-  format and dimensions and passes the same inline reference to moderation and
-  the native `reference_image` field. It does not accept remote URLs, file
-  paths, multiple references or multipart uploads for Muse. Omit the field
-  for text to video. Both modes use 5 seconds, landscape or portrait, on an
-  OpenAI wallet group with media generation enabled and the same video tariff.
-  The 202 receipt is issued only after the existing Redis task owner and pending
-  billing record are saved. An ambiguous create is never automatically replayed.
-- Poll: `GET /v1/videos/{id}`. Use the same Key. Only a completed task advertises
-  its Sub2 content path. Task metadata returned by Muse is not passed through.
-- Download: `GET /v1/videos/{id}/content` with the same Key. The server reads only
-  the native MP4 path at the configured account origin; upstream-provided URLs
-  are not followed. Redirects are disabled and native media requests carry no
-  API key. A valid bound Key can read its existing task after wallet or key
-  quota depletion; expiry, revocation and group access restrictions still apply.
-- `/v1/responses` is for text and rejects `muse-video` with the submit path.
+| Work | Submit | Result |
+| --- | --- | --- |
+| Video | `POST /v1/videos` or `/v1/videos/generations`, model `muse-video` | 202; poll `GET /v1/videos/{id}` (also `/v1/videos/generations/{id}`) |
+| Image generation | `POST /v1/images/generations`, model `muse-image` | 200 OpenAI-style `data` on completion; `async:true` returns 202 |
+| Image edit | `POST /v1/images/edits`, JSON or multipart, model `muse-image` | Same as image generation |
+| Image task | `POST /v1/images/tasks`, model `muse-image` | 202; poll `GET /v1/images/tasks/{id}` |
 
-The existing group permission, model allowlist, balance check, moderation,
-account concurrency and billing dedup remain in force. A positive configured
-720p group price is required. The tariff uses 5 requested seconds and the
-existing 720p price tier, independent of the provider's actual output dimensions.
-The first authenticated observation of completion (status or content) records
-usage under one stable task ID. A task never observed by the customer does not
-produce a charge under this existing video billing policy.
+The two image endpoints also support their existing `/async` aliases. Images
+support `size`, `aspect_ratio`, `extra`, `timeout`, and
+`response_format: "url" | "b64_json"`. Native Muse returns one image even if
+`n` is larger than one. To request multiple independent images use the existing
+Sub2 batch API, which has its own admission and reference contract. The
+synchronous endpoint waits on the same native image task. If the wait expires,
+it returns 202 and the existing task ID instead of starting another generation.
+`Idempotency-Key` (up to 256 bytes) is isolated by group, user, Key and endpoint
+and is routed back to the same upstream account during the receipt lifetime.
+
+Video supports `duration` (default 6), `size`, `aspect_ratio`, `resolution`,
+`timeout` and `extra`. Duration and dimensions are requests to Muse; the
+generated file may differ. Upstream accepts ordered reference images as
+guidance, including an ending composition in the prompt, and has no
+structured `first_frame` / `last_frame` constraint. `/v1/responses` is for text.
+
+Both media APIs accept `images` (which can mix types), `videos`, `audios` and
+`files`, in that order. Items may be public HTTP(S) URLs, data URLs, raw Base64,
+or objects such as `{"image_url":{"url":"https://…"}}`. The legacy single
+reference fields remain accepted instead of `images`. For multipart image edits,
+repeat `image`, `image[]`, `video`, `audio` and `file`. The upstream limit is
+10 files, 40 MiB each and 100 MiB total; reference video must have a valid
+duration of at most 120 seconds. Use public URLs or send gzip-compressed JSON
+(`Content-Encoding: gzip`) if Base64 JSON would exceed the existing 128 MiB
+public wire limit. The larger decompressed ceiling applies only to Muse media
+paths on groups with the exact corresponding model in their allowlist.
+
+The gateway fetches public URLs without credentials or a proxy and validates the
+actual address at every hop before sending the same bytes to Muse. Files on the
+server, private addresses and unsupported content types are denied. The current
+security audit sees the prompt and each image separately. Muse still validates
+the duration of input videos. No task metadata containing upstream account
+details, internal prompts or upstream URLs is returned.
+
+Download a returned URL or append `/content` to the status path with the same
+Key. Sub2 verifies the bound account and reads only its native media path;
+redirects are disabled and the native media request carries no API key. A valid
+bound Key can still read after wallet/quota depletion. Expiry, revocation and
+the ownership check still apply. The task lookup is retained at least 24 hours.
+
+A positive configured media price is required to submit. Images use one
+configured image unit and the existing image rate; completion settles before
+returning image bytes or a result URL. Video retains the configured 720p rate
+and bills the requested seconds within the supported billing range of 5–15,
+independent of the actual output dimensions. First completed status/content
+observation schedules one video charge. Failed or unobserved tasks do not
+produce a debit under this policy. POST is not automatically replayed.
 
 ## Configuration and verification
 
@@ -111,14 +138,14 @@ left one dedup entry and one 0.30 wallet debit at 1× (usage row 1016941).
 
 ## Pinned reference
 
-`czg86389-hub/muse2api`, revision
-`8a3dab9db13b23ac694d21af29e65504bc7e69b1`, MIT. Inspected `app.py`
-(`VideoRequest`, `_video_references`, `create_video`, `get_video`, `get_media`,
-`responses_api`), `store.py` (native task IDs), `engine.py` (reference
-normalization, attachments and media filenames), and
-`tests/test_muse_video_delivery.py`, `tests/test_ref_image_safety.py` and
-`tests/test_video_late_attachment.py`. This integration calls the native task
-contract. It limits references to one inline image, replaces the private media
-URL with a Key-bound Sub2 path, and does not copy upstream implementation.
-Redis ownership, price and adapter coverage live in `grok_media_slots_test.go`
-and `muse_video_test.go`.
+Current reference: [`czg86389-hub/muse2api` revision
+`b60f474977f125210eb7c71b0fc6668b2f1dd700`](https://github.com/czg86389-hub/muse2api/tree/b60f474977f125210eb7c71b0fc6668b2f1dd700),
+MIT. Inspect `app.py` (`ImageRequest`, `VideoRequest`, `_reference_list`,
+`_queue_image`, `images_edits`, `create_video`, and result endpoints), `store.py`
+(task IDs), `engine.py` (reference types, duration, URL validation and media
+filenames), and `tests/test_muse_video_delivery.py`,
+`tests/test_ref_image_safety.py` and `tests/test_video_late_attachment.py`.
+The old one-reference contract was pinned to `8a3dab9db13b23ac694d21af29e65504bc7e69b1`.
+Sub2 integrates the HTTP contract and does not copy the browser engine.
+Ownership, pricing and adapter tests are in `grok_media_slots_test.go`,
+`muse_media_request_test.go`, `muse_image_test.go` and `muse_video_test.go`.

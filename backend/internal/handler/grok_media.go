@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
@@ -62,6 +64,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		platform = service.PlatformOpenAI
 		noAccountCode, noAccountMessage = "muse_video_no_eligible_account", "No eligible Muse video accounts"
 	}
+	if endpoint.IsMuseImage() {
+		platform = service.PlatformOpenAI
+		noAccountCode, noAccountMessage = "muse_image_no_eligible_account", "No eligible Muse image accounts"
+	}
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
@@ -71,8 +77,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
 		return
 	}
-	if endpoint.IsMuseVideo() && apiKey.Group != nil && apiKey.Group.IsSubscriptionType() {
-		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Muse video requires a wallet group")
+	if endpoint.IsMuseMedia() && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI || apiKey.Group.IsSubscriptionType()) {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Muse media requires an OpenAI wallet group")
 		return
 	}
 	var body []byte
@@ -95,24 +101,51 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 	contentType := c.GetHeader("Content-Type")
 	var requestInfo service.GrokMediaRequestInfo
-	switch endpoint {
-	case service.SeedanceEndpointCreate:
+	var museRequest *service.MuseMediaRequest
+	var museIdempotencyKey string
+	switch {
+	case endpoint == service.SeedanceEndpointCreate:
 		requestInfo, err = service.ParseSeedanceRequest(body)
 		if err != nil {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
-	case service.MuseVideoCreate:
-		requestInfo, body, err = service.ParseMuseVideoRequest(body)
-		if errors.Is(err, service.ErrMuseVideoModel) {
+	case endpoint.IsMuseMedia() && endpoint.IsGenerationRequest():
+		if int64(len(body)) > service.MuseMediaRequestMaxBytes {
+			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(service.MuseMediaRequestMaxBytes))
+			return
+		}
+		museRequest, err = service.ParseMuseMediaRequest(endpoint, contentType, body)
+		if errors.Is(err, service.ErrMuseMediaModel) {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
-			h.errorResponse(c, http.StatusNotFound, "not_found_error", err.Error())
+			message := err.Error()
+			if endpoint.IsMuseVideo() {
+				message = "Videos API is not supported for this platform"
+			}
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", message)
 			return
 		}
 		if err != nil {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
+		requestInfo = museRequest.Info()
+		if !apiKey.Group.ModelAllowlist.Allows(requestInfo.Model) {
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Muse model is not available for this group")
+			return
+		}
+		if endpoint.IsMuseImage() {
+			museIdempotencyKey, err = service.MuseImageIdempotencyKey(apiKey, endpoint, c.GetHeader("Idempotency-Key"))
+			if err != nil {
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+				return
+			}
+		}
+	case endpoint.IsMuseImage():
+		requestInfo.Model = service.MuseImageModel
+	case endpoint.IsMuseVideo():
+		requestInfo.Model = service.MuseVideoModel
 	default:
 		requestInfo = service.ParseGrokMediaRequest(contentType, body)
 	}
@@ -138,7 +171,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
-	if endpoint.IsVideoLookupRequest() && strings.TrimSpace(requestID) == "" {
+	if endpoint.IsTaskLookupRequest() && strings.TrimSpace(requestID) == "" {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "request_id is required")
 		return
 	}
@@ -156,11 +189,17 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			h.errorResponse(c, http.StatusServiceUnavailable, "muse_video_price_unavailable", "Muse video pricing is not configured for this group")
 			return
 		}
-		if moderationBody := requestInfo.ModerationBody(); len(moderationBody) > 0 {
-			decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, requestModel, moderationBody)
-			if decision != nil && !decision.AllowNextStage {
-				h.openAISecurityAuditError(c, decision)
-				return
+		if endpoint.IsMuseImage() && !h.gatewayService.HasMuseImagePrice(c.Request.Context(), apiKey, requestInfo.SizeTier) {
+			h.errorResponse(c, http.StatusServiceUnavailable, "muse_image_price_unavailable", "Muse image pricing is not configured for this group")
+			return
+		}
+		if museRequest == nil {
+			if moderationBody := requestInfo.ModerationBody(); len(moderationBody) > 0 {
+				decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, requestModel, moderationBody)
+				if decision != nil && !decision.AllowNextStage {
+					h.openAISecurityAuditError(c, decision)
+					return
+				}
 			}
 		}
 		imageReleaseFunc, acquired := h.acquireImageGenerationSlot(c, streamStarted)
@@ -189,7 +228,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 	// Muse reads can only access an accepted task bound to this key. Completion
 	// may use up the wallet or key quota before the client downloads the file.
-	if !endpoint.IsMuseVideo() || endpoint == service.MuseVideoCreate {
+	if !endpoint.IsMuseMedia() || endpoint.IsGenerationRequest() {
 		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 			reqLog.Info("grok_media.billing_eligibility_check_failed", zap.Error(err))
 			status, code, message, retryAfter := billingErrorDetails(err)
@@ -213,21 +252,54 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 	defer inflightDone()
 
+	releaseMuseMedia := func() {}
+	if museRequest != nil {
+		release, slotErr := museRequest.AcquireLargeMediaSlot(c.Request.Context(), len(body))
+		if slotErr != nil {
+			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", slotErr.Error())
+			return
+		}
+		releaseMuseMedia = sync.OnceFunc(release)
+		defer releaseMuseMedia()
+		if !h.prepareMuseMedia(c, reqLog, apiKey, subject, requestInfo, museRequest) {
+			return
+		}
+		body, err = json.Marshal(museRequest)
+		if err != nil {
+			h.errorResponse(c, http.StatusInternalServerError, "api_error", "Could not encode the Muse media request")
+			return
+		}
+		// Release the request's reference strings before holding a synchronous
+		// image connection open. Only the normalized body is needed to submit.
+		museRequest.Images = nil
+		c.Request.Body = http.NoBody
+	}
+
 	sessionSeed := body
 	if len(sessionSeed) == 0 && strings.TrimSpace(requestID) != "" {
 		sessionSeed = []byte(requestID)
 	}
 	sessionHash := h.gatewayService.GenerateExplicitSessionHash(c, sessionSeed)
 	boundLookupAccountID := int64(0)
-	if endpoint.IsVideoLookupRequest() {
+	if endpoint.IsTaskLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
 		boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
 			c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
 		)
 		if err != nil || boundLookupAccountID <= 0 {
 			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
-			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Media task not found")
 			return
+		}
+	}
+	if museIdempotencyKey != "" {
+		boundLookupAccountID, err = h.gatewayService.ResolveMuseImageSubmission(c.Request.Context(), apiKey, museIdempotencyKey)
+		if err != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Could not verify the Muse submission binding")
+			return
+		}
+		if boundLookupAccountID > 0 {
+			sessionHash = service.GrokMediaVideoRequestSessionHash("muse-image-admission:"+museIdempotencyKey, subject.UserID, apiKey.ID)
 		}
 	}
 	// Grok 媒体（图片/视频生成与视频查询）按媒体倍率计费，不在 token 利润门
@@ -299,7 +371,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				return
 			}
 			if boundLookupAccountID > 0 && errors.Is(err, service.ErrNoAvailableAccounts) {
-				h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+				h.errorResponse(c, http.StatusNotFound, "not_found_error", "Bound media account is not available")
 				return
 			}
 			reqLog.Warn("grok_media.account_select_failed",
@@ -348,7 +420,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				zap.Int64("bound_account_id", boundLookupAccountID),
 				zap.Int64("selected_account_id", selection.Account.ID),
 			)
-			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Bound media account is not available")
 			return
 		}
 
@@ -362,7 +434,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		)
 
 		account := selection.Account
-		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() && !endpoint.IsMuseVideo() {
+		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() && !endpoint.IsMuseMedia() {
 			eligible, eligibilityReason, eligibilityErr := h.ensureGrokMediaAccountEligibility(requestCtx, account)
 			if !eligible {
 				releaseAccount()
@@ -409,15 +481,23 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+		if endpoint.IsMuseImage() {
+			h.forwardMuseImage(c, requestCtx, endpoint, requestID, museIdempotencyKey, body, museRequest, apiKey, subject, account, reqLog, releaseAccount, releaseMuseMedia)
+			return
+		}
 		forwardStart := time.Now()
 		writerSizeBeforeForward := c.Writer.Size()
+		var museReceipt gin.H
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer releaseAccount()
 			if endpoint.IsSeedance() {
 				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body)
 			}
 			if endpoint.IsMuseVideo() {
-				return h.gatewayService.ForwardMuseVideo(requestCtx, c, account, endpoint, requestID, body)
+				var result *service.OpenAIForwardResult
+				var err error
+				result, museReceipt, err = h.gatewayService.ForwardMuseVideo(requestCtx, c, account, endpoint, requestID, body)
+				return result, err
 			}
 			return h.gatewayService.ForwardGrokMedia(requestCtx, c, account, endpoint, requestID, body, contentType)
 		}()
@@ -508,7 +588,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 		h.gatewayService.ReportOpenAIAccountScheduleResult(account, grokMediaScheduleModel(account, routingModel, result), true, nil)
 		if endpoint == service.MuseVideoCreate {
-			h.completeMuseVideoCreate(c, apiKey, subject, result, account.ID, videoCreateStartedAt, reqLog)
+			result.VideoDurationSeconds, result.VideoResolution = requestInfo.DurationSeconds, requestInfo.Resolution
+			h.completeMuseVideoCreate(c, apiKey, subject, result, museReceipt, account.ID, videoCreateStartedAt, reqLog)
 			return
 		}
 		if isGrokVideoCreateEndpoint(endpoint) && strings.TrimSpace(result.ResponseID) != "" {
@@ -588,6 +669,9 @@ func (h *OpenAIGatewayHandler) ensureGrokMediaAccountEligibility(ctx context.Con
 }
 
 func grokMediaRequiredCapability(endpoint service.GrokMediaEndpoint) service.OpenAIEndpointCapability {
+	if endpoint.IsMuseImage() {
+		return service.OpenAIEndpointCapabilityMuseImage
+	}
 	if endpoint.IsMuseVideo() {
 		return service.OpenAIEndpointCapabilityMuseVideo
 	}

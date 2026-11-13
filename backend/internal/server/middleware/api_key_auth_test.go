@@ -52,6 +52,7 @@ func TestAPIKeyAuthRejectsOversizedCredentialsBeforeLookup(t *testing.T) {
 
 func TestMuseVideoReadAfterWalletDepletionStillRequiresValidKey(t *testing.T) {
 	const id = "muse_task_0123456789abcdef0123"
+	const imageID = "muse_image_task_0123456789abcdef0123"
 	group := &service.Group{ID: 27, Platform: service.PlatformOpenAI, Status: service.StatusActive,
 		Hydrated: true, SubscriptionType: service.SubscriptionTypeStandard}
 	repo := &stubApiKeyRepo{getByKey: func(_ context.Context, credential string) (*service.APIKey, error) {
@@ -72,6 +73,9 @@ func TestMuseVideoReadAfterWalletDepletionStillRequiresValidKey(t *testing.T) {
 	router.GET("/v1/videos/:request_id", auth, accepted)
 	router.GET("/v1/videos/:request_id/content", auth, accepted)
 	router.POST("/v1/videos", auth, accepted)
+	router.GET("/v1/images/tasks/:task_id", auth, accepted)
+	router.GET("/v1/images/tasks/:task_id/content", auth, accepted)
+	router.POST("/v1/images/tasks", auth, accepted)
 	for _, tc := range []struct {
 		method, path, key string
 		want              int
@@ -83,6 +87,11 @@ func TestMuseVideoReadAfterWalletDepletionStillRequiresValidKey(t *testing.T) {
 		{http.MethodGet, "/v1/videos/" + id, "", http.StatusUnauthorized},
 		{http.MethodGet, "/v1/videos/other", "active", http.StatusForbidden},
 		{http.MethodPost, "/v1/videos", "active", http.StatusForbidden},
+		{http.MethodGet, "/v1/images/tasks/" + imageID, "active", http.StatusOK},
+		{http.MethodGet, "/v1/images/tasks/" + imageID + "/content", "owner", http.StatusOK},
+		{http.MethodGet, "/v1/images/tasks/" + imageID, "expired", http.StatusForbidden},
+		{http.MethodGet, "/v1/images/tasks/" + imageID + "/content", "", http.StatusUnauthorized},
+		{http.MethodPost, "/v1/images/tasks", "active", http.StatusForbidden},
 	} {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(tc.method, tc.path, nil)
