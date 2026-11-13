@@ -70,11 +70,23 @@ directly to the numeric reference price and settles the actual debit in CNY.
 The video price is model-specific at 720p. Existing image and video multiplier
 rules apply. No historic charges are recomputed.
 
-Before enabling production video, verify a funded owner Key can submit, poll,
-and decode one MP4; a second Key cannot read that task; and polling/downloads
-produce exactly one CNY debit. Also verify the Muse Key lists only Muse models
-and attempts to use a foreign model are denied before scheduling. Monitor
-unpolled native work before expanding beyond the initial group.
+## Production acceptance — 2026-11-13
+
+Exact app revision `651dd4d6c732743d58e338041442c4b92eecfb62` is healthy on blue.
+The application stage of [run 43449262546](https://github.com/Turtle-Li/sub2api/actions/runs/43449262546)
+passed the real candidate probe and committed the blue-green switch. Its
+separate Caddy-template sync rejected the existing independent proxy target
+before mutation. The existing Caddy configuration serves the new app and
+the video endpoint. A future template sync must preserve the independent route.
+
+At the public API, the former text route returned 400 with the video endpoint
+hint. One owner Key submitted a video (202), polled to completion (200), and
+downloaded an H.264/AAC MP4 (200, 1280×720, 5 seconds, 762187 bytes, full decode
+passed). Requests without a Key received 401; a different valid OpenAI Key
+received 404. After the download and another poll, usage row 1016348 and one
+durable dedup record showed a single 0.30 wallet debit at 1×, with a CNY
+settlement marker. The four foreign models were all denied on the Muse Key.
+Monitor unpolled native work before expanding beyond the initial group.
 
 ## Pinned reference
 
