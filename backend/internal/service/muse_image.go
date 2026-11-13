@@ -52,12 +52,20 @@ func IsMuseImageTaskID(id string) bool {
 }
 
 func (s *OpenAIGatewayService) HasMuseImagePrice(ctx context.Context, key *APIKey, tier string) bool {
+	return s.museImageBillingTier(ctx, key, tier) != ""
+}
+
+func (s *OpenAIGatewayService) museImageBillingTier(ctx context.Context, key *APIKey, requested string) string {
 	if key == nil || key.Group == nil {
-		return false
+		return ""
 	}
 	key = s.apiKeyWithFreshGroupMediaPricing(ctx, key)
-	price := key.Group.GetImagePrice(tier)
-	return price != nil && *price > 0
+	for _, tier := range []string{NormalizeImageBillingTierOrDefault(requested), ImageBillingSize1K, ImageBillingSize2K, ImageBillingSize4K} {
+		if price := key.Group.GetImagePrice(tier); price != nil && *price > 0 {
+			return tier
+		}
+	}
+	return ""
 }
 
 // Native Muse keys are global to one installation. Scope them to the public
@@ -290,6 +298,10 @@ func (s *OpenAIGatewayService) SettleMuseImage(ctx context.Context, input *OpenA
 	defer cancel()
 	if settled, err := s.cache.GetGrokVideoPendingBilling(ctx, task); err != nil || len(settled) != 0 {
 		return err
+	}
+	result.BillableImageSize = s.museImageBillingTier(ctx, key, result.ImageSize)
+	if result.BillableImageSize == "" {
+		return errors.New("Muse image price is unavailable")
 	}
 	claimed, err := s.cache.ClaimGrokVideoBilled(ctx, task, 20*time.Second)
 	if err != nil || !claimed {
