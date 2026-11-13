@@ -3,7 +3,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"strings"
@@ -13,6 +19,64 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseMuseVideoReferenceImage(t *testing.T) {
+	var jpegImage bytes.Buffer
+	require.NoError(t, jpeg.Encode(&jpegImage, image.NewRGBA(image.Rect(0, 0, 2, 2)), nil))
+	for _, imageURL := range []string{
+		"data:image/png;base64," + museTestPNG(t),
+		"data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegImage.Bytes()),
+		"data:image/webp;base64," + base64.StdEncoding.EncodeToString(museTestWebP(t)),
+	} {
+		body, err := json.Marshal(map[string]any{"model": MuseVideoModel, "prompt": "Animate the object", "reference_image": imageURL})
+		require.NoError(t, err)
+		info, nativeBody, err := ParseMuseVideoRequest(body)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"model":"muse-video","prompt":"Animate the object","duration":5,"size":"16:9","reference_image":"`+imageURL+`"}`, string(nativeBody))
+		require.Equal(t, VideoBillingResolution720P, info.Resolution)
+		moderation := ExtractContentModerationInput(ContentModerationProtocolOpenAIImages, info.ModerationBody())
+		require.Equal(t, "Animate the object", moderation.Text)
+		require.Equal(t, []string{imageURL}, moderation.Images)
+	}
+}
+
+func TestParseMuseVideoTextRequestOmitsReferenceImage(t *testing.T) {
+	info, nativeBody, err := ParseMuseVideoRequest([]byte(`{"model":"muse-video","prompt":" waves ","size":"9:16"}`))
+	require.NoError(t, err)
+	require.False(t, info.HasInputImage())
+	require.JSONEq(t, `{"model":"muse-video","prompt":"waves","duration":5,"size":"9:16"}`, string(nativeBody))
+}
+
+func TestParseMuseVideoRejectsInvalidReferenceImages(t *testing.T) {
+	var widePNG bytes.Buffer
+	require.NoError(t, png.Encode(&widePNG, image.NewRGBA(image.Rect(0, 0, 4097, 1))))
+	oversized := make([]byte, (8<<20)+1)
+	require.Equal(t, base64.StdEncoding.EncodedLen(8<<20), base64.StdEncoding.EncodedLen(len(oversized)))
+	for _, test := range []struct {
+		name, field string
+		value       any
+		message     string
+	}{
+		{"remote URL", "reference_image", "http://169.254.169.254/latest/meta-data", "base64 data URL"},
+		{"local file", "reference_image", "/etc/passwd", "base64 data URL"},
+		{"empty string", "reference_image", "", "base64 data URL"},
+		{"multiple images", "reference_image", []string{"first", "second"}, "one optional reference_image string"},
+		{"unsupported field", "images", []string{"first"}, "one optional reference_image string"},
+		{"unsupported format", "reference_image", "data:image/svg+xml;base64,PHN2Zz4=", "base64 data URL"},
+		{"invalid base64", "reference_image", "data:image/png;base64,@@@=", "invalid base64"},
+		{"mismatched MIME", "reference_image", "data:image/jpeg;base64," + museTestPNG(t), "declared image format"},
+		{"decoded size over limit", "reference_image", "data:image/png;base64," + base64.StdEncoding.EncodeToString(oversized), "exceeds 8 MiB"},
+		{"dimension over limit", "reference_image", "data:image/png;base64," + base64.StdEncoding.EncodeToString(widePNG.Bytes()), "dimensions"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"model": MuseVideoModel, "prompt": "Animate the object", test.field: test.value})
+			require.NoError(t, err)
+			_, nativeBody, err := ParseMuseVideoRequest(body)
+			require.ErrorContains(t, err, test.message)
+			require.Nil(t, nativeBody)
+		})
+	}
+}
 
 func TestMuseVideoExplicitAccountAndNativeSubmission(t *testing.T) {
 	a := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{

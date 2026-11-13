@@ -381,11 +381,15 @@ func TestMuseVideoSubmissionBindsOwnerBeforeLookup(t *testing.T) {
 	h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI, service.MuseVideoModel)
 	const nativeID = "task_0123456789abcdef0123"
 	const publicID = "muse_" + nativeID
+	const referenceImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4b8zAkPafAUIBACO3BS8QBf+HAAAAAElFTkSuQmCC"
 	upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
 		body := `{"id":"` + nativeID + `","status":"queued"}`
 		switch req.Method {
 		case http.MethodPost:
 			require.Equal(t, "/v1/videos", req.URL.Path)
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
+			require.Equal(t, referenceImage, payload["reference_image"])
 		case http.MethodGet:
 			require.Equal(t, "/v1/videos/"+nativeID, req.URL.Path)
 			body = `{"id":"` + nativeID + `","status":"processing","progress":15}`
@@ -401,10 +405,12 @@ func TestMuseVideoSubmissionBindsOwnerBeforeLookup(t *testing.T) {
 	key.Group.Platform = service.PlatformOpenAI
 	price := 0.06
 	key.Group.VideoPrice720P = &price
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"muse-video","prompt":"waves"}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"muse-video","prompt":"animate this image","reference_image":"`+referenceImage+`"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
 	h.MuseVideoGeneration(c)
 	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), publicID)
+	require.NotContains(t, w.Body.String(), referenceImage)
 	require.NotEmpty(t, bindings.pending)
 
 	for _, keyID := range []int64{21, 20} {

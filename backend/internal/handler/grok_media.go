@@ -94,15 +94,15 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 
 	contentType := c.GetHeader("Content-Type")
-	requestInfo := service.ParseGrokMediaRequest(contentType, body)
-	if endpoint == service.SeedanceEndpointCreate {
+	var requestInfo service.GrokMediaRequestInfo
+	switch endpoint {
+	case service.SeedanceEndpointCreate:
 		requestInfo, err = service.ParseSeedanceRequest(body)
 		if err != nil {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
-	}
-	if endpoint == service.MuseVideoCreate {
+	case service.MuseVideoCreate:
 		requestInfo, body, err = service.ParseMuseVideoRequest(body)
 		if errors.Is(err, service.ErrMuseVideoModel) {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
@@ -113,6 +113,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
+	default:
+		requestInfo = service.ParseGrokMediaRequest(contentType, body)
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {

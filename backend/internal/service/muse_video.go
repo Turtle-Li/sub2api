@@ -4,9 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/image/webp"
 )
 
 const (
@@ -26,6 +31,8 @@ const (
 	OpenAIEndpointCapabilityMuseVideo OpenAIEndpointCapability = "muse_video"
 	museVideoDuration                                          = 5
 	museVideoMaxBytes                                          = 100_000_000
+	museVideoReferenceMaxBytes                                 = 8 << 20
+	museVideoReferenceMaxDimension                             = 4096
 )
 
 var (
@@ -52,25 +59,29 @@ func (s *OpenAIGatewayService) HasMuseVideoPrice(ctx context.Context, key *APIKe
 }
 
 type museVideoRequest struct {
-	Model    string `json:"model"`
-	Prompt   string `json:"prompt"`
-	Duration int    `json:"duration"`
-	Size     string `json:"size"`
+	Model          string  `json:"model"`
+	Prompt         string  `json:"prompt"`
+	Duration       int     `json:"duration"`
+	Size           string  `json:"size"`
+	ReferenceImage *string `json:"reference_image,omitempty"`
 }
 
 func ParseMuseVideoRequest(body []byte) (GrokMediaRequestInfo, []byte, error) {
 	var info GrokMediaRequestInfo
-	var req museVideoRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	var selector struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &selector); err != nil {
 		return info, nil, errors.New("Muse video requires a JSON object")
 	}
-	if req.Model != MuseVideoModel {
+	if selector.Model != MuseVideoModel {
 		return info, nil, ErrMuseVideoModel
 	}
+	var req museVideoRequest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		return info, nil, errors.New("Muse video accepts only model, prompt, duration and size")
+		return info, nil, errors.New("Muse video accepts model, prompt, duration, size and one optional reference_image string")
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" || len(req.Prompt) > 16000 {
@@ -85,8 +96,54 @@ func ParseMuseVideoRequest(body []byte) (GrokMediaRequestInfo, []byte, error) {
 	if req.Duration != museVideoDuration || (req.Size != "16:9" && req.Size != "9:16") {
 		return info, nil, errors.New("Muse video supports 5 seconds and size 16:9 or 9:16")
 	}
+	info = GrokMediaRequestInfo{Model: req.Model, Prompt: req.Prompt, DurationSeconds: req.Duration, Resolution: VideoBillingResolution720P}
+	if req.ReferenceImage != nil {
+		reference := strings.TrimSpace(*req.ReferenceImage)
+		if err := validateMuseVideoReferenceImage(reference); err != nil {
+			return GrokMediaRequestInfo{}, nil, err
+		}
+		req.ReferenceImage = &reference
+		info.InputImageURLs = []string{reference}
+	}
 	normalized, err := json.Marshal(req)
-	return GrokMediaRequestInfo{Model: req.Model, Prompt: req.Prompt, DurationSeconds: req.Duration, Resolution: VideoBillingResolution720P}, normalized, err
+	return info, normalized, err
+}
+
+func validateMuseVideoReferenceImage(value string) error {
+	header, encoded, _ := strings.Cut(value, ",")
+	var decodeConfig func(io.Reader) (image.Config, error)
+	switch header {
+	case "data:image/jpeg;base64":
+		decodeConfig = jpeg.DecodeConfig
+	case "data:image/png;base64":
+		decodeConfig = png.DecodeConfig
+	case "data:image/webp;base64":
+		decodeConfig = webp.DecodeConfig
+	default:
+		return errors.New("reference_image must be a JPEG, PNG or WebP base64 data URL")
+	}
+	if len(encoded) > base64.StdEncoding.EncodedLen(museVideoReferenceMaxBytes) {
+		return errors.New("reference_image exceeds 8 MiB")
+	}
+	if encoded == "" || strings.ContainsAny(encoded, "\r\n") {
+		return errors.New("reference_image contains invalid base64")
+	}
+	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return errors.New("reference_image contains invalid base64")
+	}
+	if len(data) > museVideoReferenceMaxBytes {
+		return errors.New("reference_image exceeds 8 MiB")
+	}
+	// Inspect dimensions without expanding the image into a raster in the gateway.
+	cfg, err := decodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return errors.New("reference_image does not match its declared image format")
+	}
+	if cfg.Width > museVideoReferenceMaxDimension || cfg.Height > museVideoReferenceMaxDimension {
+		return errors.New("reference_image dimensions cannot exceed 4096 × 4096 pixels")
+	}
+	return nil
 }
 
 type museNativeVideoTask struct {

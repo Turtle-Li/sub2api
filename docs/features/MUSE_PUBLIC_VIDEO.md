@@ -5,8 +5,14 @@ Sub2 uses the existing OpenAI-compatible Muse account with an explicit
 Muse2API remains private; its upstream base URL and credential stay server-side.
 
 - Submit: `POST /v1/videos` with `{"model":"muse-video","prompt":"...","duration":5,"size":"16:9"}`.
-  The first supported version is text to video, 5 seconds, landscape or portrait,
-  on an OpenAI wallet group with media generation enabled.
+  Add `"reference_image":"data:image/png;base64,<base64>"` to animate one image.
+  Use JPEG (`image/jpeg`), PNG, or WebP with standard padded Base64, up to
+  8 MiB decoded and 4096 pixels per side. The gateway checks the declared image
+  format and dimensions and passes the same inline reference to moderation and
+  the native `reference_image` field. It does not accept remote URLs, file
+  paths, multiple references or multipart uploads for Muse. Omit the field
+  for text to video. Both modes use 5 seconds, landscape or portrait, on an
+  OpenAI wallet group with media generation enabled and the same video tariff.
   The 202 receipt is issued only after the existing Redis task owner and pending
   billing record are saved. An ambiguous create is never automatically replayed.
 - Poll: `GET /v1/videos/{id}`. Use the same Key. Only a completed task advertises
@@ -70,7 +76,7 @@ directly to the numeric reference price and settles the actual debit in CNY.
 The video price is model-specific at 720p. Existing image and video multiplier
 rules apply. No historic charges are recomputed.
 
-## Production acceptance — 2026-11-13
+## Initial text to video production acceptance — 2026-11-13
 
 Exact app revision `651dd4d6c732743d58e338041442c4b92eecfb62` is healthy on blue.
 The application stage of [run 43449262546](https://github.com/Turtle-Li/sub2api/actions/runs/43449262546)
@@ -92,10 +98,12 @@ Monitor unpolled native work before expanding beyond the initial group.
 
 `czg86389-hub/muse2api`, revision
 `8a3dab9db13b23ac694d21af29e65504bc7e69b1`, MIT. Inspected `app.py`
-(`VideoRequest`, `create_video`, `get_video`, `get_media`, `responses_api`),
-`store.py` (native task IDs), `engine.py` (media filenames), and
-`tests/test_muse_video_delivery.py`. This integration calls the native task
-contract. It intentionally restricts request fields, replaces the private media
+(`VideoRequest`, `_video_references`, `create_video`, `get_video`, `get_media`,
+`responses_api`), `store.py` (native task IDs), `engine.py` (reference
+normalization, attachments and media filenames), and
+`tests/test_muse_video_delivery.py`, `tests/test_ref_image_safety.py` and
+`tests/test_video_late_attachment.py`. This integration calls the native task
+contract. It limits references to one inline image, replaces the private media
 URL with a Key-bound Sub2 path, and does not copy upstream implementation.
 Redis ownership, price and adapter coverage live in `grok_media_slots_test.go`
 and `muse_video_test.go`.
