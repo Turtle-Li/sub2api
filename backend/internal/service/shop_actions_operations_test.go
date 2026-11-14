@@ -49,7 +49,7 @@ func TestShopActionPausedConfigurationRetainsCleanupCapability(t *testing.T) {
 	b := shopaction.Binding{BindingKey: "primary-delivery", Adapter: i.Adapter, IntegrationRef: i.ID, IntegrationVersion: 1, Integration: &i, Params: json.RawMessage(`{"duration_seconds":86400,"default_concurrency":2}`)}
 	_, err := s.actionAdapter(b)
 	require.Error(t, err)
-	a, err := s.actionAdapterFor(b, true)
+	a, err := s.actionAdapterFor(b, true, nil)
 	require.NoError(t, err)
 	require.IsType(t, &shopDaypassAdapter{}, a)
 	require.NotNil(t, a.(*shopDaypassAdapter).gateway)

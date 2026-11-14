@@ -1,0 +1,1619 @@
+diff --git a/SOURCE_BUILD.md b/SOURCE_BUILD.md
+--- a/SOURCE_BUILD.md
++++ b/SOURCE_BUILD.md
+@@ -1 +1 @@
+-# Corresponding source candidate: DeepSeek day-pass key guard 4
++# Corresponding source candidate: DeepSeek day-pass guard 5.5
+@@ -5,0 +6,12 @@
++
++Guard 5.5 adds purchase protocol version 3 to the local guard 5.4 source
++including its Sub2 buyer binding and dual-stack guard. The buyer retains
++their native shop token and each paid receipt owns its own subscription,
++effective window, and concurrency tier. Authentication requires an active
++paid window for reusable shop tokens; an ordinary expiry stops access without
++deleting the token. Older machine requests still use their original receipt
++binding. The admin list shows the current tier and retains explicit disable,
++delete, and concurrency overrides. Manual grants remain independent.
++
++The notes below describe the original guard and its operational boundaries.
++For this candidate use the build commands at the end with the updated version.
+@@ -55 +67 @@
+-DISABLE_ESLINT_PLUGIN=true VITE_REACT_APP_VERSION=v1.0.0-rc.47-daypass-guard.4 bun run build
++DISABLE_ESLINT_PLUGIN=true VITE_REACT_APP_VERSION=v1.0.0-rc.47-daypass-guard.5.5 bun run build
+@@ -60 +72 @@
+-  -ldflags '-s -w -X github.com/QuantumNous/new-api/common.Version=v1.0.0-rc.47-daypass-guard.4' -o new-api
++  -ldflags '-s -w -X github.com/QuantumNous/new-api/common.Version=v1.0.0-rc.47-daypass-guard.5.5' -o new-api
+diff --git a/controller/daypass_keys.go b/controller/daypass_keys.go
+--- a/controller/daypass_keys.go
++++ b/controller/daypass_keys.go
+@@ -3,0 +4 @@
++	"context"
+@@ -33,3 +34,4 @@
+-}
+-
+-func buildDaypassKeyResponse(key *model.DaypassKey) *daypassKeyResponse {
++	Renewable    bool   `json:"daypass_renewable,omitempty"`
++}
++
++func buildDaypassKeyResponse(ctx context.Context, key *model.DaypassKey, now int64) (*daypassKeyResponse, error) {
+@@ -43,2 +45,14 @@
+-	}
+-	return response
++		Renewable:     key.Renewable,
++	}
++	if key.Renewable {
++		limit, err := model.DaypassRelayConcurrency(ctx, key.Token, now)
++		switch {
++		case err == nil:
++			response.DaypassConcurrency = &limit
++		case errors.Is(err, model.ErrDaypassShopExpired):
++			response.DaypassConcurrency = nil
++		default:
++			return nil, err
++		}
++	}
++	return response, nil
+@@ -75,0 +90 @@
++	now := common.GetTimestamp()
+@@ -77 +92,6 @@
+-		response = append(response, buildDaypassKeyResponse(&items[i]))
++		item, err := buildDaypassKeyResponse(c.Request.Context(), &items[i], now)
++		if err != nil {
++			daypassKeyError(c, err)
++			return
++		}
++		response = append(response, item)
+@@ -98 +118,6 @@
+-	common.ApiSuccess(c, buildDaypassKeyResponse(key))
++	response, err := buildDaypassKeyResponse(c.Request.Context(), key, common.GetTimestamp())
++	if err != nil {
++		daypassKeyError(c, err)
++		return
++	}
++	common.ApiSuccess(c, response)
+@@ -107,0 +133,5 @@
++	if err != nil {
++		daypassKeyError(c, err)
++		return
++	}
++	response, err := buildDaypassKeyResponse(c.Request.Context(), key, common.GetTimestamp())
+@@ -117 +147 @@
+-		"concurrency": model.GetDaypassTokenConcurrency(key.TokenID),
++		"concurrency":  response.DaypassConcurrency,
+diff --git a/controller/daypass_shop.go b/controller/daypass_shop.go
+--- a/controller/daypass_shop.go
++++ b/controller/daypass_shop.go
+@@ -81 +81 @@
+-		"sku_versions": []int{2},
++		"sku_versions": []int{2, model.DaypassShopRenewalVersion},
+diff --git a/middleware/account_guard_http.go b/middleware/account_guard_http.go
+--- a/middleware/account_guard_http.go
++++ b/middleware/account_guard_http.go
+@@ -22,0 +23,2 @@
++
++const daypassConcurrencyContextKey = "daypass_concurrency"
+@@ -63 +65,4 @@
+-	limit := model.GetDaypassTokenConcurrency(keyID)
++	limit := c.GetInt(daypassConcurrencyContextKey)
++	if limit == 0 {
++		limit = model.GetDaypassTokenConcurrency(keyID)
++	}
+diff --git a/middleware/auth.go b/middleware/auth.go
+--- a/middleware/auth.go
++++ b/middleware/auth.go
+@@ -7,0 +8 @@
++	"os"
+@@ -529,0 +531 @@
++	daypassEnabled := os.Getenv("DAYPASS_ACCOUNT_GUARD") == "true"
+@@ -644,0 +647,12 @@
++		}
++		if daypassEnabled {
++			limit, err := model.DaypassRelayConcurrency(c.Request.Context(), token, common.GetTimestamp())
++			switch {
++			case errors.Is(err, model.ErrDaypassShopExpired):
++				abortWithOpenAiMessage(c, http.StatusUnauthorized, common.TranslateMessage(c, i18n.MsgTokenInvalid))
++				return
++			case err != nil:
++				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, common.TranslateMessage(c, i18n.MsgDatabaseError))
++				return
++			}
++			c.Set(daypassConcurrencyContextKey, limit)
+diff --git a/model/daypass_cleanup.go b/model/daypass_cleanup.go
+--- a/model/daypass_cleanup.go
++++ b/model/daypass_cleanup.go
+@@ -10,0 +11,2 @@
++const daypassExpiryCleanupDelaySecs = 3600
++
+@@ -17,0 +20 @@
++	renewableIDs := DB.Model(&DaypassShopOrder{}).Select("token_id").Where("token_id IS NOT NULL AND renewal_token_id IS NOT NULL")
+@@ -19,2 +22,3 @@
+-	if err := DB.WithContext(ctx).Where("expired_time > 0 AND expired_time <= ?", now-3600).
+-		Where("id IN (?) OR id IN (?)", shopIDs, manualIDs).Order("id").Limit(100).Find(&tokens).Error; err != nil {
++	if err := DB.WithContext(ctx).Where("expired_time > 0 AND expired_time <= ?", now-daypassExpiryCleanupDelaySecs).
++		Where("id IN (?) OR id IN (?)", shopIDs, manualIDs).
++		Where("id NOT IN (?)", renewableIDs).Order("id").Limit(100).Find(&tokens).Error; err != nil {
+diff --git a/model/daypass_grant.go b/model/daypass_grant.go
+--- a/model/daypass_grant.go
++++ b/model/daypass_grant.go
+@@ -15,0 +16 @@
++	Renewable                      bool
+@@ -24,7 +24,0 @@
+-	plan, err := getSubscriptionPlanByIdTx(tx, 1)
+-	if err != nil {
+-		return nil, nil, err
+-	}
+-	if !validDaypassShopPlan(plan) {
+-		return nil, nil, ErrDaypassShopInvalid
+-	}
+@@ -35 +29 @@
+-	subscription, err := CreateUserSubscriptionFromPlanTx(tx, user.Id, plan, spec.Source)
++	subscription, err := createDaypassSubscriptionTx(tx, user.Id, spec)
+@@ -37,0 +32,19 @@
++	}
++	token, err := createDaypassTokenTx(tx, user.Id, spec)
++	if err != nil {
++		return nil, nil, err
++	}
++	return token, subscription, nil
++}
++
++func createDaypassSubscriptionTx(tx *gorm.DB, userID int, spec daypassGrantSpec) (*UserSubscription, error) {
++	plan, err := getSubscriptionPlanByIdTx(tx, 1)
++	if err != nil {
++		return nil, err
++	}
++	if !validDaypassShopPlan(plan) || (spec.Renewable && plan.MaxPurchasePerUser != 0) {
++		return nil, ErrDaypassShopInvalid
++	}
++	subscription, err := CreateUserSubscriptionFromPlanTx(tx, userID, plan, spec.Source)
++	if err != nil {
++		return nil, err
+@@ -43 +56 @@
+-		return nil, nil, err
++		return nil, err
+@@ -44,0 +58,5 @@
++	subscription.StartTime, subscription.EndTime = spec.StartsAt, spec.ExpiresAt
++	return subscription, nil
++}
++
++func createDaypassTokenTx(tx *gorm.DB, userID int, spec daypassGrantSpec) (*Token, error) {
+@@ -47 +65 @@
+-		return nil, nil, err
++		return nil, err
+@@ -50 +68 @@
+-		UserId: user.Id, Key: key, Name: spec.Name,
++		UserId: userID, Key: key, Name: spec.Name,
+@@ -55 +73,4 @@
+-		return nil, nil, err
++		return nil, err
++	}
++	if spec.Renewable {
++		return token, nil
+@@ -59 +80 @@
+-		return nil, nil, err
++		return nil, err
+@@ -61 +82 @@
+-	return token, subscription, nil
++	return token, nil
+diff --git a/model/daypass_identity.go b/model/daypass_identity.go
+--- a/model/daypass_identity.go
++++ b/model/daypass_identity.go
+@@ -17,2 +17,2 @@
+-// Receipts keep their own token and subscription; only the login identity is
+-// shared, which keeps per-key expiry independent.
++// Manual receipts keep independent keys. Shop renewals can share a native
++// token while each order retains its own paid subscription window.
+diff --git a/model/daypass_key_status.go b/model/daypass_key_status.go
+new file mode 100644
+--- /dev/null
++++ b/model/daypass_key_status.go
+@@ -0,0 +1,105 @@
++package model
++
++import (
++	"context"
++	"errors"
++	"strconv"
++
++	"github.com/QuantumNous/new-api/common"
++	"gorm.io/gorm"
++)
++
++// SetDaypassKeyStatus flips only the token gate; the receipt term and
++// subscription are untouched so a disabled key can be re-enabled.
++func SetDaypassKeyStatus(ctx context.Context, tokenID, status int, now int64) error {
++	if tokenID <= 0 || (status != common.TokenStatusEnabled && status != common.TokenStatusDisabled) {
++		return ErrDaypassShopInvalid
++	}
++	daypassShopMutex.Lock()
++	defer daypassShopMutex.Unlock()
++	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
++		receipt, err := resolveDaypassKeyReceiptTx(tx, tokenID, true)
++		if err != nil {
++			return err
++		}
++		if !receipt.Renewable && receipt.Status != "active" {
++			return ErrDaypassShopRevoked
++		}
++		var token Token
++		if err := tx.First(&token, tokenID).Error; err != nil {
++			if errors.Is(err, gorm.ErrRecordNotFound) {
++				return ErrDaypassShopRevoked
++			}
++			return err
++		}
++		if !receipt.Renewable && status == common.TokenStatusEnabled && token.ExpiredTime > 0 && token.ExpiredTime <= now {
++			return ErrDaypassShopExpired
++		}
++		if err := invalidateTokenCacheForMutation(token.Key); err != nil {
++			return err
++		}
++		return tx.Model(&Token{}).Where("id = ?", tokenID).Update("status", status).Error
++	})
++}
++
++// DeleteDaypassKey revokes the receipt and soft-deletes the token so the list
++// shrinks immediately while paid/manual evidence stays intact.
++func DeleteDaypassKey(ctx context.Context, tokenID int, now int64) error {
++	if tokenID <= 0 {
++		return ErrDaypassShopInvalid
++	}
++	daypassShopMutex.Lock()
++	defer daypassShopMutex.Unlock()
++	optionKey := daypassConcurrencyPrefix + strconv.Itoa(tokenID)
++	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
++		receipt, err := resolveDaypassKeyReceiptTx(tx, tokenID, true)
++		if err != nil {
++			return err
++		}
++		var token Token
++		if err := tx.Unscoped().First(&token, tokenID).Error; err != nil {
++			if errors.Is(err, gorm.ErrRecordNotFound) {
++				return nil
++			}
++			return err
++		}
++		if !token.DeletedAt.Valid {
++			if err := revokeDaypassTokenTx(tx, tokenID); err != nil {
++				return err
++			}
++			if err := tx.Delete(&token).Error; err != nil {
++				return err
++			}
++		}
++		if receipt.Renewable {
++			rows := tx.Model(&DaypassShopOrder{}).Where("renewal_token_id = ?", tokenID)
++			subscriptions := tx.Model(&DaypassShopOrder{}).Select("subscription_id").
++				Where("renewal_token_id = ? AND subscription_id IS NOT NULL", tokenID)
++			if err := tx.Model(&UserSubscription{}).Where("id IN (?)", subscriptions).Update("status", "cancelled").Error; err != nil {
++				return err
++			}
++			if err := rows.Update("status", "revoked").Error; err != nil {
++				return err
++			}
++		} else if receipt.SubscriptionID > 0 {
++			if err := tx.Model(&UserSubscription{}).Where("id = ?", receipt.SubscriptionID).Update("status", "cancelled").Error; err != nil {
++				return err
++			}
++		}
++		if !receipt.Renewable && receipt.Status != "revoked" {
++			if err := updateDaypassKeyReceipt(tx, receipt, "status", "revoked"); err != nil {
++				return err
++			}
++		}
++		return tx.Where(commonKeyCol+" = ?", optionKey).Delete(&Option{}).Error
++	})
++	if err != nil {
++		return err
++	}
++	daypassConcurrencyMutex.Lock()
++	common.OptionMapRWMutex.Lock()
++	delete(common.OptionMap, optionKey)
++	common.OptionMapRWMutex.Unlock()
++	daypassConcurrencyMutex.Unlock()
++	return nil
++}
+diff --git a/model/daypass_keys.go b/model/daypass_keys.go
+--- a/model/daypass_keys.go
++++ b/model/daypass_keys.go
+@@ -6,3 +6 @@
+-	"strconv"
+-
+-	"github.com/QuantumNous/new-api/common"
++
+@@ -28,0 +27 @@
++	Renewable    bool   `json:"-"`
+@@ -36,0 +36 @@
++	Renewable bool
+@@ -49,0 +50 @@
++	Renewable      bool
+@@ -61 +62 @@
+-			ExpiresAt: shop.ExpiresAt, Status: shop.Status, CreatedAt: shop.CreatedAt}
++			ExpiresAt: shop.ExpiresAt, Status: shop.Status, CreatedAt: shop.CreatedAt, Renewable: shop.RenewalTokenID != nil}
+@@ -97,2 +98,2 @@
+-	shopSQL := "SELECT 'shop' AS source, token_id, order_id, created_at FROM " + shopTable + " WHERE token_id IS NOT NULL AND " + live
+-	manualSQL := "SELECT 'manual' AS source, token_id, 0 AS order_id, created_at FROM " + manualTable + " WHERE owner_id = ? AND " + live
++	shopSQL := "SELECT 'shop' AS source, token_id, order_id, created_at, (renewal_token_id IS NOT NULL) AS renewable FROM " + shopTable + " WHERE token_id IS NOT NULL AND " + live
++	manualSQL := "SELECT 'manual' AS source, token_id, 0 AS order_id, created_at, FALSE AS renewable FROM " + manualTable + " WHERE owner_id = ? AND " + live
+@@ -113 +114 @@
+-	if err := db.Raw("SELECT source, token_id, order_id, created_at FROM ("+sqlText+
++	if err := db.Raw("SELECT source, token_id, order_id, created_at, renewable FROM ("+sqlText+
+@@ -158 +159 @@
+-		item := DaypassKey{TokenID: token.Id, Source: row.Source, OrderID: row.OrderID, IssuedAt: row.CreatedAt, UserID: token.UserId, Token: token}
++		item := DaypassKey{TokenID: token.Id, Source: row.Source, OrderID: row.OrderID, IssuedAt: row.CreatedAt, UserID: token.UserId, Token: token, Renewable: row.Renewable}
+@@ -172 +173 @@
+-	items, err := daypassKeyItems(ctx, []daypassKeyRow{{Source: receipt.Source, TokenID: receipt.TokenID, OrderID: receipt.OrderID, CreatedAt: receipt.CreatedAt}})
++	items, err := daypassKeyItems(ctx, []daypassKeyRow{{Source: receipt.Source, TokenID: receipt.TokenID, OrderID: receipt.OrderID, CreatedAt: receipt.CreatedAt, Renewable: receipt.Renewable}})
+@@ -195,0 +197,3 @@
++		if receipt.Renewable {
++			return ErrDaypassShopInvalid
++		}
+@@ -242,85 +245,0 @@
+-// SetDaypassKeyStatus flips only the token gate; the receipt term and
+-// subscription are untouched so a disabled key can be re-enabled.
+-func SetDaypassKeyStatus(ctx context.Context, tokenID, status int, now int64) error {
+-	if tokenID <= 0 || (status != common.TokenStatusEnabled && status != common.TokenStatusDisabled) {
+-		return ErrDaypassShopInvalid
+-	}
+-	daypassShopMutex.Lock()
+-	defer daypassShopMutex.Unlock()
+-	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+-		receipt, err := resolveDaypassKeyReceiptTx(tx, tokenID, true)
+-		if err != nil {
+-			return err
+-		}
+-		if receipt.Status != "active" {
+-			return ErrDaypassShopRevoked
+-		}
+-		var token Token
+-		if err := tx.First(&token, tokenID).Error; err != nil {
+-			if errors.Is(err, gorm.ErrRecordNotFound) {
+-				return ErrDaypassShopRevoked
+-			}
+-			return err
+-		}
+-		if status == common.TokenStatusEnabled && token.ExpiredTime > 0 && token.ExpiredTime <= now {
+-			return ErrDaypassShopExpired
+-		}
+-		if err := invalidateTokenCacheForMutation(token.Key); err != nil {
+-			return err
+-		}
+-		return tx.Model(&Token{}).Where("id = ?", tokenID).Update("status", status).Error
+-	})
+-}
+-
+-// DeleteDaypassKey revokes the receipt and soft-deletes the token so the list
+-// shrinks immediately while paid/manual evidence stays intact.
+-func DeleteDaypassKey(ctx context.Context, tokenID int, now int64) error {
+-	if tokenID <= 0 {
+-		return ErrDaypassShopInvalid
+-	}
+-	daypassShopMutex.Lock()
+-	defer daypassShopMutex.Unlock()
+-	optionKey := daypassConcurrencyPrefix + strconv.Itoa(tokenID)
+-	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+-		receipt, err := resolveDaypassKeyReceiptTx(tx, tokenID, true)
+-		if err != nil {
+-			return err
+-		}
+-		var token Token
+-		if err := tx.Unscoped().First(&token, tokenID).Error; err != nil {
+-			if errors.Is(err, gorm.ErrRecordNotFound) {
+-				return nil
+-			}
+-			return err
+-		}
+-		if !token.DeletedAt.Valid {
+-			if err := revokeDaypassTokenTx(tx, tokenID); err != nil {
+-				return err
+-			}
+-			if err := tx.Delete(&token).Error; err != nil {
+-				return err
+-			}
+-		}
+-		if receipt.SubscriptionID > 0 {
+-			if err := tx.Model(&UserSubscription{}).Where("id = ?", receipt.SubscriptionID).Update("status", "cancelled").Error; err != nil {
+-				return err
+-			}
+-		}
+-		if receipt.Status != "revoked" {
+-			if err := updateDaypassKeyReceipt(tx, receipt, "status", "revoked"); err != nil {
+-				return err
+-			}
+-		}
+-		return tx.Where(commonKeyCol+" = ?", optionKey).Delete(&Option{}).Error
+-	})
+-	if err != nil {
+-		return err
+-	}
+-	daypassConcurrencyMutex.Lock()
+-	common.OptionMapRWMutex.Lock()
+-	delete(common.OptionMap, optionKey)
+-	common.OptionMapRWMutex.Unlock()
+-	daypassConcurrencyMutex.Unlock()
+-	return nil
+-}
+-
+diff --git a/model/daypass_shop.go b/model/daypass_shop.go
+--- a/model/daypass_shop.go
++++ b/model/daypass_shop.go
+@@ -5,2 +4,0 @@
+-	"crypto/sha256"
+-	"encoding/hex"
+@@ -7,0 +6 @@
++	"math"
+@@ -13 +11,0 @@
+-	"gorm.io/gorm/clause"
+@@ -37 +35 @@
+-	if !validDaypassShopPlan(&plan) {
++	if !validDaypassShopPlan(&plan) || plan.MaxPurchasePerUser != 0 {
+@@ -41 +39 @@
+-	return DB.WithContext(ctx).Select("id").Limit(1).Find(&row).Error
++	return DB.WithContext(ctx).Select("id", "renewal_token_id", "renewal_starts_at", "renewal_tier").Limit(1).Find(&row).Error
+@@ -64,0 +63 @@
++	PriorOrderID int64  `json:"prior_order_id,omitempty"`
+@@ -81,5 +80,4 @@
+-}
+-
+-type DaypassShopResult struct {
+-	DaypassShopOrder
+-	Key string `json:"key,omitempty"`
++	RenewalTokenID *int   `gorm:"index" json:"-"`
++	// The paid window stays with its own receipt even when several orders share a key.
++	RenewalStartsAt int64 `gorm:"type:bigint" json:"-"`
++	RenewalTier     int   `json:"-"`
+@@ -96,0 +95,4 @@
++	renewal := input.SKUVersion == DaypassShopRenewalVersion
++	if renewal {
++		return provisionDaypassRenewal(ctx, purchase, now)
++	}
+@@ -115,0 +118,3 @@
++				if errors.Is(err, gorm.ErrRecordNotFound) {
++					return ErrDaypassShopRevoked
++				}
+@@ -127 +132,2 @@
+-			if token.UserId != *row.UserID || subscription.UserId != *row.UserID || token.ExpiredTime != row.ExpiresAt || subscription.EndTime != row.ExpiresAt {
++			if token.UserId != *row.UserID || subscription.UserId != *row.UserID || subscription.EndTime != row.ExpiresAt ||
++				(row.RenewalTokenID == nil && token.ExpiredTime != row.ExpiresAt) || token.ExpiredTime < row.ExpiresAt {
+@@ -153 +159,4 @@
+-	if err == nil && issued {
++	if err != nil {
++		return nil, err
++	}
++	if issued {
+@@ -156 +165,2 @@
+-	return result, err
++	refreshSubscriptionUserGroupCache(*result.UserID, "day-pass purchase")
++	return result, nil
+@@ -172 +182 @@
+-		if row.TokenID != nil {
++		if row.RenewalTokenID == nil && row.TokenID != nil {
+@@ -186 +196,6 @@
+-		result = &DaypassShopResult{DaypassShopOrder: *row}
++		if row.RenewalTokenID != nil {
++			if err := reconcileDaypassShopKeyTx(tx, *row.RenewalTokenID); err != nil {
++				return err
++			}
++		}
++		result = daypassShopResult(row, input, "")
+@@ -189 +204,4 @@
+-	return result, err
++	if err != nil {
++		return nil, err
++	}
++	return result, nil
+@@ -226 +244 @@
+-	case 2:
++	case 2, DaypassShopRenewalVersion:
+@@ -232,0 +251,4 @@
++		if input.SKUVersion == DaypassShopRenewalVersion && (input.Sub2UserID <= 0 || input.Sub2UserID > math.MaxInt32 ||
++			!validDaypassSub2Username(input.Sub2Username) || input.PriorOrderID < 0 || input.PriorOrderID >= input.OrderID) {
++			return daypassShopPurchase{}, ErrDaypassShopInvalid
++		}
+@@ -236 +258 @@
+-	if input.Sub2UserID < 0 || productID <= 0 || input.ProductID != productID || input.Instance != DaypassShopInstance || input.OrderID <= 0 ||
++	if (input.SKUVersion != DaypassShopRenewalVersion && input.PriorOrderID != 0) || input.Sub2UserID < 0 || productID <= 0 || input.ProductID != productID || input.Instance != DaypassShopInstance || input.OrderID <= 0 ||
+@@ -242,26 +263,0 @@
+-
+-func lockDaypassShopOrder(tx *gorm.DB, purchase daypassShopPurchase, now int64) (*DaypassShopOrder, error) {
+-	input := purchase.input
+-	identity := sha256.Sum256([]byte(input.Instance + "/" + strconv.FormatInt(input.OrderID, 10)))
+-	encoded, err := common.Marshal(input)
+-	if err != nil {
+-		return nil, err
+-	}
+-	binding := sha256.Sum256(encoded)
+-	row := DaypassShopOrder{
+-		ID: hex.EncodeToString(identity[:]), Instance: input.Instance, OrderID: input.OrderID,
+-		ProductID: input.ProductID, BindingDigest: hex.EncodeToString(binding[:]), PaidAt: input.PaidAt,
+-		ExpiresAt: input.PaidAt + purchase.sku.duration, Status: "pending", CreatedAt: now,
+-	}
+-	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).Create(&row).Error; err != nil {
+-		return nil, err
+-	}
+-	expected := row.BindingDigest
+-	if err := lockForUpdate(tx).First(&row, "id = ?", row.ID).Error; err != nil {
+-		return nil, err
+-	}
+-	if row.BindingDigest != expected {
+-		return nil, ErrDaypassShopBinding
+-	}
+-	return &row, nil
+-}
+diff --git a/model/daypass_shop_access.go b/model/daypass_shop_access.go
+new file mode 100644
+--- /dev/null
++++ b/model/daypass_shop_access.go
+@@ -0,0 +1,42 @@
++package model
++
++import (
++	"context"
++
++	"github.com/QuantumNous/new-api/common"
++)
++
++type daypassShopAccess struct {
++	Managed bool
++	Tier    int
++}
++
++// DaypassRelayConcurrency returns the tier of the paid window covering now.
++// Future orders and refunded windows cannot authorize relay traffic, even
++// though the reusable token's outer expiry may be further in the future.
++func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int, error) {
++	var access daypassShopAccess
++	db := DB.WithContext(ctx)
++	paid := db.Model(&DaypassShopOrder{}).Select("renewal_tier").
++		Where("renewal_token_id = ? AND user_id = ? AND status = ? AND renewal_starts_at <= ? AND expires_at > ?",
++			token.Id, token.UserId, "active", now, now).
++		Where("subscription_id IN (?)", db.Model(&UserSubscription{}).Select("id").
++			Where("user_id = ? AND plan_id = ? AND source = ? AND status = ? AND start_time <= ? AND end_time > ?",
++				token.UserId, 1, "sub2_shop", "active", now, now)).
++		Order("renewal_starts_at DESC, order_id DESC").Limit(1)
++	anchor := db.Model(&DaypassShopOrder{}).Select("1").
++		Where("token_id = ? AND renewal_token_id = ?", token.Id, token.Id)
++	if err := db.Raw("SELECT EXISTS (?) AS managed, COALESCE((?), 0) AS tier", anchor, paid).Scan(&access).Error; err != nil {
++		return 0, err
++	}
++	if !access.Managed {
++		return GetDaypassTokenConcurrency(token.Id), nil
++	}
++	if access.Tier <= 0 || access.Tier > DaypassMaxConcurrency || token.Status != common.TokenStatusEnabled || !isDaypassShopToken(token) {
++		return 0, ErrDaypassShopExpired
++	}
++	if limit := daypassTokenConcurrencyOverride(token.Id); limit > 0 {
++		return limit, nil
++	}
++	return access.Tier, nil
++}
+diff --git a/model/daypass_shop_receipt.go b/model/daypass_shop_receipt.go
+new file mode 100644
+--- /dev/null
++++ b/model/daypass_shop_receipt.go
+@@ -0,0 +1,64 @@
++package model
++
++import (
++	"crypto/sha256"
++	"encoding/hex"
++	"strconv"
++
++	"github.com/QuantumNous/new-api/common"
++	"gorm.io/gorm"
++	"gorm.io/gorm/clause"
++)
++
++type DaypassShopResult struct {
++	DaypassShopOrder
++	Key        string `json:"key,omitempty"`
++	SKUVersion int    `json:"sku_version,omitempty"`
++	Sub2UserID int64  `json:"sub2_user_id,omitempty"`
++	StartsAt   int64  `json:"starts_at,omitempty"`
++}
++
++func daypassShopResult(row *DaypassShopOrder, input DaypassShopInput, key string) *DaypassShopResult {
++	result := &DaypassShopResult{DaypassShopOrder: *row, Key: key}
++	if input.SKUVersion == DaypassShopRenewalVersion {
++		result.SKUVersion, result.Sub2UserID = DaypassShopRenewalVersion, input.Sub2UserID
++		result.StartsAt = row.RenewalStartsAt
++		if result.StartsAt == 0 {
++			result.StartsAt = row.PaidAt
++		}
++		if row.RenewalTokenID != nil {
++			result.TokenID = row.RenewalTokenID
++		}
++	}
++	return result
++}
++
++func lockDaypassShopOrder(tx *gorm.DB, purchase daypassShopPurchase, now int64) (*DaypassShopOrder, error) {
++	input := purchase.input
++	encoded, err := common.Marshal(input)
++	if err != nil {
++		return nil, err
++	}
++	binding := sha256.Sum256(encoded)
++	row := DaypassShopOrder{
++		ID: daypassShopReceiptID(input.Instance, input.OrderID), Instance: input.Instance, OrderID: input.OrderID,
++		ProductID: input.ProductID, BindingDigest: hex.EncodeToString(binding[:]), PaidAt: input.PaidAt,
++		ExpiresAt: input.PaidAt + purchase.sku.duration, Status: "pending", CreatedAt: now,
++	}
++	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).Create(&row).Error; err != nil {
++		return nil, err
++	}
++	expected := row.BindingDigest
++	if err := lockForUpdate(tx).First(&row, "id = ?", row.ID).Error; err != nil {
++		return nil, err
++	}
++	if row.BindingDigest != expected {
++		return nil, ErrDaypassShopBinding
++	}
++	return &row, nil
++}
++
++func daypassShopReceiptID(instance string, orderID int64) string {
++	identity := sha256.Sum256([]byte(instance + "/" + strconv.FormatInt(orderID, 10)))
++	return hex.EncodeToString(identity[:])
++}
+diff --git a/model/daypass_shop_renewal.go b/model/daypass_shop_renewal.go
+new file mode 100644
+--- /dev/null
++++ b/model/daypass_shop_renewal.go
+@@ -0,0 +1,224 @@
++package model
++
++import (
++	"context"
++	"errors"
++	"strconv"
++
++	"github.com/QuantumNous/new-api/common"
++	"gorm.io/gorm"
++)
++
++const DaypassShopRenewalVersion = 3
++
++func provisionDaypassRenewal(ctx context.Context, purchase daypassShopPurchase, now int64) (*DaypassShopResult, error) {
++	daypassConcurrencyMutex.Lock()
++	defer daypassConcurrencyMutex.Unlock()
++	var result *DaypassShopResult
++	var adoptedTokenID int
++	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
++		row, err := lockDaypassShopOrder(tx, purchase, now)
++		if err != nil {
++			return err
++		}
++		if row.Status == "revoked" {
++			return ErrDaypassShopRevoked
++		}
++		if row.ExpiresAt <= now {
++			return ErrDaypassShopExpired
++		}
++		if row.Status == "active" {
++			result, err = replayDaypassRenewalTx(tx, row, purchase.input)
++			return err
++		}
++		if row.Status != "pending" || row.UserID != nil || row.TokenID != nil || row.SubscriptionID != nil || row.RenewalTokenID != nil {
++			return ErrDaypassShopBinding
++		}
++		selection, err := selectDaypassRenewalKeyTx(tx, purchase.input, now)
++		if err != nil {
++			return err
++		}
++		if selection.anchor != nil {
++			adoptedTokenID = *selection.anchor.TokenID
++		}
++		result, err = issueDaypassRenewalTx(tx, row, selection, daypassRenewalPurchase{purchase, now})
++		return err
++	})
++	if err != nil {
++		return nil, err
++	}
++	if adoptedTokenID != 0 {
++		common.OptionMapRWMutex.Lock()
++		delete(common.OptionMap, daypassConcurrencyPrefix+strconv.Itoa(adoptedTokenID))
++		common.OptionMapRWMutex.Unlock()
++	}
++	refreshSubscriptionUserGroupCache(*result.UserID, "day-pass renewal")
++	return result, nil
++}
++
++type daypassRenewalPurchase struct {
++	daypassShopPurchase
++	now int64
++}
++
++func issueDaypassRenewalTx(tx *gorm.DB, row *DaypassShopOrder, selected daypassRenewalSelection, purchase daypassRenewalPurchase) (*DaypassShopResult, error) {
++	input := purchase.input
++	userID, err := daypassRenewalBuyerTx(tx, selected, purchase)
++	if err != nil {
++		return nil, err
++	}
++	starts := input.PaidAt
++	if selected.token != nil {
++		starts = max(starts, selected.token.ExpiredTime)
++	}
++	expires := starts + purchase.sku.duration
++	if expires < starts || expires-input.PaidAt > 10*365*daypassShopDaySecs {
++		return nil, ErrDaypassShopInvalid
++	}
++	spec := daypassGrantSpec{
++		Name: "Sub2 DeepSeek #" + strconv.FormatInt(input.Sub2UserID, 10), Source: "sub2_shop",
++		StartsAt: starts, ExpiresAt: expires, CreatedAt: purchase.now, Renewable: true,
++	}
++	token := selected.token
++	if token == nil {
++		// Version 3 tiers come from the paid windows. A numeric Option on one
++		// of these tokens is an explicit administrator override.
++		token, err = createDaypassTokenTx(tx, userID, spec)
++		if err != nil {
++			return nil, err
++		}
++		row.TokenID = &token.Id
++	} else {
++		if err := adoptDaypassRenewalKeyTx(tx, selected, userID, expires); err != nil {
++			return nil, err
++		}
++	}
++	sub, err := createDaypassSubscriptionTx(tx, userID, spec)
++	if err != nil {
++		return nil, err
++	}
++	row.UserID, row.RenewalTokenID, row.SubscriptionID = &userID, &token.Id, &sub.Id
++	row.RenewalStartsAt, row.RenewalTier, row.ExpiresAt, row.Status = starts, purchase.sku.concurrency, expires, "active"
++	if err := tx.Save(row).Error; err != nil {
++		return nil, err
++	}
++	return daypassShopResult(row, input, "sk-"+token.Key), nil
++}
++
++func daypassRenewalBuyerTx(tx *gorm.DB, selected daypassRenewalSelection, purchase daypassRenewalPurchase) (int, error) {
++	if selected.userID > 0 {
++		return selected.userID, nil
++	}
++	account := daypassSub2Account{UserID: purchase.input.Sub2UserID, Username: purchase.input.Sub2Username}
++	if selected.anchor != nil {
++		userID := *selected.anchor.UserID
++		name := daypassBindingUsername(account.Username)
++		if name == "" {
++			name = "sub2-" + strconv.FormatInt(account.UserID, 10)
++		}
++		binding := DaypassSub2User{Sub2UserID: account.UserID, Username: name, UserID: userID, CreatedAt: purchase.now}
++		if err := tx.Create(&binding).Error; err != nil {
++			return 0, err
++		}
++		return userID, nil
++	}
++	user, err := EnsureDaypassSub2UserTx(tx, account, purchase.now)
++	if err != nil {
++		return 0, err
++	}
++	return user.Id, nil
++}
++
++func replayDaypassRenewalTx(tx *gorm.DB, row *DaypassShopOrder, input DaypassShopInput) (*DaypassShopResult, error) {
++	if row.RenewalTokenID == nil || row.SubscriptionID == nil || row.UserID == nil || row.RenewalStartsAt <= 0 {
++		return nil, ErrDaypassShopBinding
++	}
++	var binding DaypassSub2User
++	if err := tx.First(&binding, "sub2_user_id = ?", input.Sub2UserID).Error; err != nil {
++		return nil, err
++	}
++	if binding.UserID != *row.UserID {
++		return nil, ErrDaypassShopBinding
++	}
++	var token Token
++	if err := tx.First(&token, *row.RenewalTokenID).Error; err != nil {
++		if errors.Is(err, gorm.ErrRecordNotFound) {
++			return nil, ErrDaypassShopRevoked
++		}
++		return nil, err
++	}
++	var sub UserSubscription
++	var user User
++	if err := tx.First(&sub, *row.SubscriptionID).Error; err != nil {
++		return nil, err
++	}
++	if err := tx.First(&user, binding.UserID).Error; err != nil {
++		return nil, err
++	}
++	if token.UserId != binding.UserID || sub.UserId != binding.UserID || !isDaypassShopToken(&token) ||
++		token.ExpiredTime < row.ExpiresAt || sub.Source != "sub2_shop" || sub.PlanId != 1 || sub.AmountTotal != 0 ||
++		sub.AllowWalletOverflow || sub.StartTime != row.RenewalStartsAt || sub.EndTime != row.ExpiresAt {
++		return nil, ErrDaypassShopBinding
++	}
++	if token.Status != common.TokenStatusEnabled || user.Status != common.UserStatusEnabled || sub.Status != "active" {
++		return nil, ErrDaypassShopRevoked
++	}
++	return daypassShopResult(row, input, "sk-"+token.Key), nil
++}
++
++func isDaypassShopToken(token *Token) bool {
++	return token.Group == "daypass" && token.ModelLimitsEnabled && token.ModelLimits == DaypassModelPolicy &&
++		token.UnlimitedQuota && !token.CrossGroupRetry && !token.AllowUserQuotaQuery && token.ExpiredTime > 0
++}
++
++func adoptDaypassRenewalKeyTx(tx *gorm.DB, selected daypassRenewalSelection, userID int, expires int64) error {
++	token := selected.token
++	if err := invalidateTokenCacheForMutation(token.Key); err != nil {
++		return err
++	}
++	if anchor := selected.anchor; anchor != nil {
++		sub := selected.legacySub
++		if sub.UserId != userID {
++			// The native subscription ID stays unchanged for historical
++			// usage/settlement; only its linked buyer becomes canonical.
++			// Keep the native expiry worker's subscription-before-user order.
++			if err := lockForUpdate(tx).First(sub, sub.Id).Error; err != nil {
++				return err
++			}
++			if sub.Status == "cancelled" {
++				return ErrDaypassShopRevoked
++			}
++			if err := tx.Model(sub).Update("user_id", userID).Error; err != nil {
++				return err
++			}
++		}
++		anchor.UserID, anchor.RenewalTokenID = &userID, &token.Id
++		anchor.RenewalStartsAt, anchor.RenewalTier = sub.StartTime, GetDaypassTokenConcurrency(token.Id)
++		if err := tx.Save(anchor).Error; err != nil {
++			return err
++		}
++		if err := tx.Where(commonKeyCol+" = ?", daypassConcurrencyPrefix+strconv.Itoa(token.Id)).Delete(&Option{}).Error; err != nil {
++			return err
++		}
++	}
++	return tx.Unscoped().Model(token).Updates(map[string]any{
++		"user_id": userID, "expired_time": expires, "status": common.TokenStatusEnabled, "deleted_at": nil,
++	}).Error
++}
++
++func reconcileDaypassShopKeyTx(tx *gorm.DB, tokenID int) error {
++	var token Token
++	found, err := daypassFind(tx.Where("id = ?", tokenID), &token)
++	if err != nil || !found {
++		return err
++	}
++	var expiry struct{ ExpiresAt int64 }
++	if err := tx.Model(&DaypassShopOrder{}).Select("COALESCE(MAX(expires_at), 0) AS expires_at").
++		Where("renewal_token_id = ? AND status = ?", tokenID, "active").Scan(&expiry).Error; err != nil {
++		return err
++	}
++	if err := invalidateTokenCacheForMutation(token.Key); err != nil {
++		return err
++	}
++	return tx.Model(&token).Update("expired_time", max(expiry.ExpiresAt, 1)).Error
++}
+diff --git a/model/daypass_shop_renewal_test.go b/model/daypass_shop_renewal_test.go
+new file mode 100644
+--- /dev/null
++++ b/model/daypass_shop_renewal_test.go
+@@ -0,0 +1,264 @@
++package model
++
++import (
++	"context"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/QuantumNous/new-api/common"
++	"github.com/google/uuid"
++	"github.com/stretchr/testify/require"
++	"gorm.io/gorm"
++)
++
++// The pre-renewal receipt schema retains its unique native IDs and digest.
++type daypassShopReceiptBeforeRenewal struct {
++	ID             string `gorm:"primaryKey;size:64"`
++	Instance       string `gorm:"size:64;not null"`
++	OrderID        int64  `gorm:"not null"`
++	ProductID      int64  `gorm:"not null"`
++	BindingDigest  string `gorm:"size:64;not null"`
++	UserID         *int   `gorm:"index:idx_daypass_shop_orders_user_id"`
++	TokenID        *int   `gorm:"uniqueIndex"`
++	SubscriptionID *int   `gorm:"uniqueIndex"`
++	PaidAt         int64  `gorm:"not null"`
++	ExpiresAt      int64  `gorm:"not null;index"`
++	Status         string `gorm:"size:16;not null"`
++	CreatedAt      int64  `gorm:"not null;index"`
++}
++
++func testDaypassShopRenewalMigration(t *testing.T, db *gorm.DB) {
++	t.Helper()
++	table := db.NamingStrategy.TableName("daypass_shop_order")
++	require.NoError(t, db.Table(table).AutoMigrate(&daypassShopReceiptBeforeRenewal{}))
++	userID, tokenID, subscriptionID := 9000, 9001, 9002
++	legacy := daypassShopReceiptBeforeRenewal{
++		ID: "prior-receipt", Instance: DaypassShopInstance, OrderID: 9003, ProductID: 8, BindingDigest: "original-digest",
++		UserID: &userID, TokenID: &tokenID, SubscriptionID: &subscriptionID, PaidAt: 1700000000,
++		ExpiresAt: 1700086400, Status: "active", CreatedAt: 1700000000,
++	}
++	require.NoError(t, db.Table(table).Create(&legacy).Error)
++	for range 2 {
++		require.NoError(t, db.AutoMigrate(&DaypassShopOrder{}, &DaypassSub2User{}))
++		var row DaypassShopOrder
++		require.NoError(t, db.First(&row, "id = ?", legacy.ID).Error)
++		require.Equal(t, legacy.BindingDigest, row.BindingDigest)
++		require.Equal(t, legacy.TokenID, row.TokenID)
++		require.Equal(t, legacy.SubscriptionID, row.SubscriptionID)
++		require.Equal(t, legacy.ExpiresAt, row.ExpiresAt)
++		require.Nil(t, row.RenewalTokenID)
++		require.True(t, db.Migrator().HasIndex(&DaypassShopOrder{}, "TokenID"))
++	}
++	var version string
++	query := "SELECT VERSION()"
++	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
++		query = "SELECT sqlite_version()"
++	}
++	require.NoError(t, db.Raw(query).Scan(&version).Error)
++	t.Logf("database version: %s", version)
++	require.NoError(t, db.Delete(&DaypassShopOrder{}, "id = ?", legacy.ID).Error)
++}
++
++func testDaypassShopRenewableKey(t *testing.T) {
++	t.Helper()
++	ctx := context.Background()
++	now := time.Now().Unix()
++	const productID int64 = 8
++	legacy := DaypassShopInput{Instance: DaypassShopInstance, OrderID: 1001, ProductID: productID,
++		PriceFen: 600, Currency: "CNY", PaidAt: now - 3*86400}
++	first, err := ProvisionDaypassShopOrder(ctx, legacy, productID, legacy.PaidAt+1)
++	require.NoError(t, err)
++	_, err = CleanupDaypassTokens(ctx, now, func(int) bool { return false })
++	require.NoError(t, err)
++	key := strings.TrimPrefix(first.Key, "sk-")
++	var priorToken Token
++	require.ErrorIs(t, DB.First(&priorToken, *first.TokenID).Error, gorm.ErrRecordNotFound)
++
++	day := DaypassShopInput{Instance: DaypassShopInstance, OrderID: 1002, ProductID: productID,
++		PriceFen: 600, Currency: "CNY", PaidAt: now - 10, SKUVersion: DaypassShopRenewalVersion, DurationSeconds: 86400,
++		Concurrency: 2, Sub2UserID: 510, PriorOrderID: legacy.OrderID}
++	renewed, err := ProvisionDaypassShopOrder(ctx, day, productID, now)
++	require.NoError(t, err)
++	require.True(t, first.Key == renewed.Key, "purchase must restore the original credential")
++	require.Equal(t, *first.TokenID, *renewed.TokenID)
++	require.Equal(t, day.PaidAt+86400, renewed.ExpiresAt)
++	_, err = ValidateUserToken(key)
++	require.NoError(t, err)
++
++	week := day
++	week.OrderID, week.PaidAt, week.DurationSeconds, week.Concurrency = 1003, now, 7*86400, 3
++	extension, err := ProvisionDaypassShopOrder(ctx, week, productID, now)
++	require.NoError(t, err)
++	require.True(t, renewed.Key == extension.Key)
++	require.Equal(t, renewed.ExpiresAt+7*86400, extension.ExpiresAt)
++	retry, err := ProvisionDaypassShopOrder(ctx, week, productID, now+1)
++	require.NoError(t, err)
++	require.Equal(t, extension.ExpiresAt, retry.ExpiresAt)
++
++	var token Token
++	require.NoError(t, DB.First(&token, *first.TokenID).Error)
++	tier, err := DaypassRelayConcurrency(ctx, &token, now)
++	require.NoError(t, err)
++	require.Equal(t, 2, tier)
++	tier, err = DaypassRelayConcurrency(ctx, &token, renewed.ExpiresAt)
++	require.NoError(t, err)
++	require.Equal(t, 3, tier)
++
++	revoked, err := RevokeDaypassShopOrder(ctx, day, productID, now+1)
++	require.NoError(t, err)
++	require.Empty(t, revoked.Key)
++	_, err = DaypassRelayConcurrency(ctx, &token, now+1)
++	require.ErrorIs(t, err, ErrDaypassShopExpired)
++	tier, err = DaypassRelayConcurrency(ctx, &token, renewed.ExpiresAt)
++	require.NoError(t, err)
++	require.Equal(t, 3, tier)
++	_, err = ProvisionDaypassShopOrder(ctx, day, productID, now+1)
++	require.ErrorIs(t, err, ErrDaypassShopRevoked)
++
++	_, err = CleanupDaypassTokens(ctx, extension.ExpiresAt+3601, func(int) bool { return false })
++	require.NoError(t, err)
++	require.NoError(t, DB.First(&Token{}, *first.TokenID).Error, "cleanup must retain the reusable key")
++
++	third := day
++	third.OrderID, third.PaidAt, third.PriorOrderID = 1004, extension.ExpiresAt+3*86400, 0
++	restored, err := ProvisionDaypassShopOrder(ctx, third, productID, third.PaidAt+1)
++	require.NoError(t, err)
++	require.True(t, restored.Key == first.Key, "subsequent renewal needs only the bound buyer")
++	require.Equal(t, third.PaidAt, restored.StartsAt)
++	require.Equal(t, third.PaidAt+86400, restored.ExpiresAt)
++}
++
++func testDaypassShopRenewalSafety(t *testing.T) {
++	t.Helper()
++	ctx := context.Background()
++	now := time.Now().Unix()
++	const productID int64 = 8
++	buyer := DaypassShopInput{Instance: DaypassShopInstance, OrderID: 1100, ProductID: productID,
++		PriceFen: 600, Currency: "CNY", PaidAt: now - 100, SKUVersion: 2, DurationSeconds: 86400,
++		Concurrency: 2, Sub2UserID: 520}
++	first, err := ProvisionDaypassShopOrder(ctx, buyer, productID, now)
++	require.NoError(t, err)
++	manual, err := IssueDaypassManual(ctx, 9, DaypassManualInput{
++		RequestID: uuid.NewString(), Name: "manual gift", DurationSeconds: 7200, Concurrency: 3, Sub2UserID: buyer.Sub2UserID,
++	}, now)
++	require.NoError(t, err)
++	input := buyer
++	input.SKUVersion, input.OrderID, input.PaidAt = DaypassShopRenewalVersion, 1101, now
++	next, err := ProvisionDaypassShopOrder(ctx, input, productID, now)
++	require.NoError(t, err)
++	require.True(t, next.Key == first.Key && next.Key != manual.Key, "only the prior shop credential is renewed")
++	require.Equal(t, first.ExpiresAt, next.StartsAt)
++	replay, err := ProvisionDaypassShopOrder(ctx, buyer, productID, now)
++	require.NoError(t, err)
++	require.True(t, replay.Key == first.Key)
++
++	foreign := input
++	foreign.Sub2UserID, foreign.OrderID, foreign.PriorOrderID = 521, 1102, buyer.OrderID
++	_, err = ProvisionDaypassShopOrder(ctx, foreign, productID, now)
++	require.ErrorIs(t, err, ErrDaypassShopBinding)
++	_, err = RevokeDaypassShopOrder(ctx, buyer, productID, now)
++	require.NoError(t, err)
++	_, err = ProvisionDaypassShopOrder(ctx, input, productID, now)
++	require.NoError(t, err, "refunding an adopted legacy order must not revoke the renewal")
++
++	tokenID := *first.TokenID
++	require.NoError(t, SetDaypassKeyStatus(ctx, tokenID, common.TokenStatusDisabled, now))
++	input.OrderID++
++	_, err = ProvisionDaypassShopOrder(ctx, input, productID, now)
++	require.ErrorIs(t, err, ErrDaypassShopRevoked)
++	require.NoError(t, DeleteDaypassKey(ctx, tokenID, now))
++	input.OrderID++
++	replacement, err := ProvisionDaypassShopOrder(ctx, input, productID, now)
++	require.NoError(t, err)
++	require.True(t, replacement.Key != first.Key, "explicit deletion must not restore the old credential")
++	require.ErrorIs(t, DB.First(&Token{}, tokenID).Error, gorm.ErrRecordNotFound)
++	_, err = ProvisionDaypassShopOrder(ctx, buyer, productID, now)
++	require.ErrorIs(t, err, ErrDaypassShopRevoked)
++}
++
++func testDaypassShopRenewalAdoptsIntoExistingBinding(t *testing.T) {
++	t.Helper()
++	ctx := context.Background()
++	now := time.Now().Unix()
++	const productID int64 = 8
++	const buyerID int64 = 525
++	legacy := DaypassShopInput{Instance: DaypassShopInstance, OrderID: 1150, ProductID: productID,
++		PriceFen: 800, Currency: "CNY", PaidAt: now - 1800}
++	old, err := ProvisionDaypassShopOrder(ctx, legacy, productID, now)
++	require.NoError(t, err)
++	gift := DaypassManualInput{
++		RequestID: uuid.NewString(), Name: "manual gift", DurationSeconds: 7200, Concurrency: 3, Sub2UserID: buyerID,
++	}
++	manual, err := IssueDaypassManual(ctx, 9, gift, now)
++	require.NoError(t, err)
++	require.NotEqual(t, *old.UserID, manual.UserID)
++	renewal := DaypassShopInput{Instance: DaypassShopInstance, OrderID: 1151, ProductID: productID,
++		PriceFen: 600, Currency: "CNY", PaidAt: now, SKUVersion: DaypassShopRenewalVersion,
++		DurationSeconds: 86400, Concurrency: 2, Sub2UserID: buyerID, PriorOrderID: legacy.OrderID}
++	grant, err := ProvisionDaypassShopOrder(ctx, renewal, productID, now)
++	require.NoError(t, err)
++	require.True(t, grant.Key == old.Key && grant.Key != manual.Key)
++	require.Equal(t, manual.UserID, *grant.UserID)
++	require.Equal(t, old.ExpiresAt, grant.StartsAt)
++	var token Token
++	var original UserSubscription
++	require.NoError(t, DB.First(&token, *old.TokenID).Error)
++	require.NoError(t, DB.First(&original, *old.SubscriptionID).Error)
++	require.Equal(t, manual.UserID, token.UserId)
++	require.Equal(t, manual.UserID, original.UserId)
++	require.Equal(t, old.ExpiresAt, original.EndTime)
++	tier, err := DaypassRelayConcurrency(ctx, &token, now)
++	require.NoError(t, err)
++	require.Equal(t, 3, tier)
++	tier, err = DaypassRelayConcurrency(ctx, &token, grant.StartsAt)
++	require.NoError(t, err)
++	require.Equal(t, 2, tier)
++	unchanged, err := IssueDaypassManual(ctx, 9, gift, now+1)
++	require.NoError(t, err)
++	require.Equal(t, manual.UserID, unchanged.UserID)
++	require.Equal(t, manual.ExpiresAt, unchanged.ExpiresAt)
++	require.True(t, manual.Key == unchanged.Key && grant.Key != unchanged.Key)
++}
++
++func testDaypassShopRenewalConcurrent(t *testing.T) {
++	t.Helper()
++	ctx := context.Background()
++	now := time.Now().Unix()
++	const productID int64 = 8
++	input := DaypassShopInput{Instance: DaypassShopInstance, OrderID: 1200, ProductID: productID,
++		PriceFen: 600, Currency: "CNY", PaidAt: now, SKUVersion: DaypassShopRenewalVersion, DurationSeconds: 86400,
++		Concurrency: 2, Sub2UserID: 530}
++	type response struct {
++		grant *DaypassShopResult
++		err   error
++	}
++	results := make(chan response, 4)
++	for _, offset := range []int64{0, 1, 0, 1} {
++		order := input
++		order.OrderID += offset
++		go func() {
++			grant, err := ProvisionDaypassShopOrder(ctx, order, productID, now)
++			results <- response{grant, err}
++		}()
++	}
++	grants := make(map[int64]*DaypassShopResult)
++	for range 4 {
++		result := <-results
++		require.NoError(t, result.err)
++		if prior := grants[result.grant.OrderID]; prior != nil {
++			require.True(t, prior.Key == result.grant.Key)
++			require.Equal(t, prior.ExpiresAt, result.grant.ExpiresAt)
++		}
++		grants[result.grant.OrderID] = result.grant
++	}
++	first, second := grants[1200], grants[1201]
++	require.True(t, first.Key == second.Key)
++	require.Equal(t, now+2*86400, max(first.ExpiresAt, second.ExpiresAt))
++	var count int64
++	require.NoError(t, DB.Model(&DaypassShopOrder{}).Where("renewal_token_id = ?", *first.TokenID).Count(&count).Error)
++	require.EqualValues(t, 2, count)
++	require.NoError(t, DB.Model(&Option{}).Where(commonKeyCol+" = ?", daypassConcurrencyPrefix+strconv.Itoa(*first.TokenID)).Count(&count).Error)
++	require.Zero(t, count, "tier follows receipts without an administrator override")
++}
+diff --git a/model/daypass_shop_selection.go b/model/daypass_shop_selection.go
+new file mode 100644
+--- /dev/null
++++ b/model/daypass_shop_selection.go
+@@ -0,0 +1,157 @@
++package model
++
++import (
++	"github.com/QuantumNous/new-api/common"
++	"gorm.io/gorm"
++)
++
++type daypassRenewalSelection struct {
++	token     *Token
++	anchor    *DaypassShopOrder
++	legacySub *UserSubscription
++	userID    int
++}
++
++// Only shop receipts can identify a key. Existing bindings take precedence;
++// the optional order ID is a one-time bridge for pre-binding purchases.
++func selectDaypassRenewalKeyTx(tx *gorm.DB, input DaypassShopInput, now int64) (daypassRenewalSelection, error) {
++	var binding DaypassSub2User
++	found, err := daypassFind(tx.Where("sub2_user_id = ?", input.Sub2UserID), &binding)
++	if err != nil {
++		return daypassRenewalSelection{}, err
++	}
++	if found {
++		account := daypassSub2Account{UserID: input.Sub2UserID, Username: input.Sub2Username}
++		user, err := EnsureDaypassSub2UserTx(tx, account, now)
++		if err != nil {
++			return daypassRenewalSelection{}, err
++		}
++		if user.GetSetting().BillingPreference != "subscription_only" {
++			return daypassRenewalSelection{}, ErrDaypassShopBinding
++		}
++		selection := daypassRenewalSelection{userID: user.Id}
++		var anchor DaypassShopOrder
++		// New replacements have higher token IDs even if two paid orders
++		// arrive out of order in the same second.
++		found, err := daypassFind(tx.Where("user_id = ? AND instance = ? AND product_id = ? AND token_id IS NOT NULL AND renewal_token_id IS NOT NULL",
++			user.Id, input.Instance, input.ProductID).Order("token_id DESC"), &anchor)
++		if err != nil {
++			return selection, err
++		}
++		if found {
++			return daypassSelectRenewableAnchorTx(tx, selection, &anchor, now)
++		}
++		found, err = daypassFind(tx.Where("user_id = ? AND instance = ? AND product_id = ? AND token_id IS NOT NULL AND status = ?",
++			user.Id, input.Instance, input.ProductID, "active").Order("expires_at DESC, order_id DESC"), &anchor)
++		if err != nil {
++			return selection, err
++		}
++		if found {
++			return daypassSelectLegacyAnchorTx(tx, selection, &anchor, now)
++		}
++		if input.PriorOrderID != 0 {
++			return daypassSelectPriorOrderTx(tx, selection, input, now)
++		}
++		return selection, nil
++	}
++	selection := daypassRenewalSelection{}
++	if input.PriorOrderID == 0 {
++		return selection, nil
++	}
++	return daypassSelectPriorOrderTx(tx, selection, input, now)
++}
++
++func daypassSelectPriorOrderTx(tx *gorm.DB, selection daypassRenewalSelection, input DaypassShopInput, now int64) (daypassRenewalSelection, error) {
++	var anchor DaypassShopOrder
++	found, err := daypassFind(tx.Where("id = ? AND product_id = ?", daypassShopReceiptID(input.Instance, input.PriorOrderID), input.ProductID), &anchor)
++	if err != nil || !found || anchor.Status != "active" || anchor.TokenID == nil || anchor.UserID == nil {
++		return selection, err
++	}
++	if anchor.RenewalTokenID != nil {
++		return selection, ErrDaypassShopBinding
++	}
++	if *anchor.UserID != selection.userID {
++		var other DaypassSub2User
++		claimed, err := daypassFind(tx.Where("user_id = ?", *anchor.UserID), &other)
++		if err != nil {
++			return selection, err
++		}
++		if claimed {
++			return selection, ErrDaypassShopBinding
++		}
++	}
++	return daypassSelectLegacyAnchorTx(tx, selection, &anchor, now)
++}
++
++func daypassSelectRenewableAnchorTx(tx *gorm.DB, selection daypassRenewalSelection, anchor *DaypassShopOrder, now int64) (daypassRenewalSelection, error) {
++	var token Token
++	found, err := daypassFind(tx.Where("id = ?", *anchor.TokenID), &token)
++	if err != nil || !found {
++		// Explicitly deleted keys are never restored. A later purchase may
++		// get a fresh credential under the same buyer.
++		return selection, err
++	}
++	if token.UserId != selection.userID || !isDaypassShopToken(&token) || *anchor.RenewalTokenID != token.Id {
++		return selection, ErrDaypassShopBinding
++	}
++	if token.Status == common.TokenStatusDisabled {
++		return selection, ErrDaypassShopRevoked
++	}
++	if !daypassTokenCanRenew(&token, now) {
++		return selection, ErrDaypassShopBinding
++	}
++	selection.token = &token
++	return selection, nil
++}
++
++func daypassSelectLegacyAnchorTx(tx *gorm.DB, selection daypassRenewalSelection, anchor *DaypassShopOrder, now int64) (daypassRenewalSelection, error) {
++	var token Token
++	// Legacy expiry cleanup used soft deletion. Explicit day-pass deletion
++	// changes the receipt status; revoked receipts are never passed here.
++	found, err := daypassFind(tx.Unscoped().Where("id = ?", *anchor.TokenID), &token)
++	if err != nil || !found {
++		return selection, err
++	}
++	if token.UserId != *anchor.UserID || !isDaypassShopToken(&token) || token.ExpiredTime != anchor.ExpiresAt || anchor.SubscriptionID == nil {
++		return selection, ErrDaypassShopBinding
++	}
++	var oldUser User
++	if err := tx.First(&oldUser, token.UserId).Error; err != nil {
++		return selection, err
++	}
++	if oldUser.Status != common.UserStatusEnabled || oldUser.GetSetting().BillingPreference != "subscription_only" {
++		return selection, ErrDaypassShopRevoked
++	}
++	var sub UserSubscription
++	if err := tx.First(&sub, *anchor.SubscriptionID).Error; err != nil {
++		return selection, err
++	}
++	if sub.UserId != token.UserId || sub.EndTime != anchor.ExpiresAt || sub.Source != "sub2_shop" || sub.PlanId != 1 ||
++		sub.AmountTotal != 0 || sub.AllowWalletOverflow || sub.StartTime <= 0 || sub.StartTime >= anchor.ExpiresAt {
++		return selection, ErrDaypassShopBinding
++	}
++	if sub.Status != "active" && (sub.Status != "expired" || sub.EndTime > now) {
++		return selection, ErrDaypassShopRevoked
++	}
++	if token.Status == common.TokenStatusDisabled {
++		return selection, ErrDaypassShopRevoked
++	}
++	if token.DeletedAt.Valid && token.DeletedAt.Time.Unix()-daypassExpiryCleanupDelaySecs < token.ExpiredTime {
++		return selection, ErrDaypassShopRevoked
++	}
++	if !daypassTokenCanRenew(&token, now) {
++		return selection, ErrDaypassShopBinding
++	}
++	selection.token, selection.anchor, selection.legacySub = &token, anchor, &sub
++	return selection, nil
++}
++
++func daypassFind[T any](query *gorm.DB, target *T) (bool, error) {
++	result := lockForUpdate(query).Limit(1).Find(target)
++	return result.RowsAffected == 1, result.Error
++}
++
++func daypassTokenCanRenew(token *Token, now int64) bool {
++	return token.Status == common.TokenStatusEnabled ||
++		token.Status == common.TokenStatusExpired && token.ExpiredTime <= now
++}
+diff --git a/model/daypass_shop_test.go b/model/daypass_shop_test.go
+--- a/model/daypass_shop_test.go
++++ b/model/daypass_shop_test.go
+@@ -118,0 +119 @@
++			t.Run("existing_receipt_migration", func(t *testing.T) { testDaypassShopRenewalMigration(t, db) })
+@@ -237,0 +239,4 @@
++			t.Run("renewable_shop_key", testDaypassShopRenewableKey)
++			t.Run("renewable_shop_key_safety", testDaypassShopRenewalSafety)
++			t.Run("renewable_shop_key_existing_binding", testDaypassShopRenewalAdoptsIntoExistingBinding)
++			t.Run("renewable_shop_key_concurrent", testDaypassShopRenewalConcurrent)
+diff --git a/model/daypass_token.go b/model/daypass_token.go
+--- a/model/daypass_token.go
++++ b/model/daypass_token.go
+@@ -19,0 +20,7 @@
++	if limit := daypassTokenConcurrencyOverride(tokenID); limit > 0 {
++		return limit
++	}
++	return DaypassDefaultConcurrency
++}
++
++func daypassTokenConcurrencyOverride(tokenID int) int {
+@@ -25 +32 @@
+-		return DaypassDefaultConcurrency
++		return 0
+diff --git a/model/token.go b/model/token.go
+--- a/model/token.go
++++ b/model/token.go
+@@ -237 +237,5 @@
+-				err := token.SelectUpdate()
++				// A concurrent paid renewal may already have extended or
++				// disabled this token since the read above.
++				err := DB.Model(token).
++					Where("status = ? AND expired_time = ?", common.TokenStatusEnabled, token.ExpiredTime).
++					Update("status", common.TokenStatusExpired).Error
+diff --git a/router/relay_router_test.go b/router/relay_router_test.go
+--- a/router/relay_router_test.go
++++ b/router/relay_router_test.go
+@@ -3,0 +4,3 @@
++	"bytes"
++	"context"
++	"encoding/json"
+@@ -15,0 +19 @@
++	"github.com/QuantumNous/new-api/controller"
+@@ -17,0 +22 @@
++	"github.com/QuantumNous/new-api/setting/ratio_setting"
+@@ -18,0 +24,73 @@
++
++func TestDaypassPaidRenewalRestoresOriginalKeyAtRelay(t *testing.T) {
++	setupRelayRouterTestDB(t)
++	t.Setenv("DAYPASS_ACCOUNT_GUARD", "true")
++	t.Setenv("DAYPASS_SHOP_ENABLED", "true")
++	t.Setenv("DAYPASS_SHOP_PRODUCT_ID", "8")
++	bearer := strings.Repeat("t", 64)
++	t.Setenv("DAYPASS_SHOP_BEARER", bearer)
++	ratios := ratio_setting.GroupRatio2JSONString()
++	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"daypass":1}`))
++	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(ratios)) })
++	overflow := false
++	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
++		Id: 1, Title: "DeepSeek", Enabled: true, DurationUnit: "hour", DurationValue: 24,
++		QuotaResetPeriod: "never", UpgradeGroup: "daypass", DowngradeGroup: "default", AllowWalletOverflow: &overflow,
++	}).Error)
++
++	ctx := context.Background()
++	now := common.GetTimestamp()
++	legacy := model.DaypassShopInput{
++		Instance: model.DaypassShopInstance, OrderID: 71, ProductID: 8,
++		PaidAt: now - 3*86400, Currency: "CNY", PriceFen: 600,
++	}
++	old, err := model.ProvisionDaypassShopOrder(ctx, legacy, 8, legacy.PaidAt)
++	require.NoError(t, err)
++	_, err = model.CleanupDaypassTokens(ctx, now, func(int) bool { return false })
++	require.NoError(t, err)
++
++	engine := gin.New()
++	require.NoError(t, engine.SetTrustedProxies(nil))
++	machine := engine.Group("/api/daypass/automation", controller.DaypassShopMachineAuth)
++	machine.GET("/ready", controller.DaypassShopReadiness)
++	machine.POST("/provision", controller.ProvisionDaypassShopOrder)
++	machine.POST("/revoke", controller.RevokeDaypassShopOrder)
++	engine.POST("/v1/chat/completions", middleware.TokenAuth(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
++	request := func(method, path, credential string, body []byte) *httptest.ResponseRecorder {
++		req := httptest.NewRequest(method, path, bytes.NewReader(body))
++		req.RemoteAddr = "100.121.157.55:10000"
++		req.Header.Set("Authorization", "Bearer "+credential)
++		w := httptest.NewRecorder()
++		engine.ServeHTTP(w, req)
++		return w
++	}
++	probe := request(http.MethodGet, "/api/daypass/automation/ready", bearer, nil)
++	require.Equal(t, http.StatusOK, probe.Code)
++	require.Contains(t, probe.Body.String(), `"sku_versions":[2,3]`)
++	relay := func() int { return request(http.MethodPost, "/v1/chat/completions", old.Key, nil).Code }
++	require.Equal(t, http.StatusUnauthorized, relay())
++
++	renewal := model.DaypassShopInput{
++		Instance: model.DaypassShopInstance, OrderID: 72, ProductID: 8, Currency: "CNY", PriceFen: 800, PaidAt: now,
++		SKUVersion: model.DaypassShopRenewalVersion, DurationSeconds: 86400, Concurrency: 3, Sub2UserID: 501, PriorOrderID: legacy.OrderID,
++	}
++	body, err := json.Marshal(renewal)
++	require.NoError(t, err)
++	for range 2 {
++		response := request(http.MethodPost, "/api/daypass/automation/provision", bearer, body)
++		require.Equal(t, http.StatusOK, response.Code)
++		var envelope struct {
++			Data model.DaypassShopResult `json:"data"`
++		}
++		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
++		require.True(t, envelope.Data.Key == old.Key, "the same credential must be returned")
++		require.Equal(t, old.TokenID, envelope.Data.TokenID)
++		require.Equal(t, renewal.Sub2UserID, envelope.Data.Sub2UserID)
++		require.Equal(t, now+86400, envelope.Data.ExpiresAt)
++	}
++	require.Equal(t, http.StatusNoContent, relay())
++	refund := request(http.MethodPost, "/api/daypass/automation/revoke", bearer, body)
++	require.Equal(t, http.StatusOK, refund.Code)
++	require.NotContains(t, refund.Body.String(), `"key":`)
++	require.Equal(t, http.StatusUnauthorized, relay())
++}
+@@ -163 +241,2 @@
+-	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.Ability{}))
++	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.Ability{}, &model.Option{},
++		&model.DaypassShopOrder{}, &model.DaypassSub2User{}, &model.DaypassManualGrant{}, &model.SubscriptionPlan{}, &model.UserSubscription{}))
+diff --git a/web/src/features/keys/components/__tests__/daypass-keys-page.test.tsx b/web/src/features/keys/components/__tests__/daypass-keys-page.test.tsx
+--- a/web/src/features/keys/components/__tests__/daypass-keys-page.test.tsx
++++ b/web/src/features/keys/components/__tests__/daypass-keys-page.test.tsx
+@@ -32,0 +33 @@
++  updateDaypassKeyConcurrency,
+@@ -44,0 +46 @@
++    updateDaypassKeyConcurrency: vi.fn(),
+@@ -159,0 +162,22 @@
++test('keeps a paid renewal on its order schedule and uses the unified key override', async () => {
++  vi.mocked(getDaypassKeys).mockResolvedValue({
++    items: [{ ...shopKey, daypass_renewable: true, daypass_concurrency: 3 }],
++    total: 1,
++  })
++  vi.mocked(updateDaypassKeyConcurrency).mockResolvedValue({ success: true })
++  const user = userEvent.setup()
++  renderPage()
++  await screen.findByText('Sub2 order 71')
++  expect(
++    screen.queryByRole('button', { name: 'Extend' })
++  ).not.toBeInTheDocument()
++  const limit = screen.getByRole('spinbutton', { name: /concurrent requests/i })
++  expect(limit).toHaveValue(3)
++  await user.clear(limit)
++  await user.type(limit, '4')
++  await user.click(screen.getByRole('button', { name: 'Save' }))
++  await waitFor(() =>
++    expect(updateDaypassKeyConcurrency).toHaveBeenCalledWith(7, 4)
++  )
++})
++
+diff --git a/web/src/features/keys/components/daypass-concurrency-cell.tsx b/web/src/features/keys/components/daypass-concurrency-cell.tsx
+--- a/web/src/features/keys/components/daypass-concurrency-cell.tsx
++++ b/web/src/features/keys/components/daypass-concurrency-cell.tsx
+@@ -29 +29,4 @@
+-import { updateDaypassManualConcurrency } from '../daypass-api'
++import {
++  updateDaypassKeyConcurrency,
++  updateDaypassManualConcurrency,
++} from '../daypass-api'
+@@ -34,0 +38 @@
++  renewable?: boolean
+@@ -66,0 +71 @@
++      if (props.renewable) update = updateDaypassKeyConcurrency
+diff --git a/web/src/features/keys/components/daypass-keys-page.tsx b/web/src/features/keys/components/daypass-keys-page.tsx
+--- a/web/src/features/keys/components/daypass-keys-page.tsx
++++ b/web/src/features/keys/components/daypass-keys-page.tsx
+@@ -20 +20 @@
+-import { useCallback, useEffect, useRef, useState } from 'react'
++import { useEffect, useState } from 'react'
+@@ -32,0 +33 @@
++  daypassKeySchema,
+@@ -44 +44,0 @@
+-import { daypassKeySchema } from '../daypass-api'
+@@ -68 +67,0 @@
+-  const generation = useRef(0)
+@@ -84,15 +83,17 @@
+-  const load = useCallback(async () => {
+-    const current = ++generation.current
+-    setLoading(true)
+-    setFailed(false)
+-    try {
+-      const response = await getDaypassKeys(page, source)
+-      if (current !== generation.current) return
+-      setItems(response.items.map((item) => daypassKeySchema.parse(item)))
+-      setTotal(response.total)
+-    } catch (error) {
+-      if (current !== generation.current) return
+-      setFailed(true)
+-      handleServerError(error, t('Failed to load day-pass keys'))
+-    } finally {
+-      if (current === generation.current) setLoading(false)
++  useEffect(() => {
++    let active = true
++    async function load() {
++      setLoading(true)
++      setFailed(false)
++      try {
++        const response = await getDaypassKeys(page, source)
++        if (!active) return
++        setItems(response.items.map((item) => daypassKeySchema.parse(item)))
++        setTotal(response.total)
++      } catch (error) {
++        if (!active) return
++        setFailed(true)
++        handleServerError(error, t('Failed to load day-pass keys'))
++      } finally {
++        if (active) setLoading(false)
++      }
+@@ -100,3 +100,0 @@
+-  }, [page, source, t])
+-
+-  useEffect(() => {
+@@ -105 +103 @@
+-      generation.current++
++      active = false
+@@ -107 +105 @@
+-  }, [load, revision])
++  }, [page, source, t, revision])
+@@ -208 +206 @@
+-              onClick={() => void load()}
++              onClick={() => setRevision((value) => value + 1)}
+@@ -231 +229,13 @@
+-              const disabled = key.status !== 1
++              const disabled = key.daypass_renewable
++                ? key.status === 2
++                : key.status !== 1
++              const pending =
++                key.daypass_renewable && key.daypass_concurrency === undefined
++              let statusLabel = t('Active')
++              if (disabled && (key.daypass_renewable || !expired)) {
++                statusLabel = t('Disabled')
++              } else if (expired) {
++                statusLabel = t('Expired')
++              } else if (pending) {
++                statusLabel = t('Pending')
++              }
+@@ -253,6 +263,6 @@
+-                      <Badge variant={expired || disabled ? 'outline' : 'default'}>
+-                        {expired
+-                          ? t('Expired')
+-                          : disabled
+-                            ? t('Disabled')
+-                            : t('Active')}
++                      <Badge
++                        variant={
++                          expired || disabled || pending ? 'outline' : 'default'
++                        }
++                      >
++                        {statusLabel}
+@@ -277,0 +288 @@
++                      renewable={key.daypass_renewable}
+@@ -293,0 +305,13 @@
++                    {!key.daypass_renewable && (
++                      <Button
++                        size='sm'
++                        variant='outline'
++                        disabled={busy}
++                        onClick={() => {
++                          setRenewHours('24')
++                          setRenewTarget(key)
++                        }}
++                      >
++                        {t('Extend')}
++                      </Button>
++                    )}
+@@ -297,12 +321 @@
+-                      disabled={busy}
+-                      onClick={() => {
+-                        setRenewHours('24')
+-                        setRenewTarget(key)
+-                      }}
+-                    >
+-                      {t('Extend')}
+-                    </Button>
+-                    <Button
+-                      size='sm'
+-                      variant='outline'
+-                      disabled={busy || expired}
++                      disabled={busy || (expired && !key.daypass_renewable)}
+@@ -446 +459 @@
+-          if (target)
++          if (target) {
+@@ -447,0 +461 @@
++          }
+diff --git a/web/src/features/keys/daypass-api.ts b/web/src/features/keys/daypass-api.ts
+--- a/web/src/features/keys/daypass-api.ts
++++ b/web/src/features/keys/daypass-api.ts
+@@ -55,0 +56 @@
++  daypass_renewable: z.boolean().optional(),
+@@ -69 +70 @@
+-  concurrency: number
++  concurrency: number | null
+@@ -128,3 +129,2 @@
+-  return (
+-    await api.put(`/api/daypass/keys/${id}/concurrency`, { concurrency })
+-  ).data
++  return (await api.put(`/api/daypass/keys/${id}/concurrency`, { concurrency }))
++    .data

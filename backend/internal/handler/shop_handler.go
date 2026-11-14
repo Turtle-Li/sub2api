@@ -9,6 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"github.com/gin-gonic/gin"
 )
 
@@ -121,21 +122,47 @@ func (h *ShopHandler) SaveProduct(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *ShopHandler) BuyerDaypassCards(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	id, ok := shopID(c)
+	if !ok {
+		return
+	}
+	cards, err := h.shop.BuyerDaypassCards(c.Request.Context(), subject.UserID, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cards)
+}
+
 func (h *ShopHandler) CreateOrder(c *gin.Context) {
 	subject, ok := requireAuth(c)
 	if !ok {
 		return
 	}
 	var in struct {
-		ProductID       int64           `json:"product_id"`
-		ProductRevision int             `json:"product_revision"`
-		PaymentType     string          `json:"payment_type"`
-		Concurrency     json.RawMessage `json:"concurrency"`
-		DurationDays    json.RawMessage `json:"duration_days"`
-		SKUID           string          `json:"sku_id"`
+		ProductID       int64                            `json:"product_id"`
+		ProductRevision int                              `json:"product_revision"`
+		PaymentType     string                           `json:"payment_type"`
+		Concurrency     json.RawMessage                  `json:"concurrency"`
+		DurationDays    json.RawMessage                  `json:"duration_days"`
+		SKUID           string                           `json:"sku_id"`
+		Daypass         *shopaction.DaypassCardSelection `json:"daypass"`
 	}
 	if !decodeShopRequest(c, &in, 4096) {
 		return
+	}
+	var card shopaction.DaypassCardSelection
+	if in.Daypass != nil {
+		card = *in.Daypass
+		if !card.Valid() {
+			response.BadRequest(c, "续费对象无效")
+			return
+		}
 	}
 	sku := service.ShopSKUSelection{ID: in.SKUID}
 	if len(in.SKUID) > 80 {
@@ -154,7 +181,7 @@ func (h *ShopHandler) CreateOrder(c *gin.Context) {
 		response.BadRequest(c, "请提供唯一 Idempotency-Key")
 		return
 	}
-	out, err := h.payment.CreateShopOrder(c.Request.Context(), in.ProductID, in.ProductRevision, service.CreateOrderRequest{UserID: subject.UserID, ShopSKU: sku, PaymentType: in.PaymentType, ClientIP: c.ClientIP(), SrcHost: c.Request.Host, SrcURL: c.Request.Referer(), IdempotencyKey: c.GetHeader("Idempotency-Key"), Locale: c.GetHeader("Accept-Language")})
+	out, err := h.payment.CreateShopOrder(c.Request.Context(), in.ProductID, in.ProductRevision, service.CreateOrderRequest{UserID: subject.UserID, ShopSKU: sku, ShopDaypass: card, PaymentType: in.PaymentType, ClientIP: c.ClientIP(), SrcHost: c.Request.Host, SrcURL: c.Request.Referer(), IdempotencyKey: c.GetHeader("Idempotency-Key"), Locale: c.GetHeader("Accept-Language")})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

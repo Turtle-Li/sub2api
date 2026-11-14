@@ -1619,7 +1619,7 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		return nil, false, fmt.Errorf("set recharge code: %w", err)
 	}
 	if req.OrderType == payment.OrderTypeManualShop {
-		if err := createShopFulfillmentTx(txCtx, tx.Client(), order, *req.shopProduct); err != nil {
+		if err := createShopFulfillmentSnapshotTx(txCtx, tx.Client(), order, *req.shopProduct, req.shopCard); err != nil {
 			return nil, false, fmt.Errorf("create shop fulfillment: %w", err)
 		}
 	}

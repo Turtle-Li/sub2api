@@ -6,24 +6,31 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 )
 
 const (
-	shopDaypassInstance  = "sub2api-production"
-	shopDaypassSocket    = "/run/sub2api-daypass-vault/public.sock"
-	shopDaypassVaultPath = "/v1/secret/data/ops/newapi/daypass"
-	shopDaypassVaultRef  = "vault://secret/data/ops/newapi/daypass#bearer"
+	shopDaypassInstance       = "sub2api-production"
+	shopDaypassSocket         = "/run/sub2api-daypass-vault/public.sock"
+	shopDaypassVaultPath      = "/v1/secret/data/ops/newapi/daypass"
+	shopDaypassVaultRef       = "vault://secret/data/ops/newapi/daypass#bearer"
+	shopDaypassRenewalVersion = 3
+	shopDaypassCardsVersion   = 4
+	shopDaypassMaxTerm        = 10 * 365 * 86400
 )
 
 var (
 	errShopDaypassUnavailable = errors.New("daypass gateway unavailable")
 	errShopDaypassExpired     = errors.New("daypass order expired")
 	errShopDaypassRevoked     = errors.New("daypass order revoked")
+	errShopDaypassCard        = errors.New("daypass card cannot be renewed")
 )
 
 type shopDaypassBinding struct {
@@ -36,21 +43,32 @@ type shopDaypassBinding struct {
 	SKUVersion      int    `json:"sku_version,omitempty"`
 	DurationSeconds int    `json:"duration_seconds,omitempty"`
 	Concurrency     int    `json:"concurrency,omitempty"`
+	Sub2UserID      int64  `json:"sub2_user_id,omitempty"`
+	Sub2Username    string `json:"sub2_username,omitempty"`
+	PriorOrderID    int64  `json:"prior_order_id,omitempty"`
+	CardAction      string `json:"card_action,omitempty"`
+	CardID          int64  `json:"card_id,omitempty"`
 }
 
 type shopDaypassGrant struct {
-	Instance  string `json:"instance"`
-	OrderID   int64  `json:"order_id"`
-	ProductID int64  `json:"product_id"`
-	TokenID   int    `json:"token_id"`
-	PaidAt    int64  `json:"paid_at"`
-	ExpiresAt int64  `json:"expires_at"`
-	Status    string `json:"status"`
-	Key       string `json:"key"`
+	Instance   string `json:"instance"`
+	OrderID    int64  `json:"order_id"`
+	ProductID  int64  `json:"product_id"`
+	TokenID    int    `json:"token_id"`
+	PaidAt     int64  `json:"paid_at"`
+	ExpiresAt  int64  `json:"expires_at"`
+	Status     string `json:"status"`
+	Key        string `json:"key"`
+	SKUVersion int    `json:"sku_version"`
+	Sub2UserID int64  `json:"sub2_user_id"`
+	StartsAt   int64  `json:"starts_at"`
+	CardID     int64  `json:"card_id"`
 }
 
 type shopDaypassGateway interface {
-	Ready(context.Context, int) error
+	ReadyRenewal(context.Context, int) error
+	ReadyCards(context.Context, int) error
+	BuyerCards(context.Context, shopDaypassCardQuery) (*shopDaypassCardList, error)
 	Provision(context.Context, shopDaypassBinding) (*shopDaypassGrant, error)
 	Revoke(context.Context, shopDaypassBinding) error
 }
@@ -108,15 +126,15 @@ func validShopDaypassBearer(value string) bool {
 	return true
 }
 
-func (c *shopDaypassClient) Ready(ctx context.Context, durationDays int) error {
-	return c.ready(ctx, durationDays, false)
+func (c *shopDaypassClient) ReadyRenewal(ctx context.Context, durationDays int) error {
+	return c.readyVersion(ctx, durationDays, shopDaypassRenewalVersion)
 }
 
-func (c *shopDaypassClient) ReadySKU(ctx context.Context, durationDays int) error {
-	return c.ready(ctx, durationDays, true)
+func (c *shopDaypassClient) ReadyCards(ctx context.Context, durationDays int) error {
+	return c.readyVersion(ctx, durationDays, shopDaypassCardsVersion)
 }
 
-func (c *shopDaypassClient) ready(ctx context.Context, durationDays int, configurable bool) error {
+func (c *shopDaypassClient) readyVersion(ctx context.Context, durationDays, version int) error {
 	bearer, err := c.loadBearer(ctx)
 	if err != nil {
 		return errShopDaypassUnavailable
@@ -148,11 +166,7 @@ func (c *shopDaypassClient) ready(ctx context.Context, durationDays int, configu
 		result.Data.Instance != shopDaypassInstance || result.Data.ProductID != c.productID || result.Data.Status != "ready" || len(result.Data.Concurrencies) != 2 || result.Data.Concurrencies[0] != 2 || result.Data.Concurrencies[1] != 3 {
 		return errShopDaypassUnavailable
 	}
-	// Older receivers omit duration_days. They still serve existing day passes.
-	if durationDays != 1 && !slices.Contains(result.Data.DurationDays, durationDays) {
-		return errShopDaypassUnavailable
-	}
-	if configurable && !slices.Contains(result.Data.SKUVersions, 2) {
+	if !slices.Contains(result.Data.SKUVersions, version) || !slices.Contains(result.Data.DurationDays, durationDays) {
 		return errShopDaypassUnavailable
 	}
 	return nil
@@ -169,13 +183,23 @@ func (c *shopDaypassClient) Revoke(ctx context.Context, binding shopDaypassBindi
 
 func (c *shopDaypassClient) call(ctx context.Context, action string, binding shopDaypassBinding) (*shopDaypassGrant, error) {
 	duration := shopDaypassDurationForPrice(binding.PriceFen)
-	if binding.SKUVersion == 2 {
+	if binding.SKUVersion == 2 || binding.usesPaidWindows() {
 		sku := shopDaypassParams{Version: 2, PriceFen: binding.PriceFen, Duration: binding.DurationSeconds, Concurrency: binding.Concurrency}
 		if sku.priceFen() == 0 {
 			return nil, errShopDaypassUnavailable
 		}
 		duration = int64(binding.DurationSeconds)
 	} else if binding.SKUVersion != 0 || binding.DurationSeconds != 0 || binding.Concurrency != 0 {
+		return nil, errShopDaypassUnavailable
+	}
+	if binding.usesPaidWindows() {
+		if binding.Sub2UserID <= 0 || binding.Sub2UserID > math.MaxInt32 || binding.PriorOrderID < 0 || binding.PriorOrderID >= binding.OrderID {
+			return nil, errShopDaypassUnavailable
+		}
+	} else if binding.Sub2UserID != 0 || binding.Sub2Username != "" || binding.PriorOrderID != 0 {
+		return nil, errShopDaypassUnavailable
+	}
+	if !binding.validCard() {
 		return nil, errShopDaypassUnavailable
 	}
 	if duration == 0 {
@@ -213,6 +237,9 @@ func (c *shopDaypassClient) call(ctx context.Context, action string, binding sho
 	if json.Unmarshal(raw, &result) != nil {
 		return nil, errShopDaypassUnavailable
 	}
+	if response.StatusCode == http.StatusConflict && result.Code == "daypass_card_unavailable" && binding.SKUVersion == shopDaypassCardsVersion {
+		return nil, errShopDaypassCard
+	}
 	if response.StatusCode == http.StatusGone {
 		if result.Code == "daypass_expired" {
 			return nil, errShopDaypassExpired
@@ -222,8 +249,7 @@ func (c *shopDaypassClient) call(ctx context.Context, action string, binding sho
 		}
 	}
 	grant := &result.Data
-	if response.StatusCode != http.StatusOK || !result.Success || grant.Instance != binding.Instance || grant.OrderID != binding.OrderID ||
-		grant.ProductID != binding.ProductID || grant.PaidAt != binding.PaidAt || grant.ExpiresAt != binding.PaidAt+duration {
+	if response.StatusCode != http.StatusOK || !result.Success || !validShopDaypassGrant(binding, grant, duration) {
 		return nil, errShopDaypassUnavailable
 	}
 	if action == "revoke" {
@@ -236,4 +262,29 @@ func (c *shopDaypassClient) call(ctx context.Context, action string, binding sho
 		return nil, errShopDaypassUnavailable
 	}
 	return grant, nil
+}
+
+func validShopDaypassGrant(binding shopDaypassBinding, grant *shopDaypassGrant, duration int64) bool {
+	if grant == nil || grant.Instance != binding.Instance || grant.OrderID != binding.OrderID ||
+		grant.ProductID != binding.ProductID || grant.PaidAt != binding.PaidAt {
+		return false
+	}
+	if !binding.usesPaidWindows() {
+		return grant.ExpiresAt == binding.PaidAt+duration
+	}
+	if binding.SKUVersion == shopDaypassCardsVersion {
+		expected := binding.CardID
+		if binding.CardAction == shopaction.DaypassNewCard {
+			expected = binding.OrderID
+			if grant.StartsAt != grant.PaidAt {
+				return false
+			}
+		}
+		if grant.CardID != expected {
+			return false
+		}
+	}
+	return grant.SKUVersion == binding.SKUVersion && grant.Sub2UserID == binding.Sub2UserID &&
+		grant.StartsAt >= grant.PaidAt && grant.StartsAt < grant.ExpiresAt &&
+		grant.ExpiresAt-grant.PaidAt <= shopDaypassMaxTerm && grant.ExpiresAt-grant.StartsAt == duration
 }

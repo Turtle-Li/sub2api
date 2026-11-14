@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent/shopfulfillment"
+	"github.com/Wei-Shaw/sub2api/ent/shoporderaction"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,6 +120,7 @@ func TestShopCheckoutSKUPricesSnapshotsAndReplay(t *testing.T) {
 			require.Equal(t, []ShopConcurrencyOption{{Concurrency: 2, Price: 6, WeeklyPrice: 30}, {Concurrency: 3, Price: 8, WeeklyPrice: 40}}, catalog.ConcurrencyOptions)
 			require.Empty(t, catalog.PaymentActions)
 			req := CreateOrderRequest{UserID: f.userID, PaymentType: payment.TypeAlipay, IdempotencyKey: "shop-sku-checkout-123456", ShopSKU: tc.sku, SrcHost: "www.turtleligpt.com", SrcURL: ownerTestReturnURL}
+			req.ShopDaypass = shopaction.DaypassCardSelection{Action: shopaction.DaypassNewCard}
 			first, err := f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
 			require.NoError(t, err)
 			require.Equal(t, tc.price, first.PayAmount)
@@ -179,8 +182,85 @@ func TestShopCheckoutSKUPricesSnapshotsAndReplay(t *testing.T) {
 			require.Equal(t, tc.expected.Concurrency, buyer.Product.Concurrency)
 			require.Equal(t, tc.expected.DurationDays, buyer.Product.DurationValue)
 			require.Equal(t, row.PaidAt.Unix()+int64(tc.expected.DurationDays)*86400, gateway.grant.ExpiresAt)
-			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("%d并发", tc.expected.Concurrency))
-			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("有效期：%d 天", tc.expected.DurationDays))
+			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("本单档位：%d 并发", tc.expected.Concurrency))
+			require.Contains(t, buyer.DeliveryContent, fmt.Sprintf("本单时长：%d 天", tc.expected.DurationDays))
 		})
 	}
+}
+
+func TestShopCheckoutFreezesRenewalCardAndReviewsIfItDisappearsAfterPayment(t *testing.T) {
+	ctx := context.Background()
+	f := newOwnerTestOrderFixture(t)
+	createInvoiceUnitRefundFenceTables(t, ctx, f.client)
+	s := NewShopService(f.client, shopTestEncryptor{}, &config.Config{Totp: config.TotpConfig{EncryptionKeyConfigured: true}}, nil, nil)
+	f.service.shopService = s
+	f.settings.values[SettingPaymentEnabled] = "true"
+	f.settings.values[SettingPaymentVisibleMethodAlipaySource] = VisibleMethodSourceUnifiedAlipay
+	catalog := configuredShopProduct()
+	catalog.PaymentActions = daypassTestActions(s)
+	for i := range catalog.SKUs {
+		catalog.SKUs[i].Concurrency = 2
+	}
+	p, err := s.SaveProduct(ctx, 0, catalog)
+	require.NoError(t, err)
+	s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: p.ID, WeeklyEnabled: true}
+	user := f.client.User.GetX(ctx, f.userID)
+	first := createInvoiceUnitOrder(t, ctx, f.client, user, OrderStatusCompleted, true, true).ID
+	second := createInvoiceUnitOrder(t, ctx, f.client, user, OrderStatusCompleted, true, true).ID
+	gateway := &daypassTestGateway{cards: []ShopDaypassCard{
+		{CardID: first, KeySuffix: "aBc1", LastDays: 1, Status: "expired", ExpiresAt: time.Now().Add(-time.Hour).Unix()},
+		{CardID: second, KeySuffix: "dEf2", LastDays: 7, Status: "expired", ExpiresAt: time.Now().Add(-2 * time.Hour).Unix()},
+	}}
+	s.daypass = gateway
+	inventory, err := s.BuyerDaypassCards(ctx, f.userID, p.ID)
+	require.NoError(t, err)
+	require.Equal(t, gateway.cards, inventory.Cards)
+	require.Equal(t, f.userID, gateway.cardQuery.UserID)
+
+	req := CreateOrderRequest{UserID: f.userID, PaymentType: payment.TypeAlipay, IdempotencyKey: "deepseek-card-checkout-1", ShopSKU: ShopSKUSelection{ID: "week"}, SrcHost: "www.turtleligpt.com", SrcURL: ownerTestReturnURL}
+	_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
+	require.Equal(t, "SHOP_DAYPASS_SELECTION_REQUIRED", infraerrors.Reason(err))
+	req.ShopDaypass = shopaction.DaypassCardSelection{Action: shopaction.DaypassRenewCard, CardID: 123}
+	_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
+	require.Equal(t, "SHOP_DAYPASS_CARD_UNAVAILABLE", infraerrors.Reason(err))
+	require.Equal(t, 2, f.client.PaymentOrder.Query().CountX(ctx))
+
+	req.ShopDaypass.CardID = first
+	checkout, err := f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
+	require.NoError(t, err)
+	beforePay, err := s.Order(ctx, checkout.OrderID, f.userID, false)
+	require.NoError(t, err)
+	require.Equal(t, &ShopDaypassCheckout{DaypassCardSelection: req.ShopDaypass, KeySuffix: "aBc1"}, beforePay.DaypassCheckout)
+	changed := req
+	changed.ShopDaypass.CardID = second
+	_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, changed)
+	require.ErrorIs(t, err, ErrIdempotencyKeyConflict)
+	changed.ShopDaypass = shopaction.DaypassCardSelection{Action: shopaction.DaypassNewCard}
+	_, err = f.service.CreateShopOrder(ctx, p.ID, p.Revision, changed)
+	require.ErrorIs(t, err, ErrIdempotencyKeyConflict)
+
+	gateway.cards = gateway.cards[1:]
+	replay, err := f.service.CreateShopOrder(ctx, p.ID, p.Revision, req)
+	require.NoError(t, err)
+	require.Equal(t, checkout.OrderID, replay.OrderID)
+	row := f.client.PaymentOrder.UpdateOneID(checkout.OrderID).SetStatus(OrderStatusPaid).SetPaidAt(time.Now()).SaveX(ctx)
+	require.NoError(t, markShopPaidTx(ctx, f.client, row))
+	claim, err := s.claimShopAction(ctx, row.ID, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, claim)
+	gateway.provisionErr = errShopDaypassCard
+	require.Error(t, s.executeShopAction(ctx, claim))
+	require.Equal(t, shopDaypassCardsVersion, gateway.lastBinding.SKUVersion)
+	require.Equal(t, req.ShopDaypass.Action, gateway.lastBinding.CardAction)
+	require.Equal(t, first, gateway.lastBinding.CardID)
+	require.Equal(t, row.PaidAt.Unix(), gateway.lastBinding.PaidAt)
+	require.Equal(t, 1, gateway.provisions)
+	task := f.client.ShopOrderAction.Query().Where(shoporderaction.OrderIDEQ(row.ID)).OnlyX(ctx)
+	require.Equal(t, shopaction.Review, task.Status)
+	require.Equal(t, "DAYPASS_CARD_UNAVAILABLE", task.ErrorKind)
+	detail, err := s.Order(ctx, row.ID, f.userID, false)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPaid, detail.PaymentStatus)
+	require.Contains(t, detail.StatusNote, "所选卡片暂时无法续费")
+	require.Empty(t, detail.DeliveryContent)
 }

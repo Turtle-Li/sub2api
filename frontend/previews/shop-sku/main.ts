@@ -13,16 +13,31 @@ import ShopProductView from '@/views/shop/ShopProductView.vue'
 import ShopView from '@/views/shop/ShopView.vue'
 import ShopOrderView from '@/views/shop/ShopOrderView.vue'
 import { resolveShopGuideRedirect } from '@/router/shopGuideRedirect'
-import type { ShopOrderDetail, ShopProduct } from '@/types/shop'
+import type { ShopDaypassCards, ShopDaypassSelection, ShopOrderDetail, ShopProduct } from '@/types/shop'
 import '@/style.css'
 
 const stamp = '2026-11-08T08:00:00Z'
 const products: ShopProduct[] = [
-  { id: 3, name: 'DeepSeek API 不限量订阅卡', category: 'API 订阅', summary: '有效期内不限 Token 总量，按需选择周期与并发。', description: '付款确认后自动发放独立 API Key。有效期从付款确认时开始。', price: 6, currency: 'CNY', duration_value: 1, duration_unit: 'day', fulfillment_mode: 'account_delivery', input_format: 'text', input_url: '', input_instructions: '', guide_key: 'deepseek-daypass', enabled: true, sort_order: 0, revision: 1, created_at: stamp, updated_at: stamp, automatic_fulfillment: true, payment_actions: [{ binding_key: 'primary-delivery', adapter: 'newapi.daypass.v1', integration_ref: 'newapi-domestic', integration_version: 1, params: { duration_seconds: 86400, default_concurrency: 2 } }], concurrency: 2, concurrency_options: [{ concurrency: 2, price: 6, weekly_price: 30 }, { concurrency: 3, price: 8, weekly_price: 40 }] },
+  { id: 3, name: 'DeepSeek API 不限量订阅卡', category: 'API 订阅', summary: '有效期内不限 Token 总量，按需选择周期与并发。', description: '', price: 6, currency: 'CNY', duration_value: 1, duration_unit: 'day', fulfillment_mode: 'account_delivery', input_format: 'text', input_url: '', input_instructions: '', guide_key: 'deepseek-daypass', enabled: true, sort_order: 0, revision: 1, created_at: stamp, updated_at: stamp, automatic_fulfillment: true, daypass_cards: true, payment_actions: [{ binding_key: 'primary-delivery', adapter: 'newapi.daypass.v1', integration_ref: 'newapi-domestic', integration_version: 1, params: { duration_seconds: 86400, default_concurrency: 2 } }], concurrency: 2, default_sku_id: 'day-2', skus: [
+    { id: 'day-2', attributes: { 周期: '日卡', 并发: '2 并发' }, price: 6, duration_value: 1, duration_unit: 'day', concurrency: 2, enabled: true },
+    { id: 'day-3', attributes: { 周期: '日卡', 并发: '3 并发' }, price: 8, duration_value: 1, duration_unit: 'day', concurrency: 3, enabled: true },
+    { id: 'week-2', attributes: { 周期: '周卡', 并发: '2 并发' }, price: 30, duration_value: 7, duration_unit: 'day', concurrency: 2, enabled: true },
+    { id: 'week-3', attributes: { 周期: '周卡', 并发: '3 并发' }, price: 40, duration_value: 7, duration_unit: 'day', concurrency: 3, enabled: true },
+  ] },
   { id: 1, name: 'ChatGPT Plus 代充', category: '代充', summary: '提交账号资料，由人工完成充值。', description: '', price: 108, currency: 'CNY', duration_value: 1, duration_unit: 'month', fulfillment_mode: 'session_topup', input_format: 'session_json', input_url: 'https://chatgpt.com/api/auth/session', input_instructions: '', guide_key: '', enabled: true, sort_order: 1, revision: 1, created_at: stamp, updated_at: stamp },
   { id: 2, name: 'ChatGPT Plus 成品号', category: '成品号', summary: '人工交付账号资料。', description: '', price: 128, currency: 'CNY', duration_value: 1, duration_unit: 'month', fulfillment_mode: 'account_delivery', input_format: 'text', input_url: '', input_instructions: '', guide_key: 'chatgpt-plus-account', enabled: false, sort_order: 2, revision: 1, created_at: stamp, updated_at: stamp }
 ]
 const orderRequests = new Map<number, number>()
+const now = Math.floor(Date.parse('2026-11-15T08:00:00Z') / 1000)
+const previewState = new URLSearchParams(window.location.search).get('cards')
+const bothExpired = previewState === 'expired'
+const previewCards: ShopDaypassCards = {
+  server_time: now,
+  cards: previewState === 'empty' ? [] : [
+    { card_id: 1284, key_suffix: '7aB2', last_duration_days: 7, status: bothExpired ? 'expired' : 'active', expires_at: bothExpired ? now - 7200 : now + 267000 },
+    { card_id: 1261, key_suffix: '3kP9', last_duration_days: 1, status: 'expired', expires_at: now - 86400 },
+  ],
+}
 apiClient.defaults.adapter = async config => {
   const path = config.url ?? ''
   let data: unknown = {}
@@ -36,13 +51,23 @@ apiClient.defaults.adapter = async config => {
       products.splice(previous ? products.indexOf(previous) : products.length, previous ? 1 : 0, saved)
       data = saved
     } else data = id ? products.find(p => p.id === id) : products
+  } else if (path === '/shop/products/3/daypass-cards') {
+    data = previewCards
+  } else if (path === '/shop/orders' && config.method === 'post') {
+    const input: { daypass?: ShopDaypassSelection; sku_id?: string } = JSON.parse(config.data)
+    const selection = input.daypass
+    if (selection?.action === 'renew' && !previewCards.cards.some(card => card.card_id === selection.card_id)) throw new AxiosError('这张卡已无法续费', 'SHOP_DAYPASS_CARD_UNAVAILABLE', config)
+    const sku = products[0]?.skus?.find(item => item.id === input.sku_id)
+    if (!sku) throw new AxiosError('缺少商品规格', 'SHOP_SKU_REQUIRED', config)
+    const amount = sku.price
+    data = { order_id: 8806, pay_amount: amount, amount: 0, expires_at: new Date(Date.now() + 300000).toISOString(), payment_type: 'alipay', out_trade_no: 'synthetic-checkout' }
   } else if (/\/shop\/orders\/\d+$/.test(path)) {
     const id = Number(path.split('/').at(-1))
     const requests = (orderRequests.get(id) ?? 0) + 1
     orderRequests.set(id, requests)
     const manual = id === 8802 || id === 8803
     const review = id === 8805
-    const completed = !review && (manual || requests >= 3)
+    const completed = !review && (manual || id === 1284 || requests >= 3)
     const product = manual ? { ...products[2], automatic_fulfillment: false, delivery_config: id === 8802 ? { individual_copy: true } : undefined } : products[0]
     data = {
       order_id: id, out_trade_no: `synthetic-${id}`, product, user_id: 1, pay_amount: product.price, currency: 'CNY',
@@ -51,7 +76,8 @@ apiClient.defaults.adapter = async config => {
       email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: false, can_start: false,
       can_complete: false, can_reveal_input: false, delivery_kind: 'text',
       delivery_content: completed ? manual ? 'synthetic@example.invalid----synthetic-password' : 'DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com/v1\nAPI Key：sk-synthetic-preview-only\n有效期：1天（自付款起算）' : '',
-      automation: manual ? undefined : { status: review ? 'REVIEW_REQUIRED' : completed ? 'SUCCEEDED' : 'RUNNING', result_kind: 'text' }
+      automation: manual ? undefined : { status: review ? 'REVIEW_REQUIRED' : completed ? 'SUCCEEDED' : 'RUNNING', result_kind: 'text' },
+      daypass_checkout: id === 1284 ? { action: 'new' } : undefined,
     } satisfies ShopOrderDetail
   } else if (path.endsWith('action-integrations')) data = [{ id: 'newapi-domestic', version: 1, adapter: 'newapi.daypass.v1', enabled: true }, { id: 'license-service', version: 1, adapter: 'http.webhook.v1', enabled: true }]
   else if (path.includes('checkout-info')) data = { enabled: true, methods: { alipay: { available: true, currency: 'CNY', single_min: 0.01, single_max: 9999 }, wxpay: { available: true, currency: 'CNY', single_min: 0.01, single_max: 9999 } } }

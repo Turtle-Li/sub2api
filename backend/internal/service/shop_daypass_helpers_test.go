@@ -37,23 +37,58 @@ func daypassTestActions(s *ShopService) []shopaction.Binding {
 
 type daypassTestGateway struct {
 	grant                   *shopDaypassGrant
+	cards                   []ShopDaypassCard
+	cardQuery               shopDaypassCardQuery
+	cardErr                 error
+	provisionErr            error
 	lost                    bool
 	provisions, revocations int
 	afterProvision          func()
+	lastBinding             shopDaypassBinding
 }
 
-func (*daypassTestGateway) Ready(context.Context, int) error    { return nil }
-func (*daypassTestGateway) ReadySKU(context.Context, int) error { return nil }
+func (*daypassTestGateway) ReadyRenewal(context.Context, int) error { return nil }
+func (*daypassTestGateway) ReadyCards(context.Context, int) error   { return nil }
+
+func (g *daypassTestGateway) BuyerCards(_ context.Context, query shopDaypassCardQuery) (*shopDaypassCardList, error) {
+	g.cardQuery = query
+	if g.cardErr != nil {
+		return nil, g.cardErr
+	}
+	list := &shopDaypassCardList{Cards: make([]shopDaypassCardEntry, 0), ServerTime: time.Now().Unix()}
+	if query.CardID != 0 || query.IncludeBound {
+		for _, card := range g.cards {
+			if query.CardID == 0 || query.CardID == card.CardID {
+				list.Cards = append(list.Cards, shopDaypassCardEntry{ShopDaypassCard: card, LastOrderID: card.CardID})
+			}
+		}
+	}
+	return list, nil
+}
+
 func (g *daypassTestGateway) Provision(_ context.Context, b shopDaypassBinding) (*shopDaypassGrant, error) {
 	g.provisions++
+	g.lastBinding = b
+	if g.provisionErr != nil {
+		return nil, g.provisionErr
+	}
 	if g.grant == nil {
 		duration := int64(86400)
-		if b.SKUVersion == 2 {
+		if b.SKUVersion == 2 || b.usesPaidWindows() {
 			duration = int64(b.DurationSeconds)
 		} else if b.PriceFen == 3000 || b.PriceFen == 4000 {
 			duration *= 7
 		}
 		g.grant = &shopDaypassGrant{Instance: b.Instance, OrderID: b.OrderID, ProductID: b.ProductID, PaidAt: b.PaidAt, ExpiresAt: b.PaidAt + duration, TokenID: 71, Status: "active", Key: "sk-" + strings.Repeat("d", 48)}
+		if b.usesPaidWindows() {
+			g.grant.SKUVersion, g.grant.Sub2UserID, g.grant.StartsAt = b.SKUVersion, b.Sub2UserID, b.PaidAt
+		}
+		if b.SKUVersion == shopDaypassCardsVersion {
+			g.grant.CardID = b.CardID
+			if g.grant.CardID == 0 {
+				g.grant.CardID = b.OrderID
+			}
+		}
 	}
 	if g.afterProvision != nil {
 		g.afterProvision()

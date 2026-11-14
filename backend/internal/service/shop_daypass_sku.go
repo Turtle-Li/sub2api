@@ -183,6 +183,7 @@ func selectShopSKU(p ShopProduct, selected ShopSKUSelection) (ShopProduct, error
 func (s *ShopService) publicCatalogProduct(p ShopProduct) ShopProduct {
 	native := nativeShopProduct(p)
 	p = publicShopProduct(p)
+	p.DaypassCards = native && p.ID == s.daypassCfg.ProductID
 	if len(p.SKUs) > 0 {
 		visible := make([]ShopSKU, 0, len(p.SKUs))
 		for _, sku := range p.SKUs {

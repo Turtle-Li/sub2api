@@ -97,6 +97,9 @@ func TestShopConfiguredSKUCheckoutFreezesPriceAndDelivery(t *testing.T) {
 			require.NoError(t, err)
 			s.daypassCfg = config.ShopDaypassConfig{Enabled: true, ProductID: catalog.ID, WeeklyEnabled: true}
 			req := CreateOrderRequest{UserID: f.userID, PaymentType: payment.TypeAlipay, IdempotencyKey: "configured-sku-order-123456", ShopSKU: ShopSKUSelection{ID: "week"}, SrcHost: "www.turtleligpt.com", SrcURL: ownerTestReturnURL, Amount: 0.01}
+			if native {
+				req.ShopDaypass = shopaction.DaypassCardSelection{Action: shopaction.DaypassNewCard}
+			}
 			checkout, err := f.service.CreateShopOrder(ctx, catalog.ID, catalog.Revision, req)
 			require.NoError(t, err)
 			require.Equal(t, 6.0, checkout.PayAmount)
@@ -130,8 +133,11 @@ func TestShopConfiguredSKUCheckoutFreezesPriceAndDelivery(t *testing.T) {
 				var snapshot shopaction.Snapshot
 				require.NoError(t, json.Unmarshal([]byte(action.Snapshot), &snapshot))
 				require.Equal(t, "week", snapshot.Request.Order.SKU.ID)
-				binding := daypassBinding(snapshot.Request)
-				require.Equal(t, 2, binding.SKUVersion)
+				adapter := shopDaypassAdapter{buyer: snapshot.DaypassBuyer}
+				binding := adapter.binding(snapshot.Request)
+				require.Equal(t, shopDaypassCardsVersion, binding.SKUVersion)
+				require.Equal(t, shopaction.DaypassNewCard, binding.CardAction)
+				require.Zero(t, binding.CardID)
 				require.EqualValues(t, 604800, binding.DurationSeconds)
 				require.Equal(t, 3, binding.Concurrency)
 				require.EqualValues(t, 600, binding.PriceFen)

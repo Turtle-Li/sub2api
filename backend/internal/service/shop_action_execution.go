@@ -54,7 +54,7 @@ func (s *ShopService) executeShopAction(ctx context.Context, c *shopOrderActionC
 	}
 	ctx, stop := s.actionHeartbeat(ctx, c)
 	defer stop()
-	adapter, err := s.actionAdapterFor(c.snapshot.Binding, c.row.CompensationReason != "")
+	adapter, err := s.actionAdapterFor(c.snapshot.Binding, c.row.CompensationReason != "", c.snapshot.DaypassBuyer)
 	if err != nil {
 		return s.failShopAction(ctx, c, err)
 	}
@@ -116,7 +116,11 @@ func (s *ShopService) failShopAction(ctx context.Context, c *shopOrderActionClai
 		return err
 	}
 	if status == shopaction.Review {
-		f, err = client.ShopFulfillment.UpdateOne(f).SetStatusNote("自动交付需要客服复核，请勿重复购买。").AddRevision(1).Save(ctx)
+		note := "自动交付需要客服复核，请勿重复购买。"
+		if failure.Kind == "DAYPASS_CARD_UNAVAILABLE" {
+			note = "所选卡片暂时无法续费，订单已转客服复核。请勿重复购买。"
+		}
+		f, err = client.ShopFulfillment.UpdateOne(f).SetStatusNote(note).AddRevision(1).Save(ctx)
 		if err != nil {
 			return err
 		}

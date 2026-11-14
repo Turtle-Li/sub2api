@@ -31,6 +31,7 @@ func RegisterShopRoutes(v1 *gin.RouterGroup, h *handler.ShopHandler, jwt middlew
 	user.Use(shopNoStore, gin.HandlerFunc(jwt), middleware.BackendModeUserGuard(settings), limits.Global())
 	user.GET("/products", h.Products)
 	user.GET("/products/:id", h.Product)
+	user.GET("/products/:id/daypass-cards", h.BuyerDaypassCards)
 	user.POST("/orders", h.CreateOrder)
 	user.GET("/orders/:id", h.Order)
 	user.POST("/orders/:id/input", h.SubmitInput)

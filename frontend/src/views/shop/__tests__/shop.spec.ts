@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import type { ShopOrderDetail, ShopProduct } from '@/types/shop'
+import type { ShopDaypassCard, ShopOrderDetail, ShopProduct } from '@/types/shop'
 import ShopView from '../ShopView.vue'
 import ShopOrderView from '../ShopOrderView.vue'
 import AdminShopOrderView from '../AdminShopOrderView.vue'
@@ -12,9 +12,9 @@ import ShopProductView from '../ShopProductView.vue'
 import ShopGuideContent from '@/components/shop/ShopGuideContent.vue'
 import ShopOrderSummary from '@/components/shop/ShopOrderSummary.vue'
 import { isManualShopPaymentConfirmed } from '@/components/payment/manualShopPayment'
-const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), createOrder: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
+const api = vi.hoisted(() => ({ products: vi.fn(), product: vi.fn(), daypassCards: vi.fn(), createOrder: vi.fn(), order: vi.fn(), checkInput: vi.fn(), submitInput: vi.fn(), adminOrder: vi.fn(), action: vi.fn(), revealInput: vi.fn(), retryNotification: vi.fn() }))
 const checkoutAPI = vi.hoisted(() => ({ getCheckoutInfo: vi.fn() }))
-const route = reactive({ params: { id: '42' }, path: '/shop/help/chatgpt-plus-account' })
+const route = reactive({ params: { id: '42' }, query: {} as { card?: string }, path: '/shop/help/chatgpt-plus-account' })
 vi.mock('@/api/shop', () => ({ shopAPI: api }))
 vi.mock('@/api/payment', () => ({ paymentAPI: checkoutAPI }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ contactInfo: '测试客服入口' }) }))
@@ -26,9 +26,68 @@ const product: ShopProduct = { id: 1, name: '测试商品', category: 'Gemini', 
 const order = (): ShopOrderDetail => ({ order_id: 42, out_trade_no: 'shop-test-42', product, user_id: 8, pay_amount: 12, currency: 'CNY', payment_status: 'PAID', fulfillment_status: 'WAITING_INPUT', revision: 3, input_revision: 0, input_account: '', created_at: '2026-11-04T12:00:00Z', status_note: '', email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: true, can_start: false, can_complete: false, can_reveal_input: false })
 const global = { stubs: { AppLayout: { template: '<main><slot /></main>' }, RouterLink: { template: '<a><slot /></a>' }, ShopOrderSummary: true, TotpStepUpDialog: true, BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' } } }
 enableAutoUnmount(afterEach)
-beforeEach(() => { route.params.id = '42'; vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
+beforeEach(() => { route.params.id = '42'; route.query = {}; vi.clearAllMocks(); localStorage.clear(); route.path = '/shop/help/chatgpt-plus-account'; checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: {} } }); api.order.mockResolvedValue({ data: order() }); api.adminOrder.mockResolvedValue({ data: order() }); api.checkInput.mockResolvedValue({ data: { account: 'target@example.com', plan_type: 'free', expires_at: '2099-01-01T00:00:00Z', warnings: [] } }) })
 describe('automatic day-pass surfaces', () => {
   const daypass = { ...product, name: 'DeepSeek API 不限量订阅卡', price: 6, duration_unit: 'day' as const, fulfillment_mode: 'account_delivery' as const, guide_key: 'deepseek-daypass' as const, automatic_fulfillment: true }
+  const now = 1794652800
+  const expiredCards: ShopDaypassCard[] = [
+    { card_id: 19, key_suffix: '9B6d', last_duration_days: 7, expires_at: now - 3600, status: 'expired' },
+    { card_id: 17, key_suffix: '3Jkp', last_duration_days: 1, expires_at: now - 86400, status: 'expired' }
+  ]
+  function multicardProduct() {
+    api.product.mockResolvedValue({ data: { ...daypass, daypass_cards: true, concurrency_options: [{ concurrency: 2, price: 6, weekly_price: 30 }] } })
+    checkoutAPI.getCheckoutInfo.mockResolvedValue({ data: { methods: { alipay: { currency: 'CNY', available: true } } } })
+  }
+  it('requires one explicit expired card, keeps the choice, and sends a different binding for an additional card', async () => {
+    multicardProduct()
+    api.daypassCards.mockResolvedValue({ data: { server_time: now, cards: expiredCards } })
+    api.createOrder.mockRejectedValue(new Error('lost response'))
+    const wrapper = mount(ShopProductView, { global })
+    await flushPromises()
+    const pay = () => wrapper.findAll('button').find(button => button.text() === '确认并付款')!
+    expect(pay().attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('input[name="daypass-card"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('这些卡已过期')
+    expect(wrapper.findAll('time')).toHaveLength(2)
+    await wrapper.get('input[name="daypass-card"][value="17"]').setValue()
+    await wrapper.get('input[name="duration-days"][value="7"]').setValue()
+    await wrapper.get('input[name="daypass-mode"][value="new"]').setValue()
+    expect(wrapper.find('input[name="daypass-card"]').exists()).toBe(false)
+    await pay().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[0][0]).toMatchObject({ duration_days: 7, daypass: { action: 'new' } })
+    expect(api.createOrder.mock.calls[0][0].daypass).not.toHaveProperty('card_id')
+    await wrapper.get('input[name="daypass-mode"][value="renew"]').setValue()
+    expect((wrapper.get('input[name="daypass-card"][value="17"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.text()).toContain('卡 17 · 尾号 3Jkp')
+    expect(wrapper.text()).toContain('付款后 7 天')
+    await pay().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[1][0]).toMatchObject({ duration_days: 7, daypass: { action: 'renew', card_id: 17 } })
+    expect(api.createOrder.mock.calls[1][1]).not.toBe(api.createOrder.mock.calls[0][1])
+    await wrapper.get('input[name="daypass-mode"][value="new"]').setValue()
+    await pay().trigger('click')
+    await flushPromises()
+    expect(api.createOrder.mock.calls[2][1]).toBe(api.createOrder.mock.calls[0][1])
+  })
+  it('blocks checkout while inventory is unavailable and selects only the linked card after retry', async () => {
+    multicardProduct()
+    route.query = { card: '17' }
+    api.daypassCards.mockRejectedValueOnce(new Error('unavailable')).mockResolvedValueOnce({ data: { server_time: now, cards: expiredCards } })
+    const wrapper = mount(ShopProductView, { global })
+    await flushPromises()
+    const pay = () => wrapper.findAll('button').find(button => button.text() === '确认并付款')!
+    expect(pay().attributes('disabled')).toBeDefined()
+    await wrapper.findAll('button').find(button => button.text() === '重新读取')!.trigger('click')
+    await flushPromises()
+    expect((wrapper.get('input[name="daypass-card"][value="17"]').element as HTMLInputElement).checked).toBe(true)
+    expect(pay().attributes('disabled')).toBeUndefined()
+    api.daypassCards.mockResolvedValueOnce({ data: { server_time: now, cards: [expiredCards[0]] } })
+    route.query = { card: '99' }
+    await flushPromises()
+    expect(pay().attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('这张卡已无法续费')
+  })
   it('prices configured attributes and submits the SKU identity without client amounts', async () => {
     const skus = [
       { id: 'day-2', attributes: { 周期: '日卡', 并发: '2 路' }, price: 9.9, duration_value: 1, duration_unit: 'day' as const, concurrency: 2, enabled: true },
@@ -100,13 +159,14 @@ describe('automatic day-pass surfaces', () => {
     await wrapper.get('input[name="concurrency"][value="2"]').setValue()
     expect(price()).toBe('¥30.00')
   })
-  it('shows the paid clock and key restrictions without the manual delivery estimate', async () => {
+  it('shows the renewal terms and key restrictions without the manual delivery estimate', async () => {
     api.product.mockResolvedValue({ data: daypass })
     const wrapper = mount(ShopProductView, { global })
     await flushPromises()
-    expect(wrapper.text()).toContain('付款时开始计时')
+    expect(wrapper.text()).toContain('续费沿用所选卡的 Key')
+    expect(wrapper.text()).toContain('未到期时续购，接在已有套餐之后')
     expect(wrapper.text()).toContain('默认 2 并发')
-    expect(wrapper.text()).toContain('同一 IP')
+    expect(wrapper.text()).toContain('停止调用 15 分钟')
     expect(wrapper.find('input[name="duration-days"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('5分钟')
     expect(wrapper.text()).not.toContain('2小时操作')
@@ -115,8 +175,8 @@ describe('automatic day-pass surfaces', () => {
     api.order.mockResolvedValueOnce({ data: { ...order(), product: daypass, fulfillment_status: 'QUEUED', can_submit: false } })
     const wrapper = mount(ShopOrderView, { global })
     await flushPromises()
-    expect(wrapper.text()).toContain('正在自动发放 API Key')
-    expect(wrapper.text()).toContain('有效期从付款时间开始计算')
+    expect(wrapper.text()).toContain('正在开通 DeepSeek 套餐')
+    expect(wrapper.text()).toContain('本单生效时间')
     expect(wrapper.find('textarea').exists()).toBe(false)
     api.order.mockResolvedValueOnce({ data: { ...order(), product: daypass, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', can_submit: false, delivery_content: 'API Key: sk-fictional-daypass' } })
     await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')

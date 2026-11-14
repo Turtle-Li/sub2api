@@ -94,10 +94,10 @@ func (s *ShopService) findActionIntegration(b shopaction.Binding) (shopaction.In
 }
 
 func (s *ShopService) actionAdapter(b shopaction.Binding) (shopaction.Adapter, error) {
-	return s.actionAdapterFor(b, false)
+	return s.actionAdapterFor(b, false, nil)
 }
 
-func (s *ShopService) actionAdapterFor(b shopaction.Binding, cleanup bool) (shopaction.Adapter, error) {
+func (s *ShopService) actionAdapterFor(b shopaction.Binding, cleanup bool, buyer *shopaction.DaypassBuyer) (shopaction.Adapter, error) {
 	i, ok := s.findActionIntegration(b)
 	if !ok || !cleanup && (!s.actionsCfg.Enabled || !i.Enabled) {
 		return nil, &shopaction.Failure{Kind: "INTEGRATION_PAUSED", Retryable: true}
@@ -120,7 +120,7 @@ func (s *ShopService) actionAdapterFor(b shopaction.Binding, cleanup bool) (shop
 			gateway = newShopDaypassGateway(s.daypassCfg.ProductID, i.Endpoint)
 		}
 		sku := shopNativeSKU(b.Params)
-		return &shopDaypassAdapter{gateway: gateway, productID: s.daypassCfg.ProductID, durationDays: sku.selection().DurationDays, skuVersion: sku.Version}, nil
+		return &shopDaypassAdapter{gateway: gateway, productID: s.daypassCfg.ProductID, durationDays: sku.selection().DurationDays, buyer: buyer}, nil
 	case shopaction.HTTP:
 		return s.webhook(i), nil
 	default:

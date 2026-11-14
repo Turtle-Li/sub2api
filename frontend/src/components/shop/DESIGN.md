@@ -150,6 +150,15 @@ sections, local illustrations and FAQ directly below delivery. See the project f
 record `docs/features/SHOP_ORDER_DELIVERY_PRESENTATION_20261108.md` for data and route
 compatibility, actual Gemini model receipt and validation scope.
 
+## DeepSeek card selection
+
+The buyer chooses between continuing a saved card and buying a separate Key.
+Use an actual radio group for each decision, the existing teal selection tokens,
+a solid bar for a day and seven ticks for a week, a written state badge, and a
+clock with a semantic expiry time. On desktop show the order preview beside the
+form; on phones keep it directly before payment. Keep the chosen card across
+SKU and mode changes within the same checkout. Show only the Key suffix here.
+
 ## Do's and Don'ts
 
 ### Do:

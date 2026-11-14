@@ -66,7 +66,13 @@ func (s *PaymentService) CreateShopOrder(ctx context.Context, productID int64, p
 		return nil, err
 	}
 	p = &selected
-	if err := s.shopService.requireActionsCheckout(ctx, *p); err != nil {
+	if !nativeShopProduct(*p) {
+		if err := s.shopService.requireActionsCheckout(ctx, *p); err != nil {
+			return nil, err
+		}
+	}
+	req.shopCard, err = s.shopService.resolveDaypassCheckout(ctx, *p, req)
+	if err != nil {
 		return nil, err
 	}
 	req.shopProduct = p
@@ -141,6 +147,13 @@ func (s *PaymentService) replayShopOrderRecord(ctx context.Context, o *dbent.Pay
 		selected = selected.withNativeDefaults()
 	}
 	if selected != purchased {
+		return nil, ErrIdempotencyKeyConflict
+	}
+	card, err := snapshotDaypassCheckout(f)
+	if err != nil {
+		return nil, err
+	}
+	if (card == nil && req.ShopDaypass.Valid()) || (card != nil && req.ShopDaypass != card.DaypassCardSelection) {
 		return nil, ErrIdempotencyKeyConflict
 	}
 	if o.Status != OrderStatusPending || o.PaidAt != nil || !o.ExpiresAt.After(time.Now()) || psStringValue(o.PayURL) != "" || psStringValue(o.QrCode) != "" {

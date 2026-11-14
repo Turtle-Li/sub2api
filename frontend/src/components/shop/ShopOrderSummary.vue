@@ -11,6 +11,10 @@ withDefaults(defineProps<{ order: ShopOrderDetail; showNotification?: boolean }>
         <h1 id="shop-order-summary-title" class="break-words text-xl font-semibold leading-tight text-gray-900 dark:text-gray-100">{{ order.product.name }}</h1>
         <p v-if="order.product.skus?.[0] && Object.keys(order.product.skus[0].attributes).length" class="mt-2 text-sm text-gray-600 dark:text-gray-300">所选规格：{{ skuLabel(order.product.skus[0]) }}</p>
         <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ shopDuration(order.product) }}<template v-if="order.product.concurrency"><span class="mx-2" aria-hidden="true">·</span>{{ order.product.concurrency }} 并发</template><span class="mx-2" aria-hidden="true">·</span><strong class="font-semibold tabular-nums text-gray-900 dark:text-gray-100">¥{{ order.pay_amount.toFixed(2) }}</strong></p>
+        <p v-if="order.daypass_checkout" class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+          <template v-if="order.daypass_checkout.action === 'renew'">续费 · 卡 {{ order.daypass_checkout.card_id }} · 尾号 <span class="font-mono">{{ order.daypass_checkout.key_suffix }}</span></template>
+          <template v-else>另购 · 新 Key<template v-if="order.fulfillment_status === 'COMPLETED'"> · 卡 {{ order.order_id }}</template></template>
+        </p>
       </div>
       <div class="flex flex-wrap items-center gap-2 sm:justify-end">
         <OrderStatusBadge :status="order.payment_status" />

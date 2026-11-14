@@ -62,6 +62,9 @@ func (s *ShopService) orderDTO(ctx context.Context, o *dbent.PaymentOrder, f *db
 	if admin {
 		d.UserEmail = o.UserEmail
 	}
+	if snapshotValid && nativeShopProduct(p) {
+		d.DaypassCheckout, _ = snapshotDaypassCheckout(f)
+	}
 	if err = s.attachShopAutomation(ctx, d, admin); err != nil {
 		return nil, err
 	}

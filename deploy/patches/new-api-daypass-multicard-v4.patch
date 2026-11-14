@@ -1,0 +1,791 @@
+diff --git a/constant/context_key.go b/constant/context_key.go
+index 743b4b5..735895e 100644
+--- a/constant/context_key.go
++++ b/constant/context_key.go
+@@ -16,0 +17 @@ const (
++	ContextKeyDaypassSubscriptionID  ContextKey = "daypass_subscription_id"
+diff --git a/controller/daypass_shop.go b/controller/daypass_shop.go
+index fd6e120..56ac7fd 100644
+--- a/controller/daypass_shop.go
++++ b/controller/daypass_shop.go
+@@ -60,0 +61,2 @@ func daypassShopOperation(c *gin.Context, revoke bool) {
++		case errors.Is(err, model.ErrDaypassCardUnavailable):
++			status, code = http.StatusConflict, "daypass_card_unavailable"
+@@ -81 +83 @@ func DaypassShopReadiness(c *gin.Context) {
+-		"sku_versions": []int{2, model.DaypassShopRenewalVersion},
++		"sku_versions": []int{2, model.DaypassShopRenewalVersion, model.DaypassShopCardsVersion},
+@@ -84,0 +87,26 @@ func DaypassShopReadiness(c *gin.Context) {
++func ListBuyerDaypassCards(c *gin.Context) {
++	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8192)
++	productID, err := strconv.ParseInt(os.Getenv("DAYPASS_SHOP_PRODUCT_ID"), 10, 64)
++	if err != nil || productID <= 0 {
++		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "daypass_not_configured"})
++		return
++	}
++	var input model.DaypassCardQuery
++	if common.DecodeJson(c.Request.Body, &input) != nil {
++		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "daypass_order_invalid"})
++		return
++	}
++	now := common.GetTimestamp()
++	cards, err := model.ListDaypassShopCards(c.Request.Context(), input, productID, now)
++	switch {
++	case errors.Is(err, model.ErrDaypassShopInvalid):
++		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "daypass_order_invalid"})
++	case errors.Is(err, model.ErrDaypassCardUnavailable):
++		c.JSON(http.StatusConflict, gin.H{"success": false, "code": "daypass_card_unavailable"})
++	case err != nil:
++		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "daypass_store_unavailable"})
++	default:
++		common.ApiSuccess(c, gin.H{"instance": model.DaypassShopInstance, "product_id": productID, "sub2_user_id": input.Sub2UserID, "server_time": now, "cards": cards})
++	}
++}
++
+diff --git a/middleware/auth.go b/middleware/auth.go
+index eefe3bf..0996736 100644
+--- a/middleware/auth.go
++++ b/middleware/auth.go
+@@ -649 +649 @@ func TokenAuth() func(c *gin.Context) {
+-			limit, err := model.DaypassRelayConcurrency(c.Request.Context(), token, common.GetTimestamp())
++			grant, err := model.GetDaypassRelayEntitlement(c.Request.Context(), token, common.GetTimestamp())
+@@ -658 +658,2 @@ func TokenAuth() func(c *gin.Context) {
+-			c.Set(daypassConcurrencyContextKey, limit)
++			c.Set(daypassConcurrencyContextKey, grant.Concurrency)
++			common.SetContextKey(c, constant.ContextKeyDaypassSubscriptionID, grant.SubscriptionID)
+diff --git a/model/daypass_shop.go b/model/daypass_shop.go
+index afae102..c5417e5 100644
+--- a/model/daypass_shop.go
++++ b/model/daypass_shop.go
+@@ -39 +39 @@ func DaypassShopReady(ctx context.Context) error {
+-	return DB.WithContext(ctx).Select("id", "renewal_token_id", "renewal_starts_at", "renewal_tier").Limit(1).Find(&row).Error
++	return DB.WithContext(ctx).Select("id", "renewal_token_id", "renewal_starts_at", "renewal_tier", "explicit_card").Limit(1).Find(&row).Error
+@@ -63,0 +64,2 @@ type DaypassShopInput struct {
++	CardAction   string `json:"card_action,omitempty"`
++	CardID       int64  `json:"card_id,omitempty"`
+@@ -83,0 +86,2 @@ type DaypassShopOrder struct {
++	// A card deliberately bought separately is never a v3 implicit renewal target.
++	ExplicitCard bool `gorm:"not null;default:false" json:"-"`
+@@ -95,2 +99 @@ func ProvisionDaypassShopOrder(ctx context.Context, input DaypassShopInput, prod
+-	renewal := input.SKUVersion == DaypassShopRenewalVersion
+-	if renewal {
++	if daypassUsesPaidWindows(input.SKUVersion) {
+@@ -244 +247 @@ func parseDaypassShopPurchase(input DaypassShopInput, productID, now int64) (day
+-	case 2, DaypassShopRenewalVersion:
++	case 2, DaypassShopRenewalVersion, DaypassShopCardsVersion:
+@@ -251 +254 @@ func parseDaypassShopPurchase(input DaypassShopInput, productID, now int64) (day
+-		if input.SKUVersion == DaypassShopRenewalVersion && (input.Sub2UserID <= 0 || input.Sub2UserID > math.MaxInt32 ||
++		if daypassUsesPaidWindows(input.SKUVersion) && (input.Sub2UserID <= 0 || input.Sub2UserID > math.MaxInt32 ||
+@@ -258 +261,2 @@ func parseDaypassShopPurchase(input DaypassShopInput, productID, now int64) (day
+-	if (input.SKUVersion != DaypassShopRenewalVersion && input.PriorOrderID != 0) || input.Sub2UserID < 0 || productID <= 0 || input.ProductID != productID || input.Instance != DaypassShopInstance || input.OrderID <= 0 ||
++	if (!daypassUsesPaidWindows(input.SKUVersion) && input.PriorOrderID != 0) || !validDaypassShopCardAction(input) ||
++		input.Sub2UserID < 0 || productID <= 0 || input.ProductID != productID || input.Instance != DaypassShopInstance || input.OrderID <= 0 ||
+diff --git a/model/daypass_shop_access.go b/model/daypass_shop_access.go
+index 100729c..bc7c368 100644
+--- a/model/daypass_shop_access.go
++++ b/model/daypass_shop_access.go
+@@ -9,3 +9,3 @@ import (
+-type daypassShopAccess struct {
+-	Managed bool
+-	Tier    int
++type DaypassRelayEntitlement struct {
++	Concurrency    int
++	SubscriptionID int
+@@ -14,3 +13,0 @@ type daypassShopAccess struct {
+-// DaypassRelayConcurrency returns the tier of the paid window covering now.
+-// Future orders and refunded windows cannot authorize relay traffic, even
+-// though the reusable token's outer expiry may be further in the future.
+@@ -18 +15,12 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-	var access daypassShopAccess
++	access, err := GetDaypassRelayEntitlement(ctx, token, now)
++	return access.Concurrency, err
++}
++
++// The selected paid window owns admission, concurrency and settlement, even
++// when other cards under the same account have overlapping subscriptions.
++func GetDaypassRelayEntitlement(ctx context.Context, token *Token, now int64) (DaypassRelayEntitlement, error) {
++	var access struct {
++		Managed bool
++		Legacy  bool
++		DaypassRelayEntitlement
++	}
+@@ -20,3 +28,4 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-	paid := db.Model(&DaypassShopOrder{}).Select("renewal_tier").
+-		Where("renewal_token_id = ? AND user_id = ? AND status = ? AND renewal_starts_at <= ? AND expires_at > ?",
+-			token.Id, token.UserId, "active", now, now).
++	paid := db.Model(&DaypassShopOrder{}).Select("renewal_tier, subscription_id, renewal_token_id IS NULL AS legacy").
++		Where("user_id = ? AND status = ? AND expires_at > ?", token.UserId, "active", now).
++		Where("((renewal_token_id = ? AND renewal_starts_at <= ?) OR (renewal_token_id IS NULL AND token_id = ? AND paid_at <= ?))",
++			token.Id, now, token.Id, now).
+@@ -25 +34,2 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-				token.UserId, 1, "sub2_shop", "active", now, now)).
++				token.UserId, 1, "sub2_shop", "active", now, now).
++			Where("amount_total = ? AND allow_wallet_overflow = ?", 0, false)).
+@@ -27,4 +37,5 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-	anchor := db.Model(&DaypassShopOrder{}).Select("1").
+-		Where("token_id = ? AND renewal_token_id = ?", token.Id, token.Id)
+-	if err := db.Raw("SELECT EXISTS (?) AS managed, COALESCE((?), 0) AS tier", anchor, paid).Scan(&access).Error; err != nil {
+-		return 0, err
++	anchor := db.Model(&DaypassShopOrder{}).Select("1").Where("token_id = ?", token.Id)
++	if err := db.Raw("SELECT EXISTS (?) AS managed, COALESCE(paid.legacy, FALSE) AS legacy, "+
++		"COALESCE(paid.renewal_tier, 0) AS concurrency, COALESCE(paid.subscription_id, 0) AS subscription_id "+
++		"FROM (SELECT 1 AS row_id) AS gate LEFT JOIN (?) AS paid ON 1 = 1", anchor, paid).Scan(&access).Error; err != nil {
++		return DaypassRelayEntitlement{}, err
+@@ -33 +44,4 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-		return GetDaypassTokenConcurrency(token.Id), nil
++		return DaypassRelayEntitlement{Concurrency: GetDaypassTokenConcurrency(token.Id)}, nil
++	}
++	if access.Legacy {
++		access.Concurrency = GetDaypassTokenConcurrency(token.Id)
+@@ -35,2 +49,2 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-	if access.Tier <= 0 || access.Tier > DaypassMaxConcurrency || token.Status != common.TokenStatusEnabled || !isDaypassShopToken(token) {
+-		return 0, ErrDaypassShopExpired
++	if access.SubscriptionID <= 0 || access.Concurrency <= 0 || access.Concurrency > DaypassMaxConcurrency || token.Status != common.TokenStatusEnabled || !isDaypassShopToken(token) {
++		return DaypassRelayEntitlement{}, ErrDaypassShopExpired
+@@ -39 +53 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-		return limit, nil
++		access.Concurrency = limit
+@@ -41 +55 @@ func DaypassRelayConcurrency(ctx context.Context, token *Token, now int64) (int,
+-	return access.Tier, nil
++	return access.DaypassRelayEntitlement, nil
+diff --git b/model/daypass_shop_cards.go b/model/daypass_shop_cards.go
+new file mode 100644
+index 0000000..2d0f8ed
+--- /dev/null
++++ b/model/daypass_shop_cards.go
+@@ -0,0 +1,250 @@
++package model
++
++import (
++	"cmp"
++	"context"
++	"errors"
++	"math"
++	"slices"
++
++	"github.com/QuantumNous/new-api/common"
++	"gorm.io/gorm"
++	"gorm.io/gorm/logger"
++)
++
++const (
++	DaypassShopCardsVersion = 4
++	daypassCardNew          = "new"
++	daypassCardRenew        = "renew"
++)
++
++var ErrDaypassCardUnavailable = errors.New("daypass card cannot be renewed")
++
++type DaypassCardQuery struct {
++	Sub2UserID   int64   `json:"sub2_user_id"`
++	CardID       int64   `json:"card_id,omitempty"`
++	LegacyOrders []int64 `json:"legacy_order_ids,omitempty"`
++	IncludeBound bool    `json:"include_bound,omitempty"`
++}
++
++// The first purchase identifies the card even if a later order uses the same
++// credential. Only its last four characters leave the private delivery store.
++type DaypassShopCard struct {
++	CardID       int64  `json:"card_id"`
++	LastOrderID  int64  `json:"last_order_id"`
++	KeySuffix    string `json:"key_suffix"`
++	LastDays     int64  `json:"last_duration_days"`
++	ExpiresAt    int64  `json:"expires_at"`
++	NextStartsAt int64  `json:"next_starts_at,omitempty"`
++	Status       string `json:"status"`
++}
++
++func daypassUsesPaidWindows(version int) bool {
++	return version == DaypassShopRenewalVersion || version == DaypassShopCardsVersion
++}
++
++func validDaypassShopCardAction(input DaypassShopInput) bool {
++	if input.SKUVersion != DaypassShopCardsVersion {
++		return input.CardAction == "" && input.CardID == 0
++	}
++	switch input.CardAction {
++	case daypassCardNew:
++		return input.CardID == 0 && input.PriorOrderID == 0
++	case daypassCardRenew:
++		return input.CardID > 0 && input.CardID < input.OrderID && (input.PriorOrderID == 0 || input.PriorOrderID == input.CardID)
++	default:
++		return false
++	}
++}
++
++func daypassBoundShopBuyerTx(tx *gorm.DB, id int64) (int, error) {
++	var binding DaypassSub2User
++	found, err := daypassFind(tx.Where("sub2_user_id = ?", id), &binding)
++	if err != nil || !found {
++		return 0, err
++	}
++	var user User
++	found, err = daypassFind(tx.Where("id = ?", binding.UserID), &user)
++	if err != nil {
++		return 0, err
++	}
++	if !found || user.Status != common.UserStatusEnabled || user.GetSetting().BillingPreference != "subscription_only" {
++		return 0, ErrDaypassCardUnavailable
++	}
++	return user.Id, nil
++}
++
++func selectDaypassPurchaseKeyTx(tx *gorm.DB, input DaypassShopInput, now int64) (daypassRenewalSelection, error) {
++	if input.SKUVersion != DaypassShopCardsVersion {
++		return selectDaypassRenewalKeyTx(tx, input, now)
++	}
++	id, err := daypassBoundShopBuyerTx(tx, input.Sub2UserID)
++	if err != nil || input.CardAction == daypassCardNew {
++		return daypassRenewalSelection{userID: id}, err
++	}
++	var anchor DaypassShopOrder
++	found, err := daypassFind(tx.Where("id = ? AND product_id = ?", daypassShopReceiptID(input.Instance, input.CardID), input.ProductID), &anchor)
++	if err != nil {
++		return daypassRenewalSelection{}, err
++	}
++	if !found {
++		return daypassRenewalSelection{}, ErrDaypassCardUnavailable
++	}
++	selection, err := daypassExactCardTx(tx, &anchor, id, input.PriorOrderID == input.CardID, now)
++	if err != nil {
++		return selection, err
++	}
++	// Recheck the paid windows as well as token ownership. A stale selection
++	// may never fall back to a different token or a fresh issuance.
++	_, err = daypassCardMetadataTx(tx, &anchor, selection, now)
++	return selection, err
++}
++
++func daypassExactCardTx(tx *gorm.DB, anchor *DaypassShopOrder, userID int, legacyProof bool, now int64) (daypassRenewalSelection, error) {
++	selection := daypassRenewalSelection{userID: userID}
++	if anchor.UserID == nil || anchor.TokenID == nil {
++		return selection, ErrDaypassCardUnavailable
++	}
++	var err error
++	switch {
++	case anchor.RenewalTokenID != nil:
++		if userID == 0 || *anchor.UserID != userID {
++			return selection, ErrDaypassCardUnavailable
++		}
++		selection, err = daypassSelectRenewableAnchorTx(tx, selection, anchor, now)
++	case anchor.Status != "active":
++		return selection, ErrDaypassCardUnavailable
++	case userID != *anchor.UserID:
++		if !legacyProof {
++			return selection, ErrDaypassCardUnavailable
++		}
++		var claimed DaypassSub2User
++		found, lookup := daypassFind(tx.Where("user_id = ?", *anchor.UserID), &claimed)
++		if lookup != nil {
++			return selection, lookup
++		}
++		if found {
++			return selection, ErrDaypassCardUnavailable
++		}
++		selection, err = daypassSelectLegacyAnchorTx(tx, selection, anchor, now)
++	default:
++		selection, err = daypassSelectLegacyAnchorTx(tx, selection, anchor, now)
++	}
++	if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrDaypassShopBinding) || errors.Is(err, ErrDaypassShopRevoked) {
++		return selection, ErrDaypassCardUnavailable
++	}
++	if err == nil && selection.token == nil {
++		return selection, ErrDaypassCardUnavailable
++	}
++	return selection, err
++}
++
++func ListDaypassShopCards(ctx context.Context, query DaypassCardQuery, productID, now int64) ([]DaypassShopCard, error) {
++	if query.Sub2UserID <= 0 || query.Sub2UserID > math.MaxInt32 || productID <= 0 || query.CardID < 0 || len(query.LegacyOrders) > 128 {
++		return nil, ErrDaypassShopInvalid
++	}
++	legacy := make(map[int64]bool, len(query.LegacyOrders))
++	keys := make([]string, 0, len(query.LegacyOrders))
++	for _, id := range query.LegacyOrders {
++		if id <= 0 || (query.CardID > 0 && query.CardID != id) {
++			return nil, ErrDaypassShopInvalid
++		}
++		legacy[id] = true
++		keys = append(keys, daypassShopReceiptID(DaypassShopInstance, id))
++	}
++	daypassShopMutex.Lock()
++	defer daypassShopMutex.Unlock()
++	cards := make([]DaypassShopCard, 0)
++	err := DB.WithContext(ctx).Session(&gorm.Session{Logger: DB.Logger.LogMode(logger.Silent)}).Transaction(func(tx *gorm.DB) error {
++		userID, err := daypassBoundShopBuyerTx(tx, query.Sub2UserID)
++		if err != nil {
++			return err
++		}
++		scope := tx.Where("id IN ? AND renewal_token_id IS NULL", keys)
++		if (query.IncludeBound || query.CardID != 0) && userID > 0 {
++			scope = scope.Or("user_id = ?", userID)
++		}
++		q := tx.Where("instance = ? AND product_id = ? AND token_id IS NOT NULL", DaypassShopInstance, productID).Where(scope)
++		if query.CardID != 0 {
++			q = q.Where("id = ?", daypassShopReceiptID(DaypassShopInstance, query.CardID))
++		}
++		var anchors []DaypassShopOrder
++		if err := q.Find(&anchors).Error; err != nil {
++			return err
++		}
++		for _, anchor := range anchors {
++			selection, err := daypassExactCardTx(tx, &anchor, userID, legacy[anchor.OrderID], now)
++			if err == nil {
++				var card DaypassShopCard
++				card, err = daypassCardMetadataTx(tx, &anchor, selection, now)
++				if err == nil {
++					cards = append(cards, card)
++				}
++			}
++			if err != nil && !errors.Is(err, ErrDaypassCardUnavailable) {
++				return err
++			}
++		}
++		return nil
++	})
++	return cards, err
++}
++
++type daypassCardWindow struct {
++	OrderID, PaidAt, StartsAt, ExpiresAt int64
++}
++
++func daypassCardMetadataTx(tx *gorm.DB, anchor *DaypassShopOrder, selection daypassRenewalSelection, now int64) (DaypassShopCard, error) {
++	token := selection.token
++	if len(token.Key) < 4 {
++		return DaypassShopCard{}, ErrDaypassCardUnavailable
++	}
++	var windows []daypassCardWindow
++	if selection.legacySub != nil {
++		windows = []daypassCardWindow{{anchor.OrderID, anchor.PaidAt, selection.legacySub.StartTime, anchor.ExpiresAt}}
++	} else {
++		receipts := tx.NamingStrategy.TableName("daypass_shop_order")
++		subs := tx.NamingStrategy.TableName("user_subscription")
++		err := tx.Table(receipts+" AS o").
++			Select("o.order_id, o.paid_at, o.renewal_starts_at AS starts_at, o.expires_at").
++			Joins("JOIN "+subs+" AS s ON s.id = o.subscription_id").
++			Where("o.renewal_token_id = ? AND o.user_id = ? AND o.status = ? AND o.instance = ? AND o.product_id = ?", token.Id, token.UserId, "active", anchor.Instance, anchor.ProductID).
++			Where("s.user_id = o.user_id AND s.source = ? AND s.plan_id = ? AND s.start_time = o.renewal_starts_at AND s.end_time = o.expires_at", "sub2_shop", 1).
++			Where("(s.status = ? OR (s.status = ? AND s.end_time <= ?)) AND s.amount_total = 0 AND s.allow_wallet_overflow = ?", "active", "expired", now, false).
++			Scan(&windows).Error
++		if err != nil {
++			return DaypassShopCard{}, err
++		}
++	}
++	if len(windows) == 0 {
++		return DaypassShopCard{}, ErrDaypassCardUnavailable
++	}
++	latest := slices.MaxFunc(windows, func(a, b daypassCardWindow) int {
++		if a.PaidAt != b.PaidAt {
++			return cmp.Compare(a.PaidAt, b.PaidAt)
++		}
++		return cmp.Compare(a.OrderID, b.OrderID)
++	})
++	days := int64(0)
++	switch latest.ExpiresAt - latest.StartsAt {
++	case daypassShopDaySecs:
++		days = 1
++	case DaypassShopWeekDays * daypassShopDaySecs:
++		days = DaypassShopWeekDays
++	}
++	card := DaypassShopCard{CardID: anchor.OrderID, LastOrderID: latest.OrderID, KeySuffix: token.Key[len(token.Key)-4:], LastDays: days, Status: "expired"}
++	for _, window := range windows {
++		card.ExpiresAt = max(card.ExpiresAt, window.ExpiresAt)
++		if window.StartsAt <= now && now < window.ExpiresAt && now < token.ExpiredTime {
++			card.Status = "active"
++		} else if window.StartsAt > now && window.StartsAt < token.ExpiredTime && (card.NextStartsAt == 0 || window.StartsAt < card.NextStartsAt) {
++			card.NextStartsAt = window.StartsAt
++		}
++	}
++	if card.Status == "active" {
++		card.NextStartsAt = 0
++	} else if card.NextStartsAt != 0 {
++		card.Status = "scheduled"
++	}
++	return card, nil
++}
+diff --git b/model/daypass_shop_cards_test.go b/model/daypass_shop_cards_test.go
+new file mode 100644
+index 0000000..71d97ca
+--- /dev/null
++++ b/model/daypass_shop_cards_test.go
+@@ -0,0 +1,181 @@
++package model
++
++import (
++	"context"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++)
++
++func testDaypassShopCards(t *testing.T) {
++	ctx := context.Background()
++	now := time.Now().Unix()
++	const day = 86400
++	const productID, buyer = 8, 540
++	newCard := DaypassShopInput{
++		Instance: DaypassShopInstance, ProductID: productID, OrderID: 2001, PriceFen: 3000, Currency: "CNY",
++		PaidAt: now - 300, SKUVersion: DaypassShopCardsVersion, Sub2UserID: buyer, DurationSeconds: 7 * day,
++		Concurrency: 2, CardAction: daypassCardNew,
++	}
++	first, err := ProvisionDaypassShopOrder(ctx, newCard, productID, now)
++	require.NoError(t, err)
++	extra := newCard
++	extra.OrderID, extra.PaidAt, extra.DurationSeconds, extra.PriceFen, extra.Concurrency = 2002, now-100, day, 800, 3
++	second, err := ProvisionDaypassShopOrder(ctx, extra, productID, now)
++	require.NoError(t, err)
++	require.Equal(t, first.UserID, second.UserID)
++	require.NotEqual(t, first.TokenID, second.TokenID)
++	require.True(t, first.Key != second.Key)
++	require.Equal(t, extra.PaidAt, second.StartsAt)
++	replay, err := ProvisionDaypassShopOrder(ctx, extra, productID, now+1)
++	require.NoError(t, err)
++	require.Equal(t, second.TokenID, replay.TokenID)
++
++	// The earliest expiry belongs to the other card; billing still uses the
++	// subscription that actually admitted the first Key.
++	var firstToken Token
++	require.NoError(t, DB.First(&firstToken, *first.TokenID).Error)
++	grant, err := GetDaypassRelayEntitlement(ctx, &firstToken, now)
++	require.NoError(t, err)
++	require.Equal(t, 2, grant.Concurrency)
++	billed, err := PreConsumeDaypassSubscription("first-card", *first.UserID, grant.SubscriptionID, 17)
++	require.NoError(t, err)
++	require.Equal(t, *first.SubscriptionID, billed.UserSubscriptionId)
++	_, err = PreConsumeDaypassSubscription("first-card", *second.UserID, *second.SubscriptionID, 17)
++	require.ErrorIs(t, err, ErrDaypassShopBinding)
++
++	query := DaypassCardQuery{Sub2UserID: buyer, IncludeBound: true}
++	cards, err := ListDaypassShopCards(ctx, query, productID, now)
++	require.NoError(t, err)
++	require.Len(t, cards, 2)
++	for _, card := range cards {
++		require.Equal(t, "active", card.Status)
++		require.Len(t, card.KeySuffix, 4)
++	}
++	other := query
++	other.Sub2UserID++
++	other.CardID, other.LegacyOrders = first.CardID, []int64{first.CardID}
++	cards, err = ListDaypassShopCards(ctx, other, productID, now)
++	require.NoError(t, err)
++	require.Empty(t, cards)
++
++	extend := extra
++	extend.OrderID, extend.CardAction, extend.CardID = 2003, daypassCardRenew, first.CardID
++	renewed, err := ProvisionDaypassShopOrder(ctx, extend, productID, now)
++	require.NoError(t, err)
++	require.Equal(t, first.TokenID, renewed.TokenID)
++	require.True(t, first.Key == renewed.Key)
++	require.Equal(t, first.ExpiresAt, renewed.StartsAt)
++	changed := extend
++	changed.CardID = second.CardID
++	_, err = ProvisionDaypassShopOrder(ctx, changed, productID, now)
++	require.ErrorIs(t, err, ErrDaypassShopBinding)
++	changed.OrderID, changed.Sub2UserID = 2004, other.Sub2UserID
++	_, err = ProvisionDaypassShopOrder(ctx, changed, productID, now)
++	require.ErrorIs(t, err, ErrDaypassCardUnavailable)
++
++	// Both expired cards are still independently selectable. Restore the
++	// day card and verify the other card's entitlement never changes.
++	later := renewed.ExpiresAt + 60
++	_, err = CleanupDaypassTokens(ctx, later, func(int) bool { return false })
++	require.NoError(t, err)
++	cards, err = ListDaypassShopCards(ctx, query, productID, later)
++	require.NoError(t, err)
++	require.Len(t, cards, 2)
++	for _, card := range cards {
++		require.Equal(t, "expired", card.Status)
++	}
++	restore := extra
++	restore.OrderID, restore.PaidAt, restore.CardAction, restore.CardID = 2005, later, daypassCardRenew, second.CardID
++	restored, err := ProvisionDaypassShopOrder(ctx, restore, productID, later)
++	require.NoError(t, err)
++	require.True(t, restored.Key == second.Key)
++	require.Equal(t, later, restored.StartsAt)
++	require.NoError(t, DB.First(&firstToken, *first.TokenID).Error)
++	require.Equal(t, renewed.ExpiresAt, firstToken.ExpiredTime)
++	_, err = GetDaypassRelayEntitlement(ctx, &firstToken, later)
++	require.ErrorIs(t, err, ErrDaypassShopExpired)
++
++	queued := restore
++	queued.OrderID, queued.PaidAt = 2006, later+1
++	future, err := ProvisionDaypassShopOrder(ctx, queued, productID, later+1)
++	require.NoError(t, err)
++	require.Equal(t, restored.ExpiresAt, future.StartsAt)
++	_, err = RevokeDaypassShopOrder(ctx, restore, productID, later)
++	require.NoError(t, err)
++	var secondToken Token
++	require.NoError(t, DB.First(&secondToken, *second.TokenID).Error)
++	require.Equal(t, future.ExpiresAt, secondToken.ExpiredTime)
++	cards, err = ListDaypassShopCards(ctx, DaypassCardQuery{Sub2UserID: buyer, CardID: second.CardID}, productID, later+1)
++	require.NoError(t, err)
++	require.Len(t, cards, 1)
++	require.Equal(t, "scheduled", cards[0].Status)
++	require.Equal(t, future.StartsAt, cards[0].NextStartsAt)
++	_, err = GetDaypassRelayEntitlement(ctx, &secondToken, later+1)
++	require.ErrorIs(t, err, ErrDaypassShopExpired)
++	_, err = RevokeDaypassShopOrder(ctx, queued, productID, later+1)
++	require.NoError(t, err)
++	require.NoError(t, DB.First(&secondToken, *second.TokenID).Error)
++	require.Equal(t, second.ExpiresAt, secondToken.ExpiredTime)
++	require.NoError(t, DeleteDaypassKey(ctx, *second.TokenID, later))
++	restore.OrderID = 2007
++	_, err = ProvisionDaypassShopOrder(ctx, restore, productID, later)
++	require.ErrorIs(t, err, ErrDaypassCardUnavailable)
++	cards, err = ListDaypassShopCards(ctx, query, productID, later)
++	require.NoError(t, err)
++	require.Len(t, cards, 1)
++	require.Equal(t, first.CardID, cards[0].CardID)
++	require.True(t, strings.HasSuffix(first.Key, cards[0].KeySuffix))
++
++	// A checkout that began before v4 can still finish during cutover. Its
++	// implicit v3 flow must leave cards that were explicitly bought alone.
++	legacy := extra
++	legacy.OrderID, legacy.PaidAt, legacy.SKUVersion, legacy.CardAction = 2010, later, DaypassShopRenewalVersion, ""
++	canonical, err := ProvisionDaypassShopOrder(ctx, legacy, productID, later)
++	require.NoError(t, err)
++	require.Equal(t, first.UserID, canonical.UserID)
++	require.True(t, canonical.Key != first.Key && canonical.Key != second.Key)
++	legacy.OrderID++
++	continued, err := ProvisionDaypassShopOrder(ctx, legacy, productID, later)
++	require.NoError(t, err)
++	require.Equal(t, canonical.TokenID, continued.TokenID)
++	require.NoError(t, DB.First(&firstToken, *first.TokenID).Error)
++	require.Equal(t, renewed.ExpiresAt, firstToken.ExpiredTime)
++
++	// A days label may be absent after a historical administrative extension.
++	// Its original paid order still identifies the SKU on the sender, and
++	// the receiver uses the real (extended) expiry when renewing.
++	unlinked := DaypassShopInput{Instance: DaypassShopInstance, ProductID: productID, OrderID: 2012, PriceFen: 600, Currency: "CNY", PaidAt: now}
++	old, err := ProvisionDaypassShopOrder(ctx, unlinked, productID, now)
++	require.NoError(t, err)
++	extended, err := RenewDaypassKey(ctx, *old.TokenID, 3600, now)
++	require.NoError(t, err)
++	oldQuery := DaypassCardQuery{Sub2UserID: buyer + 2, LegacyOrders: []int64{unlinked.OrderID}}
++	cards, err = ListDaypassShopCards(ctx, oldQuery, productID, now)
++	require.NoError(t, err)
++	require.Len(t, cards, 1)
++	require.Equal(t, unlinked.OrderID, cards[0].LastOrderID)
++	require.Zero(t, cards[0].LastDays)
++	recoverOld := extend
++	recoverOld.Sub2UserID, recoverOld.PriorOrderID = oldQuery.Sub2UserID, unlinked.OrderID
++	recoverOld.OrderID, recoverOld.CardID = 2013, unlinked.OrderID
++	renewOld, err := ProvisionDaypassShopOrder(ctx, recoverOld, productID, now)
++	require.NoError(t, err)
++	require.Equal(t, extended.Token.ExpiredTime, renewOld.StartsAt)
++	require.True(t, old.Key == renewOld.Key)
++
++	boundV2 := extra
++	boundV2.OrderID, boundV2.Sub2UserID, boundV2.SKUVersion = 2014, buyer, 2
++	boundV2.PaidAt, boundV2.CardAction = later, ""
++	older, err := ProvisionDaypassShopOrder(ctx, boundV2, productID, later)
++	require.NoError(t, err)
++	require.Equal(t, canonical.UserID, older.UserID)
++	var oldBoundToken Token
++	require.NoError(t, DB.First(&oldBoundToken, *older.TokenID).Error)
++	oldGrant, err := GetDaypassRelayEntitlement(ctx, &oldBoundToken, later)
++	require.NoError(t, err)
++	require.Equal(t, *older.SubscriptionID, oldGrant.SubscriptionID)
++	require.Equal(t, 3, oldGrant.Concurrency)
++}
+diff --git a/model/daypass_shop_receipt.go b/model/daypass_shop_receipt.go
+index ebddb7a..970ff1f 100644
+--- a/model/daypass_shop_receipt.go
++++ b/model/daypass_shop_receipt.go
+@@ -18,0 +19 @@ type DaypassShopResult struct {
++	CardID     int64  `json:"card_id,omitempty"`
+@@ -23,2 +24,2 @@ func daypassShopResult(row *DaypassShopOrder, input DaypassShopInput, key string
+-	if input.SKUVersion == DaypassShopRenewalVersion {
+-		result.SKUVersion, result.Sub2UserID = DaypassShopRenewalVersion, input.Sub2UserID
++	if daypassUsesPaidWindows(input.SKUVersion) {
++		result.SKUVersion, result.Sub2UserID = input.SKUVersion, input.Sub2UserID
+@@ -32,0 +34,6 @@ func daypassShopResult(row *DaypassShopOrder, input DaypassShopInput, key string
++	if input.SKUVersion == DaypassShopCardsVersion {
++		result.CardID = input.CardID
++		if input.CardAction == daypassCardNew {
++			result.CardID = row.OrderID
++		}
++	}
+diff --git a/model/daypass_shop_renewal.go b/model/daypass_shop_renewal.go
+index 2ead32a..b226e65 100644
+--- a/model/daypass_shop_renewal.go
++++ b/model/daypass_shop_renewal.go
+@@ -37 +37 @@ func provisionDaypassRenewal(ctx context.Context, purchase daypassShopPurchase,
+-		selection, err := selectDaypassRenewalKeyTx(tx, purchase.input, now)
++		selection, err := selectDaypassPurchaseKeyTx(tx, purchase.input, now)
+@@ -84,2 +84 @@ func issueDaypassRenewalTx(tx *gorm.DB, row *DaypassShopOrder, selected daypassR
+-		// Version 3 tiers come from the paid windows. A numeric Option on one
+-		// of these tokens is an explicit administrator override.
++		// Tiers come from the paid windows unless an administrator overrides them.
+@@ -90,0 +90 @@ func issueDaypassRenewalTx(tx *gorm.DB, row *DaypassShopOrder, selected daypassR
++		row.ExplicitCard = input.SKUVersion == DaypassShopCardsVersion
+diff --git a/model/daypass_shop_renewal_test.go b/model/daypass_shop_renewal_test.go
+index d5607ee..829a818 100644
+--- a/model/daypass_shop_renewal_test.go
++++ b/model/daypass_shop_renewal_test.go
+@@ -51,0 +52 @@ func testDaypassShopRenewalMigration(t *testing.T, db *gorm.DB) {
++		require.False(t, row.ExplicitCard)
+diff --git a/model/daypass_shop_selection.go b/model/daypass_shop_selection.go
+index fd711b3..f56afc5 100644
+--- a/model/daypass_shop_selection.go
++++ b/model/daypass_shop_selection.go
+@@ -36,2 +36,2 @@ func selectDaypassRenewalKeyTx(tx *gorm.DB, input DaypassShopInput, now int64) (
+-		found, err := daypassFind(tx.Where("user_id = ? AND instance = ? AND product_id = ? AND token_id IS NOT NULL AND renewal_token_id IS NOT NULL",
+-			user.Id, input.Instance, input.ProductID).Order("token_id DESC"), &anchor)
++		found, err := daypassFind(tx.Where("user_id = ? AND instance = ? AND product_id = ? AND explicit_card = ? AND token_id IS NOT NULL AND renewal_token_id IS NOT NULL",
++			user.Id, input.Instance, input.ProductID, false).Order("token_id DESC"), &anchor)
+@@ -44,2 +44,2 @@ func selectDaypassRenewalKeyTx(tx *gorm.DB, input DaypassShopInput, now int64) (
+-		found, err = daypassFind(tx.Where("user_id = ? AND instance = ? AND product_id = ? AND token_id IS NOT NULL AND status = ?",
+-			user.Id, input.Instance, input.ProductID, "active").Order("expires_at DESC, order_id DESC"), &anchor)
++		found, err = daypassFind(tx.Where("user_id = ? AND instance = ? AND product_id = ? AND explicit_card = ? AND token_id IS NOT NULL AND status = ?",
++			user.Id, input.Instance, input.ProductID, false, "active").Order("expires_at DESC, order_id DESC"), &anchor)
+diff --git a/model/daypass_shop_test.go b/model/daypass_shop_test.go
+index 399f00a..f8c4941 100644
+--- a/model/daypass_shop_test.go
++++ b/model/daypass_shop_test.go
+@@ -120 +120 @@ func TestDaypassShopDatabaseMatrix(t *testing.T) {
+-			require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &SubscriptionPlan{}, &UserSubscription{}, &DaypassShopOrder{}, &Option{}))
++			require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &SubscriptionPlan{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &DaypassShopOrder{}, &Option{}))
+@@ -242,0 +243 @@ func TestDaypassShopDatabaseMatrix(t *testing.T) {
++			t.Run("multiple_shop_cards", testDaypassShopCards)
+diff --git a/model/subscription.go b/model/subscription.go
+index fc82cd6..a0d1ee3 100644
+--- a/model/subscription.go
++++ b/model/subscription.go
+@@ -1304,0 +1305,11 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string,
++	return preConsumeUserSubscription(requestId, userId, 0, amount)
++}
++
++func PreConsumeDaypassSubscription(requestID string, userID, subscriptionID int, amount int64) (*SubscriptionPreConsumeResult, error) {
++	if subscriptionID <= 0 {
++		return nil, ErrDaypassShopExpired
++	}
++	return preConsumeUserSubscription(requestID, userID, subscriptionID, amount)
++}
++
++func preConsumeUserSubscription(requestId string, userId, requiredSubscriptionID int, amount int64) (*SubscriptionPreConsumeResult, error) {
+@@ -1324,0 +1336,3 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string,
++			if requiredSubscriptionID > 0 && (existing.UserSubscriptionId != requiredSubscriptionID || existing.UserId != userId) {
++				return ErrDaypassShopBinding
++			}
+@@ -1341,2 +1355,5 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string,
+-		if err := lockForUpdate(tx).
+-			Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
++		eligible := lockForUpdate(tx).Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now)
++		if requiredSubscriptionID > 0 {
++			eligible = eligible.Where("id = ? AND start_time <= ? AND plan_id = ? AND source = ?", requiredSubscriptionID, now, 1, "sub2_shop")
++		}
++		if err := eligible.
+@@ -1375,0 +1393,3 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string,
++					if requiredSubscriptionID > 0 && (dup.UserSubscriptionId != requiredSubscriptionID || dup.UserId != userId) {
++						return ErrDaypassShopBinding
++					}
+diff --git a/router/api-router.go b/router/api-router.go
+index 45fa403..9024f03 100644
+--- a/router/api-router.go
++++ b/router/api-router.go
+@@ -27,0 +28 @@ func SetApiRouter(router *gin.Engine) {
++		daypassMachine.POST("/cards", controller.ListBuyerDaypassCards)
+diff --git a/router/relay_router_test.go b/router/relay_router_test.go
+index 37f3fd8..ec65cd6 100644
+--- a/router/relay_router_test.go
++++ b/router/relay_router_test.go
+@@ -18,0 +19 @@ import (
++	"github.com/QuantumNous/new-api/constant"
+@@ -55,0 +57 @@ func TestDaypassPaidRenewalRestoresOriginalKeyAtRelay(t *testing.T) {
++	machine.POST("/cards", controller.ListBuyerDaypassCards)
+@@ -58 +60,4 @@ func TestDaypassPaidRenewalRestoresOriginalKeyAtRelay(t *testing.T) {
+-	engine.POST("/v1/chat/completions", middleware.TokenAuth(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
++	engine.POST("/v1/chat/completions", middleware.TokenAuth(), func(c *gin.Context) {
++		c.Header("X-Test-Subscription", fmt.Sprint(common.GetContextKeyInt(c, constant.ContextKeyDaypassSubscriptionID)))
++		c.Status(http.StatusNoContent)
++	})
+@@ -69 +74,8 @@ func TestDaypassPaidRenewalRestoresOriginalKeyAtRelay(t *testing.T) {
+-	require.Contains(t, probe.Body.String(), `"sku_versions":[2,3]`)
++	require.Contains(t, probe.Body.String(), `"sku_versions":[2,3,4]`)
++	query := []byte(`{"sub2_user_id":501,"legacy_order_ids":[71],"include_bound":true}`)
++	list := request(http.MethodPost, "/api/daypass/automation/cards", bearer, query)
++	require.Equal(t, http.StatusOK, list.Code)
++	require.Equal(t, "no-store, private", list.Header().Get("Cache-Control"))
++	require.Contains(t, list.Body.String(), `"card_id":71`)
++	require.NotContains(t, list.Body.String(), old.Key)
++	require.Equal(t, http.StatusForbidden, request(http.MethodPost, "/api/daypass/automation/cards", old.Key, query).Code)
+@@ -91,0 +104,26 @@ func TestDaypassPaidRenewalRestoresOriginalKeyAtRelay(t *testing.T) {
++
++	additional := renewal
++	additional.OrderID, additional.SKUVersion, additional.PriorOrderID = 73, model.DaypassShopCardsVersion, 0
++	additional.CardAction = "new"
++	newBody, err := json.Marshal(additional)
++	require.NoError(t, err)
++	response := request(http.MethodPost, "/api/daypass/automation/provision", bearer, newBody)
++	require.Equal(t, http.StatusOK, response.Code)
++	var separate struct {
++		Data model.DaypassShopResult `json:"data"`
++	}
++	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &separate))
++	require.Equal(t, additional.OrderID, separate.Data.CardID)
++	require.True(t, separate.Data.Key != old.Key)
++	extraRelay := func() *httptest.ResponseRecorder {
++		return request(http.MethodPost, "/v1/chat/completions", separate.Data.Key, nil)
++	}
++	scope := extraRelay()
++	require.Equal(t, http.StatusNoContent, scope.Code)
++	var receipt model.DaypassShopOrder
++	require.NoError(t, model.DB.Where("order_id = ?", additional.OrderID).First(&receipt).Error)
++	require.NotNil(t, receipt.SubscriptionID)
++	require.Equal(t, fmt.Sprint(*receipt.SubscriptionID), scope.Header().Get("X-Test-Subscription"))
++	firstRelay := request(http.MethodPost, "/v1/chat/completions", old.Key, nil)
++	require.NotEqual(t, firstRelay.Header().Get("X-Test-Subscription"), scope.Header().Get("X-Test-Subscription"))
++
+@@ -95,0 +134 @@ func TestDaypassPaidRenewalRestoresOriginalKeyAtRelay(t *testing.T) {
++	require.Equal(t, http.StatusNoContent, extraRelay().Code)
+diff --git a/service/billing_session.go b/service/billing_session.go
+index 61c6f9c..576e6fe 100644
+--- a/service/billing_session.go
++++ b/service/billing_session.go
+@@ -11,0 +12 @@ import (
++	"github.com/QuantumNous/new-api/constant"
+@@ -394,0 +396,4 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
++	daypassSubscriptionID := common.GetContextKeyInt(c, constant.ContextKeyDaypassSubscriptionID)
++	if daypassSubscriptionID > 0 {
++		pref = "subscription_only"
++	}
+@@ -436,4 +441,5 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
+-				requestId: relayInfo.RequestId,
+-				userId:    relayInfo.UserId,
+-				modelName: relayInfo.GetBillingModelName(),
+-				amount:    subConsume,
++				requestId:              relayInfo.RequestId,
++				userId:                 relayInfo.UserId,
++				modelName:              relayInfo.GetBillingModelName(),
++				amount:                 subConsume,
++				requiredSubscriptionID: daypassSubscriptionID,
+diff --git a/service/funding_source.go b/service/funding_source.go
+index c22210b..980527b 100644
+--- a/service/funding_source.go
++++ b/service/funding_source.go
+@@ -82,6 +82,7 @@ type SubscriptionFunding struct {
+-	requestId      string
+-	userId         int
+-	modelName      string
+-	amount         int64 // 预扣的订阅额度（subConsume）
+-	subscriptionId int
+-	preConsumed    int64
++	requestId              string
++	userId                 int
++	modelName              string
++	amount                 int64 // 预扣的订阅额度（subConsume）
++	subscriptionId         int
++	requiredSubscriptionID int
++	preConsumed            int64
+@@ -99 +100,7 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
+-	res, err := model.PreConsumeUserSubscription(s.requestId, s.userId, s.modelName, 0, s.amount)
++	var res *model.SubscriptionPreConsumeResult
++	var err error
++	if s.requiredSubscriptionID > 0 {
++		res, err = model.PreConsumeDaypassSubscription(s.requestId, s.userId, s.requiredSubscriptionID, s.amount)
++	} else {
++		res, err = model.PreConsumeUserSubscription(s.requestId, s.userId, s.modelName, 0, s.amount)
++	}

@@ -14,9 +14,19 @@ import (
 )
 
 func createShopFulfillmentTx(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder, p ShopProduct) error {
+	return createShopFulfillmentSnapshotTx(ctx, client, o, p, nil)
+}
+
+func createShopFulfillmentSnapshotTx(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder, p ShopProduct, card *ShopDaypassCheckout) error {
 	snapshot, err := shopProductMap(p)
 	if err != nil {
 		return err
+	}
+	if card != nil {
+		if card.CardID >= o.ID {
+			return shopDaypassCardUnavailable()
+		}
+		snapshot[shopDaypassCheckoutKey] = card
 	}
 	_, err = client.ShopFulfillment.Create().SetOrderID(o.ID).SetUserID(o.UserID).SetProductID(p.ID).SetProductSnapshot(snapshot).Save(ctx)
 	return err

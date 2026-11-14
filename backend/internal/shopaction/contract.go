@@ -9,6 +9,13 @@ import (
 )
 
 const (
+	PaidRequestVersion        = 1
+	DaypassPaidRequestVersion = 2
+	DaypassCardRequestVersion = 3
+
+	DaypassNewCard   = "new"
+	DaypassRenewCard = "renew"
+
 	Native       = "newapi.daypass.v1"
 	HTTP         = "http.webhook.v1"
 	Paid         = "shop.order.paid"
@@ -73,9 +80,28 @@ type Request struct {
 	Params   json.RawMessage `json:"params"`
 }
 
+// DaypassBuyer is private to native fulfillment. It never enters an HTTP
+// webhook payload or buyer-visible order metadata.
+type DaypassBuyer struct {
+	UserID       int64                 `json:"user_id"`
+	Username     string                `json:"username,omitempty"`
+	PriorOrderID int64                 `json:"prior_order_id,omitempty"`
+	Card         *DaypassCardSelection `json:"card,omitempty"`
+}
+
+type DaypassCardSelection struct {
+	Action string `json:"action"`
+	CardID int64  `json:"card_id,omitempty"`
+}
+
+func (s DaypassCardSelection) Valid() bool {
+	return s.Action == DaypassNewCard && s.CardID == 0 || s.Action == DaypassRenewCard && s.CardID > 0
+}
+
 type Snapshot struct {
-	Binding Binding `json:"binding"`
-	Request Request `json:"request"`
+	Binding      Binding       `json:"binding"`
+	Request      Request       `json:"request"`
+	DaypassBuyer *DaypassBuyer `json:"daypass_buyer,omitempty"`
 }
 
 type Delivery struct {

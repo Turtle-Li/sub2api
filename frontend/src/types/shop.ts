@@ -32,7 +32,25 @@ export interface ShopSKU {
   concurrency: number
   enabled: boolean
 }
+export type ShopDaypassSelection = { action: 'new' } | { action: 'renew'; card_id: number }
+export type ShopDaypassCheckout = { action: 'new' } | { action: 'renew'; card_id: number; key_suffix: string }
+
+export interface ShopDaypassCard {
+  readonly card_id: number
+  readonly key_suffix: string
+  readonly last_duration_days: 0 | 1 | 7
+  readonly expires_at: number
+  readonly next_starts_at?: number
+  readonly status: 'active' | 'scheduled' | 'expired'
+}
+
+export interface ShopDaypassCards {
+  readonly server_time: number
+  readonly cards: readonly ShopDaypassCard[]
+}
+
 export interface ShopProduct {
+  readonly daypass_cards?: boolean
   delivery_config?: { readonly individual_copy: boolean }
   skus?: ShopSKU[]
   default_sku_id?: string
@@ -61,7 +79,7 @@ export interface ShopProduct {
   payment_actions?: ShopPaymentAction[]
   automatic_fulfillment?: boolean
 }
-export type ShopProductInput = Omit<ShopProduct, 'id' | 'currency' | 'created_at' | 'updated_at' | 'revision' | 'sku_id' | 'concurrency' | 'concurrency_options' | 'automatic_fulfillment'> & { revision?: number }
+export type ShopProductInput = Omit<ShopProduct, 'id' | 'currency' | 'created_at' | 'updated_at' | 'revision' | 'sku_id' | 'concurrency' | 'concurrency_options' | 'automatic_fulfillment' | 'daypass_cards'> & { revision?: number }
 export interface ShopInputCheck {
   account: string
   plan_type: string
@@ -69,6 +87,7 @@ export interface ShopInputCheck {
   warnings: string[]
 }
 export interface ShopOrderDetail {
+  readonly daypass_checkout?: ShopDaypassCheckout
   order_id: number
   out_trade_no: string
   product: ShopProduct
@@ -113,7 +132,7 @@ export const shopNotificationLabels: Record<ShopNotificationStatus, string> = {
 }
 export const shopModeLabels: Record<ShopMode, string> = { session_topup: '提交资料 · 人工代充', account_delivery: '人工账号交付' }
 export function isShopDaypass(product: ShopProduct): boolean { return product.guide_key === 'deepseek-daypass' }
-export function shopDeliveryLabel(product: ShopProduct): string { return product.automatic_fulfillment ? (isShopDaypass(product) ? '付款后自动发放 API Key' : '付款后自动交付') : shopModeLabels[product.fulfillment_mode] }
+export function shopDeliveryLabel(product: ShopProduct): string { return product.automatic_fulfillment ? (isShopDaypass(product) ? '付款后自动开通或续费' : '付款后自动交付') : shopModeLabels[product.fulfillment_mode] }
 export function shopDuration(product: Pick<ShopProduct, 'duration_value' | 'duration_unit'>): string {
   return `${product.duration_value} ${ { month: '个月', day: '天', year: '年' }[product.duration_unit] }`
 }

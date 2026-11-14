@@ -50,6 +50,7 @@ type ShopProduct struct {
 	PaymentActions       []shopaction.Binding    `json:"payment_actions,omitempty"`
 	AutomaticFulfillment bool                    `json:"automatic_fulfillment"`
 	DeliveryConfig       *ShopDeliveryConfig     `json:"delivery_config,omitempty"`
+	DaypassCards         bool                    `json:"daypass_cards,omitempty"`
 }
 
 type ShopDeliveryConfig struct {
@@ -57,6 +58,7 @@ type ShopDeliveryConfig struct {
 }
 
 type ShopOrderDetail struct {
+	DaypassCheckout         *ShopDaypassCheckout  `json:"daypass_checkout,omitempty"`
 	OrderID                 int64                 `json:"order_id"`
 	OutTradeNo              string                `json:"out_trade_no"`
 	Product                 ShopProduct           `json:"product"`

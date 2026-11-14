@@ -12,6 +12,11 @@ import { sanitizeUrl } from '@/utils/url'
 import { previewShopSession } from '@/utils/shopSessionPreview'
 const route = useRoute()
 const order = ref<ShopOrderDetail | null>(null)
+const renewableCardId = computed(() => {
+  const current = order.value
+  if (!current?.daypass_checkout || current.payment_status !== 'COMPLETED' || current.fulfillment_status !== 'COMPLETED') return
+  return current.daypass_checkout.action === 'renew' ? current.daypass_checkout.card_id : current.order_id
+})
 const content = ref('')
 const inputCheck = ref<ShopInputCheck | null>(null)
 const busy = ref(false)
@@ -178,6 +183,7 @@ onBeforeUnmount(() => { generation++; stopRefresh(); content.value = ''; order.v
 
         <section v-else-if="order.fulfillment_status === 'COMPLETED' && order.product.fulfillment_mode === 'account_delivery' && order.delivery_kind !== 'none'" class="mt-4">
           <ShopDelivery :content="order.delivery_content || ''" :api-key="order.product.automatic_fulfillment && isShopDaypass(order.product)" :individual-copy="!order.product.automatic_fulfillment && order.product.delivery_config?.individual_copy === true" />
+          <RouterLink v-if="renewableCardId" :to="{ path: `/shop/products/${order.product.id}`, query: { card: renewableCardId } }" class="mt-2 inline-flex min-h-11 items-center rounded-md px-1 text-sm font-medium text-primary-700 underline-offset-4 hover:underline focus-visible:outline-primary-500 dark:text-primary-300">续费这张卡</RouterLink>
         </section>
 
         <section v-else-if="order.fulfillment_status === 'COMPLETED'" class="mt-4 rounded-xl border border-green-200 bg-white p-5 dark:border-green-900 dark:bg-gray-900 sm:p-6">
@@ -186,8 +192,8 @@ onBeforeUnmount(() => { generation++; stopRefresh(); content.value = ''; order.v
         </section>
 
         <section v-else class="mt-4 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900 sm:p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '交付待复核' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '正在自动发放 API Key' : order.automation ? shopAutomationLabels[order.automation.status] : order.product.automatic_fulfillment ? '等待自动处理' : '等待人工处理' }}</h2>
-          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '付款已确认，交付需要客服核对。请勿重复购买，可联系客服处理。' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '付款已确认，页面会自动更新。Key 和调用方式将显示在这里，有效期从付款时间开始计算。' : order.product.automatic_fulfillment ? '付款已确认，页面会自动更新并显示交付结果。' : '客服正在处理此订单，完成后可在这里查看结果。' }}</p>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '交付待复核' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '正在开通 DeepSeek 套餐' : order.automation ? shopAutomationLabels[order.automation.status] : order.product.automatic_fulfillment ? '等待自动处理' : '等待人工处理' }}</h2>
+          <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">{{ order.automation?.status === 'REVIEW_REQUIRED' ? '付款已确认，交付需要客服核对。请勿重复购买，可联系客服处理。' : order.product.automatic_fulfillment && isShopDaypass(order.product) ? '付款已确认，页面会自动更新并显示 API Key 和本单生效时间。' : order.product.automatic_fulfillment ? '付款已确认，页面会自动更新并显示交付结果。' : '客服正在处理此订单，完成后可在这里查看结果。' }}</p>
         </section>
         <section v-if="order.product.guide_key" id="usage-guide" ref="usageGuide" aria-labelledby="shop-guide-title" class="mt-4 scroll-mt-6 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900 sm:p-5">
           <h2 id="shop-guide-title" class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ isShopDaypass(order.product) ? 'API Key 使用指南' : '使用指南' }}</h2>

@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
+	"github.com/Wei-Shaw/sub2api/internal/shopaction"
 )
 
 // --- Order Status Constants ---
@@ -73,8 +74,10 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
-	ShopSKU         ShopSKUSelection `json:"-"`
+	ShopSKU         ShopSKUSelection                `json:"-"`
+	ShopDaypass     shopaction.DaypassCardSelection `json:"-"`
 	shopProduct     *ShopProduct
+	shopCard        *ShopDaypassCheckout
 	CouponCode      string
 	CouponRevision  string
 	couponQuote     *PaymentDiscountQuote

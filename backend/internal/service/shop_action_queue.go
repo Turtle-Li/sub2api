@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -42,10 +43,32 @@ func decodeShopAction(row *dbent.ShopOrderAction) (shopaction.Snapshot, error) {
 	digest := sha256.Sum256([]byte(row.Snapshot))
 	if row.SnapshotHash != hex.EncodeToString(digest[:]) || json.Unmarshal([]byte(row.Snapshot), &snapshot) != nil ||
 		snapshot.Request.ActionID != row.ActionKey || snapshot.Request.Order.ID != row.OrderID || snapshot.Request.Source != shopDaypassInstance ||
-		snapshot.Request.Version != 1 || snapshot.Request.Event != shopaction.Paid || !validateActionSnapshot(snapshot.Binding) {
+		snapshot.Request.Event != shopaction.Paid || !validateActionSnapshot(snapshot.Binding) {
 		return snapshot, &shopaction.Failure{Kind: "SNAPSHOT_INVALID"}
 	}
-	return snapshot, nil
+	switch snapshot.Request.Version {
+	case shopaction.PaidRequestVersion:
+		if snapshot.DaypassBuyer == nil {
+			return snapshot, nil
+		}
+	case shopaction.DaypassPaidRequestVersion, shopaction.DaypassCardRequestVersion:
+		buyer := snapshot.DaypassBuyer
+		if snapshot.Binding.Adapter == shopaction.Native && buyer != nil && buyer.UserID > 0 && buyer.UserID <= math.MaxInt32 &&
+			buyer.PriorOrderID >= 0 && buyer.PriorOrderID < row.OrderID {
+			switch snapshot.Request.Version {
+			case shopaction.DaypassPaidRequestVersion:
+				if buyer.Card == nil {
+					return snapshot, nil
+				}
+			case shopaction.DaypassCardRequestVersion:
+				if buyer.Card != nil && buyer.Card.Valid() && buyer.Card.CardID < row.OrderID &&
+					(buyer.PriorOrderID == 0 || buyer.PriorOrderID == buyer.Card.CardID) {
+					return snapshot, nil
+				}
+			}
+		}
+	}
+	return snapshot, &shopaction.Failure{Kind: "SNAPSHOT_INVALID"}
 }
 
 func (s *ShopService) repairShopActionOutbox(ctx context.Context) error {
@@ -149,7 +172,7 @@ func (s *ShopService) claimShopAction(ctx context.Context, orderID int64, now ti
 		return nil, nil
 	}
 	snapshot, decodeErr := decodeShopAction(row)
-	if decodeErr != nil {
+	if decodeErr != nil || (snapshot.DaypassBuyer != nil && (snapshot.DaypassBuyer.UserID != o.UserID || f.UserID != o.UserID)) {
 		if err = client.ShopOrderAction.UpdateOne(row).SetStatus(shopaction.Review).SetErrorKind("SNAPSHOT_INVALID").ClearLeaseUntil().Exec(ctx); err != nil {
 			return nil, err
 		}

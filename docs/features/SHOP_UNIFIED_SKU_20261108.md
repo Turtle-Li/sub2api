@@ -2,6 +2,8 @@
 
 状态：RELEASED / LIVE_VERIFIED（2026-11-08）；实现基线 `2a7267d2ed422c5320e495d9a1df798ad48221c0`。用户验收并明确授权提交、合并和发布。商城生产源码 `fafcdfb1a6b195bd6b39be7d6eb9c4149e93b39c`，接收端 guard.5.3。三类商品统一配置，代充和成品号人工交付、DeepSeek 调用独立服务。线上商品价格与上下架状态保留；商品3已按原价保存四个持久 SKU，revision4→5。
 
+后续本地候选：[DeepSeek 商城多卡购买与续费](SHOP_DEEPSEEK_KEY_RENEWAL.md)（交付协议 v4，兼容旧订单）。
+
 ## 问题分析（ANALYSIS_READY）
 
 Bug: SHOP-20261108-price-save

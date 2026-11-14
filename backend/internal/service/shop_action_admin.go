@@ -124,7 +124,7 @@ func (s *ShopService) ManageAutomation(ctx context.Context, orderID, adminID int
 	default:
 		return nil, infraerrors.BadRequest("SHOP_ACTION_INVALID", "请选择重试或撤销")
 	}
-	if _, err = s.actionAdapterFor(snapshot.Binding, state == shopaction.Compensating); err != nil {
+	if _, err = s.actionAdapterFor(snapshot.Binding, state == shopaction.Compensating, snapshot.DaypassBuyer); err != nil {
 		return nil, infraerrors.Conflict("SHOP_INTEGRATION_UNAVAILABLE", "原集成配置不可用，请先恢复同一版本的集成")
 	}
 	if err = client.ShopOrderAction.UpdateOne(row).SetStatus(state).SetCompensationReason(reason).SetErrorKind("").AddClaimRevision(1).ClearLeaseUntil().SetNextAttemptAt(time.Now()).Exec(ctx); err != nil {
