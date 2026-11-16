@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 )
@@ -61,12 +60,16 @@ func normalizeOpenAIModelBillingSettings(settings OpenAIModelBillingSettings) (O
 	return normalized, nil
 }
 
-func mergeOpenAIModelBillingSettings(overrides OpenAIModelBillingSettings) OpenAIModelBillingSettings {
-	merged := defaultOpenAIModelBillingSettings()
-	for model, multiplier := range overrides.Multipliers {
-		merged.Multipliers[model] = multiplier
+func effectiveOpenAIModelBillingSettings(stored OpenAIModelBillingSettings) OpenAIModelBillingSettings {
+	effective := defaultOpenAIModelBillingSettings()
+	for model, multiplier := range stored.Multipliers {
+		if multiplier == 1 {
+			delete(effective.Multipliers, model)
+			continue
+		}
+		effective.Multipliers[model] = multiplier
 	}
-	return merged
+	return effective
 }
 
 func cloneOpenAIModelBillingSettings(settings OpenAIModelBillingSettings) OpenAIModelBillingSettings {
@@ -77,23 +80,9 @@ func cloneOpenAIModelBillingSettings(settings OpenAIModelBillingSettings) OpenAI
 	return cloned
 }
 
-func sortedOpenAIModelBillingMultipliers(settings OpenAIModelBillingSettings) map[string]float64 {
-	// Return a fresh map so callers cannot mutate the immutable cache entry.
-	keys := make([]string, 0, len(settings.Multipliers))
-	for model := range settings.Multipliers {
-		keys = append(keys, model)
-	}
-	sort.Strings(keys)
-	result := make(map[string]float64, len(keys))
-	for _, model := range keys {
-		result[model] = settings.Multipliers[model]
-	}
-	return result
-}
-
 // GetOpenAIModelBillingSettings returns the effective model-level internal
-// billing multipliers. Missing settings use the code defaults, while stored
-// entries override or extend those defaults for new models.
+// billing multipliers. Legacy settings inherit defaults for unspecified models;
+// a stored multiplier of 1 opts out and is omitted from the effective map.
 func (s *SettingService) GetOpenAIModelBillingSettings(ctx context.Context) (OpenAIModelBillingSettings, error) {
 	defaults := defaultOpenAIModelBillingSettings()
 	if s == nil || s.settingRepo == nil {
@@ -129,7 +118,7 @@ func (s *SettingService) GetOpenAIModelBillingSettings(ctx context.Context) (Ope
 		if err != nil {
 			return &cachedOpenAIModelBillingSettings{settings: defaults, expiresAt: time.Now().Add(openAIModelBillingSettingsCacheTTL).UnixNano()}, fmt.Errorf("normalize openai model billing settings: %w", err)
 		}
-		entry := &cachedOpenAIModelBillingSettings{settings: mergeOpenAIModelBillingSettings(normalized), expiresAt: time.Now().Add(openAIModelBillingSettingsCacheTTL).UnixNano()}
+		entry := &cachedOpenAIModelBillingSettings{settings: effectiveOpenAIModelBillingSettings(normalized), expiresAt: time.Now().Add(openAIModelBillingSettingsCacheTTL).UnixNano()}
 		s.openAIModelBillingSettingsCache.Store(entry)
 		return entry, nil
 	})
@@ -139,27 +128,34 @@ func (s *SettingService) GetOpenAIModelBillingSettings(ctx context.Context) (Ope
 	return defaults, fmt.Errorf("load openai model billing settings: unavailable result")
 }
 
-// UpdateOpenAIModelBillingSettings validates and persists the full override
-// map. The effective cache is refreshed synchronously, so new debits on this
-// instance observe the change immediately.
+// UpdateOpenAIModelBillingSettings replaces all effective rules. An empty map
+// disables them all. The effective cache is refreshed synchronously.
 func (s *SettingService) UpdateOpenAIModelBillingSettings(ctx context.Context, settings OpenAIModelBillingSettings) error {
 	if s == nil || s.settingRepo == nil {
 		return fmt.Errorf("openai model billing settings service is unavailable")
+	}
+	if settings.Multipliers == nil {
+		return errors.New("multipliers must be provided as an object")
 	}
 	normalized, err := normalizeOpenAIModelBillingSettings(settings)
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(struct {
-		Multipliers map[string]float64 `json:"multipliers"`
-	}{Multipliers: sortedOpenAIModelBillingMultipliers(normalized)})
+	// Persist omitted defaults as neutral overrides so older binaries do not
+	// restore their debits during a rolling reload or rollback.
+	for model := range defaultOpenAIModelBillingSettings().Multipliers {
+		if _, configured := normalized.Multipliers[model]; !configured {
+			normalized.Multipliers[model] = 1
+		}
+	}
+	data, err := json.Marshal(normalized)
 	if err != nil {
 		return fmt.Errorf("marshal openai model billing settings: %w", err)
 	}
 	if err := s.settingRepo.Set(ctx, SettingKeyOpenAIModelBillingSettings, string(data)); err != nil {
 		return fmt.Errorf("set openai model billing settings: %w", err)
 	}
-	effective := mergeOpenAIModelBillingSettings(normalized)
+	effective := effectiveOpenAIModelBillingSettings(normalized)
 	s.openAIModelBillingSettingsSF.Forget("openai-model-billing-settings")
 	s.openAIModelBillingSettingsCache.Store(&cachedOpenAIModelBillingSettings{
 		settings:  effective,
@@ -180,11 +176,11 @@ func (s *SettingService) OpenAIConsumptionMultiplier(model string) float64 {
 		if multiplier, ok := cached.settings.Multipliers[key]; ok {
 			return multiplier
 		}
-		return openAIConsumptionMultiplier(model)
+		return 1
 	}
 	settings, _ := s.GetOpenAIModelBillingSettings(context.Background())
 	if multiplier, ok := settings.Multipliers[key]; ok {
 		return multiplier
 	}
-	return openAIConsumptionMultiplier(model)
+	return 1
 }
