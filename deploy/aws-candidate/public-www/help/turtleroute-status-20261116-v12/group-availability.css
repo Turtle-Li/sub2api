@@ -1,0 +1,80 @@
+.status-module{padding-top:84px;padding-bottom:72px;scroll-margin-top:32px}
+.status-module .section-top{margin-bottom:20px}
+.status-intro,.status-explanation{color:#a6b0c2;font-size:13px;line-height:1.8;margin-top:14px}
+.status-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin:16px 0 22px}
+.status-toolbar button{display:inline-flex;align-items:center;gap:8px;min-height:38px;border:1px solid #9cebd83d;border-radius:999px;background:linear-gradient(180deg,#9cebd814,#9cebd806);color:#d7f3eb;padding:8px 16px;font-size:12px;cursor:pointer;transition:border-color .18s,background .18s,box-shadow .18s}
+.status-toolbar button::before{content:'↻';font-size:13px;line-height:1;color:#9cebd8}
+.status-toolbar button:hover{border-color:#9cebd8a0;box-shadow:0 0 0 4px #9cebd80d,0 6px 20px -8px #9cebd84d}
+.status-toolbar button:disabled{opacity:.55;cursor:wait}
+.status-toolbar [role=status]{font-size:12px;color:#a6b0c2}
+
+/* Equal-height cards: identity on top, metrics and timeline aligned along the row's bottom edge. */
+.status-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));grid-auto-rows:1fr;align-items:stretch;gap:18px}
+.status-group{position:relative;display:flex;flex-direction:column;min-width:0;padding:22px 22px 16px;border:1px solid #243041;border-radius:18px;background:linear-gradient(165deg,#151e2bd9 0%,#0d131c 64%);box-shadow:inset 0 1px 0 #ffffff09,0 22px 48px -32px #000;transition:border-color .2s,box-shadow .2s}
+.status-group::before{content:'';position:absolute;inset:0 18% auto;height:1px;background:linear-gradient(90deg,transparent,#9cebd84d,transparent);pointer-events:none}
+.status-group:hover{border-color:#36475d;box-shadow:inset 0 1px 0 #ffffff0d,0 26px 56px -30px #000,0 0 0 1px #9cebd80a}
+.status-group-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;min-height:50px}
+.status-identity{display:flex;align-items:center;gap:12px;min-width:0}
+.status-title{min-width:0}
+.status-mark{display:inline-grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border-radius:12px;background:#1c2634;color:#e6eef8;font:650 15px/1 ui-sans-serif,system-ui,sans-serif;box-shadow:inset 0 0 0 1px #ffffff12}
+.status-mark[data-platform=openai]{background:linear-gradient(145deg,#1f3a33,#122520);color:#a8f0d9}
+.status-mark[data-platform=anthropic]{background:linear-gradient(145deg,#3d2a21,#271a14);color:#f2c3a5}
+.status-mark[data-platform=deepseek]{background:linear-gradient(145deg,#1d2a4d,#141c33);color:#a9bdff}
+.status-mark[data-platform=kimi]{background:linear-gradient(145deg,#26292b,#17191a);color:#edfae6}
+.status-mark[data-platform=zhipu]{background:linear-gradient(145deg,#24264d,#181933);color:#b9b9ff}
+.status-mark[data-platform=minimax]{background:linear-gradient(145deg,#41222c,#2a161d);color:#ffadbe}
+.status-mark[data-platform=gemini],.status-mark[data-platform=antigravity]{background:linear-gradient(145deg,#1d3048,#121e2e);color:#a8d1ff;font-size:13px}
+.status-platform-label{display:block;font-size:12px;line-height:1.5;color:#93a2b8}
+.status-group h3{margin:1px 0 0;font-size:16px;font-weight:560;line-height:1.45;overflow-wrap:anywhere;color:#eef2f7}
+.status-state{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-top:3px;padding:5px 10px;border-radius:999px;background:#ffffff0c;color:#c3cad8;font-size:11px;line-height:1.4;white-space:nowrap}
+.status-state::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.9}
+.status-state[data-state=operational],.status-state[data-state=observed]{background:#5bc5a21f;color:#85e8c4}
+.status-state[data-state=operational]::before,.status-state[data-state=observed]::before{box-shadow:0 0 8px currentColor}
+.status-state[data-state=degraded],.status-state[data-state=errors_observed],.status-state[data-state=quota]{background:#dab05f1f;color:#f7ce84}
+.status-state[data-state=down]{background:#e778851f;color:#ffb2bd}
+.status-body{display:flex;flex:1;flex-direction:column;padding-top:18px}
+.status-window{margin:0 0 12px;font-size:12px;color:#93a0b5}
+.status-metrics{display:grid;grid-template-columns:repeat(var(--status-metric-count,3),minmax(0,1fr));align-items:stretch;gap:10px;margin:0 0 16px}
+.status-metrics>div{min-width:0;min-height:84px;padding:4px 7px 6px 10px;border-left:1px solid #8ea7c029}
+.status-metrics dt{min-height:3.2em;font-size:11px;line-height:1.5;color:#b3bed0;overflow-wrap:anywhere}
+.status-metric-scope{display:block;margin-top:2px;font-size:10px;line-height:1.5;color:#8796ad}
+.status-metrics dd{margin:0;padding-top:6px;font-family:var(--mono,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:21px;line-height:1.2;color:#f4f6fb;font-variant-numeric:tabular-nums}
+.status-metrics .status-cache-capability{font-family:inherit;font-size:14px;font-weight:600;line-height:1.5;color:#c7f1e4}
+.status-cache-hour{display:block;margin-top:4px;color:#8796ad;font-size:10px;line-height:16px;overflow-wrap:anywhere}
+.status-slot-heading{margin-top:auto;font-size:11px;color:#93a0b5}
+.status-slots{display:grid;grid-template-columns:repeat(var(--status-cell-count,72),minmax(0,1fr));gap:2px;margin:10px 0 10px}
+.status-slots button{min-width:0;height:22px;padding:0;border:0;border-radius:2px;background:#2d3544;cursor:pointer;transition:transform .12s,filter .12s}
+.status-slots button:hover{transform:scaleY(1.18);filter:brightness(1.18)}
+.status-slots button[data-state=operational],.status-slots button[data-state=observed]{background:#5bc5a2}
+.status-slots button[data-state=degraded],.status-slots button[data-state=errors_observed]{background:#dab05f}
+.status-slots button[data-state=down]{background:#e77885}
+.status-module :focus-visible{outline:2px solid #91b6ff;outline-offset:4px}
+.status-detail{min-height:3.4em;margin:0;font-size:12px;line-height:1.7;color:#a9b4c6}
+.status-explanation{max-width:760px;margin-top:22px}
+.status-quota{margin-top:16px;padding:11px 13px;border:1px solid #dab05f2e;border-radius:12px;background:#dab05f14;color:#f7ce84;font-size:12px;line-height:1.7}
+.status-quota p{margin:0}
+.status-quota-title{font-weight:600}
+.status-quota [data-quota-countdown]{margin-top:4px;font-size:11px;font-variant-numeric:tabular-nums}
+
+/* Hero digest rendered by renderStatusSummary. */
+.status-summary{display:flex;align-items:center;gap:12px;min-height:44px;color:#b9c4d6;font-size:12px}
+.status-summary[hidden]{display:none}
+.status-summary-label{color:#8f9cb2}
+.status-summary-dots{display:flex;flex-wrap:wrap;gap:5px;max-width:73px}
+.status-summary-dots:empty{display:none}
+.status-summary-dots i{width:8px;height:8px;border-radius:50%;background:#3a4354}
+.status-summary-dots i[data-state=operational],.status-summary-dots i[data-state=observed]{background:#5bc5a2;box-shadow:0 0 8px #5bc5a299}
+.status-summary-dots i[data-state=degraded],.status-summary-dots i[data-state=errors_observed],.status-summary-dots i[data-state=quota]{background:#dab05f}
+.status-summary-dots i[data-state=down]{background:#e77885}
+.status-summary-text{color:#d7e0ee}
+.status-summary-arrow{margin-left:auto;color:#9cebd8;transition:transform .18s}
+.status-summary:hover .status-summary-arrow{transform:translateX(3px)}
+
+@media(max-width:650px){
+  .status-module{padding-top:56px}
+  .status-groups{grid-template-columns:minmax(0,1fr)}
+  .status-group{padding:18px 16px 14px}
+  .status-metrics>div{padding-inline:8px 3px}
+  .status-metrics dd{font-size:19px}
+}
+@media(prefers-reduced-motion:reduce){.status-slots button:hover{transform:none}}

@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statusMetrics, statusMetricDetails, cacheCapability, quotaNotice } from '../help/turtleroute-status-20261109-v11/group-availability.mjs';
+import { statusMetrics, statusMetricDetails, cacheCapability, quotaNotice, orderStatusGroups } from '../help/turtleroute-status-20261116-v12/group-availability.mjs';
+
+test('homepage promotes the major platforms without changing or merging published groups', () => {
+  const groups = [
+    { platform: 'other', name: 'A' },
+    { platform: 'anthropic', name: 'Claude 官方' },
+    { platform: 'kimi', name: 'Kimi' },
+    { platform: 'deepseek', name: 'DeepSeek' },
+    { platform: 'openai', name: '按量' },
+    { platform: 'openai', name: '订阅' },
+    { platform: 'other', name: 'B' },
+  ];
+  assert.deepEqual(orderStatusGroups(groups), [4, 5, 1, 3, 2, 0, 6].map(index => groups[index]));
+  assert.equal(groups[0].name, 'A');
+});
 const cacheStatus = (overrides = {}) => ({ cache_sample_state: 'ready', cache_scope: 'shared_account_pool', cache_statistic: 'best_complete_hour', cache_lookback_hours: 24, cache_hour_start: '2026-11-07T08:00:00Z', cache_hour_end: '2026-11-07T09:00:00Z', cache_read_rate: null, cache_peak_hour_rate: 97.2, ...overrides });
 const probeStatus = (overrides = {}) => ({ request_sample_state: 'none', probe_metrics_version: 1, probe_enabled: true, probe_sample_state: 'ready', probe_success_rate: 100, probe_ttft_p50_ms: 1200, probe_latency_p50_ms: 4500, ...overrides });
 const probeCache = (overrides = {}) => probeStatus({ window_minutes: 180, probe_cache_sample_state: 'ready', probe_cache_scope: 'group_probe', probe_cache_statistic: 'weighted_tokens', probe_cache_read_rate: 96.5, ...overrides });
