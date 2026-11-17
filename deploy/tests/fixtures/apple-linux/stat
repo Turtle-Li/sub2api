@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# The Apple script queries BSD stat for the fixture file's real owner and mode.
+case "${1:-}:${2:-}" in
+    -f:%u) shift 2; exec /usr/bin/stat -c '%u' -- "$@" ;;
+    -f:%Lp) shift 2; exec /usr/bin/stat -c '%a' -- "$@" ;;
+    *) exec /usr/bin/stat "$@" ;;
+esac

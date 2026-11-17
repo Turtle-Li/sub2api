@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+
+import json
+import sys
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if len(args) != 6 or args[0] != "-extract" or args[3:] != ["-o", "-", "-"]:
+        return 2
+    path, output_format = args[1:3]
+    try:
+        value = json.load(sys.stdin)
+        for key in path.split("."):
+            value = value[int(key)] if isinstance(value, list) else value[key]
+    except (IndexError, KeyError, TypeError, ValueError):
+        return 1
+    if output_format == "json":
+        print(json.dumps(value))
+    elif output_format == "raw" and isinstance(value, str):
+        print(value)
+    else:
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

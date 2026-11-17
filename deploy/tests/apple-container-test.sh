@@ -29,6 +29,10 @@ assert_missing() {
 
 export FAKE_CONTAINER_STATE="${STATE_DIR}"
 export PATH="${TEST_DIR}/fixtures/bin:${PATH}"
+if [[ "$(uname -s)" == Linux ]]; then
+    # The mock Apple CLI emits JSON; adapt the two BSD tools for this fixture.
+    export PATH="${TEST_DIR}/fixtures/apple-linux:${PATH}"
+fi
 export SUB2API_ENV_FILE="${ENV_FILE}"
 
 mkdir -p "${STATE_DIR}"
