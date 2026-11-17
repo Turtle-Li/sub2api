@@ -354,6 +354,7 @@ case "$format" in
   %u) printf '%s\n' "$uid" ;;
   %g) printf '%s\n' "$gid" ;;
   %a) printf '%s\n' "$mode" ;;
+  %u:%g:%a) printf '%s:%s:%s\n' "$uid" "$gid" "$mode" ;;
   %d:%i)
     case "$path" in
       */traffic-state|*/background/*)

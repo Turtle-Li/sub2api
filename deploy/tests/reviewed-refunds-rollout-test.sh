@@ -64,7 +64,7 @@ image_id="sha256:ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 sidecar_image_id="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 
 container_value() {
-  local object="$1" format="$2" name running health source profile public_dir admin_dir volume allowed_ref
+  local object="$1" format="$2" name running health source profile="" public_dir admin_dir volume allowed_ref
 
   case "$object" in
     sub2api-green|target-id)

@@ -11,10 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ShellCheck
-        run: command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+      - name: Install ShellCheck 0.11.0
+        run: |
+          cd "$RUNNER_TEMP"
+          archive=shellcheck-v0.11.0.linux.x86_64.tar.gz
+          curl --fail --silent --show-error --location --proto '=https' --retry 2 --max-time 90 \
+            --output "$archive" "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/$archive"
+          printf '%s  %s\n' 'b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6' "$archive" \
+            | sha256sum -c -
+          tar -xzf "$archive"
+          printf '%s\n' "$RUNNER_TEMP/shellcheck-v0.11.0" >> "$GITHUB_PATH"
       - name: Check deployment scripts
         run: |
+          test_tmp="$(mktemp -d "$HOME/.sub2api-ci.XXXXXX")"
+          trap 'rm -rf -- "$test_tmp"' EXIT
+          export TMPDIR="$test_tmp"
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/bash -n deploy/install-autodeploy.sh
