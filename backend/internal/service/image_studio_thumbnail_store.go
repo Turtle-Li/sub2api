@@ -59,7 +59,7 @@ func (s *BatchImageThumbnailService) Open(ctx context.Context, batchID, customID
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	if size > studioThumbnailMaxStoredBytes || normalizeBatchImageArchiveContentType(mime) != "image/jpeg" {
 		return nil, ErrBatchImageDownloadFailed
 	}

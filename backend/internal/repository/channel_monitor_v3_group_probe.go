@@ -57,7 +57,7 @@ func (r *channelMonitorV3Repository) GroupProbes(ctx context.Context, groups []i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var p service.ChannelMonitorV3GroupProbeResult
 		if err := rows.Scan(&p.ID, &p.GroupID, &p.Model, &p.Slot, &p.FinishedAt, &p.Outcome, &p.Category, &p.LatencyMs, &p.AccountID, &p.InputTokens, &p.OutputTokens, &p.AttemptCount, &p.MissingUsageAttempts, &p.FirstTokenMs, &p.CacheInputTokens, &p.CacheReadTokens); err != nil {

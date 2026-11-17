@@ -124,7 +124,7 @@ func (e *bridgeImageExecutor) Resume(ctx context.Context, a *Account, r OpenAIIm
 	if err != nil {
 		return nil, errImageBatchItemPending
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	if size < 1 || size > 128 {
 		return nil, errors.New("invalid bridge receipt")
 	}

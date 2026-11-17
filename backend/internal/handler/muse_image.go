@@ -79,7 +79,6 @@ func (h *OpenAIGatewayHandler) forwardMuseImage(
 	if creating {
 		releaseAccount()
 		releaseMedia()
-		body = nil
 	}
 	if err != nil {
 		log.Warn("muse_image.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))

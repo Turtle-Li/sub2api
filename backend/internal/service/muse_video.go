@@ -30,7 +30,7 @@ const (
 var (
 	museNativeTaskID  = regexp.MustCompile(`^task_[0-9a-f]{20}$`)
 	museVideoFilename = regexp.MustCompile(`^[0-9a-f]{32}\.(mp4|webm|mov)$`)
-	ErrMuseMediaModel = errors.New("Muse media model is not available on this endpoint")
+	ErrMuseMediaModel = errors.New("requested Muse media model is not available on this endpoint")
 )
 
 func (e GrokMediaEndpoint) IsMuseVideo() bool {
@@ -76,7 +76,7 @@ func (t museNativeVideoTask) public(id string) gin.H {
 // triggers failover: the native service may already have accepted the task.
 func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, id string, body []byte) (*OpenAIForwardResult, gin.H, error) {
 	if !endpoint.IsMuseVideo() || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityMuseVideo) {
-		return nil, nil, errors.New("Muse video account is not configured")
+		return nil, nil, errors.New("the Muse video account is not configured")
 	}
 	base, proxy, token, err := s.museUpstream(ctx, account)
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Cont
 		return result, task.public(publicID), nil
 	}
 	if publicID != id {
-		return nil, nil, errors.New("Muse video task ID did not match")
+		return nil, nil, errors.New("the Muse video task ID did not match")
 	}
 	completed := task.Status == "completed"
 	if completed && !museVideoFilename.MatchString(task.Result.Filename) {
@@ -129,7 +129,7 @@ func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Cont
 	if endpoint == MuseVideoContent {
 		if !completed {
 			writeGrokMediaErrorResponse(c, http.StatusConflict, "invalid_request_error", "Video content is not ready", "")
-			return nil, nil, errors.New("Muse video output is not ready")
+			return nil, nil, errors.New("video output from Muse is not ready")
 		}
 		if err := s.writeMuseVideoContent(ctx, c, account, base, proxy, task.Result.Filename); err != nil {
 			return nil, nil, err
@@ -164,11 +164,11 @@ func (s *OpenAIGatewayService) museUpstream(ctx context.Context, account *Accoun
 	base = strings.TrimSuffix(strings.TrimRight(base, "/"), "/v1") + "/v1"
 	proxy, err = ResolveAccountProxyURL(account)
 	if err != nil {
-		return "", "", "", errors.New("Muse account proxy is unavailable")
+		return "", "", "", errors.New("the Muse account proxy is unavailable")
 	}
 	token, _, err = s.GetAccessToken(ctx, account)
 	if err != nil {
-		return "", "", "", errors.New("Muse account credential is unavailable")
+		return "", "", "", errors.New("the Muse account credential is unavailable")
 	}
 	return base, proxy, token, nil
 }
@@ -192,7 +192,7 @@ func (s *OpenAIGatewayService) doMuseRequest(ctx context.Context, account *Accou
 	}
 	resp, err := s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
 	if err != nil {
-		return nil, errors.New("Muse media upstream connection failed")
+		return nil, errors.New("connection to Muse media upstream failed")
 	}
 	return resp, nil
 }
@@ -212,7 +212,7 @@ func museUpstreamError(c *gin.Context, status int, lookup bool) error {
 	case status == http.StatusTooManyRequests:
 		writeGrokMediaErrorResponse(c, status, "rate_limit_error", "Muse is temporarily rate limited", "")
 	}
-	return fmt.Errorf("Muse upstream returned HTTP %d", status)
+	return fmt.Errorf("upstream Muse returned HTTP %d", status)
 }
 
 func (s *OpenAIGatewayService) writeMuseVideoContent(ctx context.Context, c *gin.Context, account *Account, base, proxy, filename string) error {
@@ -223,14 +223,15 @@ func (s *OpenAIGatewayService) writeMuseVideoContent(ctx context.Context, c *gin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK || resp.ContentLength < 12 || resp.ContentLength > museVideoMaxBytes {
-		return errors.New("Muse video output is unavailable or exceeds the size limit")
+		return errors.New("video output from Muse is unavailable or exceeds the size limit")
 	}
 	reader := bufio.NewReader(resp.Body)
 	header, err := reader.Peek(12)
 	mediaType := museReferenceTypes[filename[strings.LastIndexByte(filename, '.'):]]
 	detected := sniffMuseMedia(header)
-	if err != nil || (detected != mediaType && !(mediaType == "video/quicktime" && detected == "video/mp4")) {
-		return errors.New("Muse output does not match its video format")
+	quicktimeMP4 := mediaType == "video/quicktime" && detected == "video/mp4"
+	if err != nil || (detected != mediaType && !quicktimeMP4) {
+		return errors.New("output from Muse does not match its video format")
 	}
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Type", mediaType)

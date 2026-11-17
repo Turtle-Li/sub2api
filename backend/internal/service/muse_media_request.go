@@ -52,7 +52,7 @@ func (r *MuseMediaRequest) AcquireLargeMediaSlot(ctx context.Context, bodyBytes 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
-		return nil, errors.New("Muse reference processing is busy; retry later")
+		return nil, errors.New("processing references for Muse is busy; retry later")
 	}
 }
 
@@ -81,7 +81,7 @@ type MuseMediaRequest struct {
 
 func ParseMuseMediaRequest(endpoint GrokMediaEndpoint, contentType string, body []byte) (*MuseMediaRequest, error) {
 	if int64(len(body)) > MuseMediaRequestMaxBytes {
-		return nil, fmt.Errorf("Muse request exceeds %d MiB", MuseMediaRequestMaxBytes>>20)
+		return nil, fmt.Errorf("request for Muse exceeds %d MiB", MuseMediaRequestMaxBytes>>20)
 	}
 	var req MuseMediaRequest
 	mediaType, params, _ := mime.ParseMediaType(contentType)
@@ -94,7 +94,7 @@ func ParseMuseMediaRequest(endpoint GrokMediaEndpoint, contentType string, body 
 		// silently discarding it (for example, a structured last_frame).
 		trimmed := bytes.TrimSpace(body)
 		if len(trimmed) == 0 || trimmed[0] != '{' {
-			return nil, errors.New("Muse requires a valid JSON object")
+			return nil, errors.New("a Muse request requires a valid JSON object")
 		}
 		decoder := json.NewDecoder(bytes.NewReader(trimmed))
 		decoder.DisallowUnknownFields()
@@ -102,7 +102,7 @@ func ParseMuseMediaRequest(endpoint GrokMediaEndpoint, contentType string, body 
 			return nil, errors.New("invalid Muse request fields; use the native media schema")
 		}
 		if _, err := decoder.Token(); err != io.EOF {
-			return nil, errors.New("Muse requires a single valid JSON object")
+			return nil, errors.New("a Muse request requires a single valid JSON object")
 		}
 	}
 	if req.Model == "" {
@@ -117,19 +117,19 @@ func ParseMuseMediaRequest(endpoint GrokMediaEndpoint, contentType string, body 
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
 		if endpoint != MuseImageEdit {
-			return nil, errors.New("Muse requires a prompt")
+			return nil, errors.New("a Muse request requires a prompt")
 		}
 		req.Prompt = "参考此图片并进行生图创作"
 	}
 	if len(req.Prompt)+len(req.Extra)+len(req.Size)+len(req.AspectRatio)+len(req.Resolution) > museMaxTextBytes {
-		return nil, errors.New("Muse text fields exceed 64 KiB")
+		return nil, errors.New("text fields in the Muse request exceed 64 KiB")
 	}
 	if req.Timeout < 0 || req.Timeout > 600 {
-		return nil, errors.New("Muse timeout must be between 1 and 600 seconds when specified")
+		return nil, errors.New("timeout for Muse must be between 1 and 600 seconds when specified")
 	}
 	if endpoint.IsMuseVideo() {
 		if req.Duration < 0 {
-			return nil, errors.New("Muse video duration must be positive")
+			return nil, errors.New("video duration for Muse must be positive")
 		}
 		if req.Duration == 0 {
 			req.Duration = museVideoDefaultSeconds
@@ -145,7 +145,7 @@ func ParseMuseMediaRequest(endpoint GrokMediaEndpoint, contentType string, body 
 			req.ResponseFormat = "url"
 		}
 		if req.ResponseFormat != "url" && req.ResponseFormat != "b64_json" {
-			return nil, errors.New("Muse image response_format must be url or b64_json")
+			return nil, errors.New("response_format for Muse images must be url or b64_json")
 		}
 		if req.N == 0 {
 			req.N = 1
@@ -180,7 +180,7 @@ func (r *MuseMediaRequest) collectReferences() error {
 	}
 	for _, group := range [][]any{r.Images, r.Videos, r.Audios, r.Files} {
 		if len(r.references)+len(group) > museMaxReferences {
-			return errors.New("Muse accepts at most 10 reference files")
+			return errors.New("a Muse request accepts at most 10 reference files")
 		}
 		for _, value := range group {
 			ref := museReferenceValue(value)
@@ -235,7 +235,7 @@ func (r *MuseMediaRequest) parseMultipart(reader *multipart.Reader) error {
 		if _, reference := groups[name]; reference {
 			count++
 			if count > museMaxReferences {
-				return errors.New("Muse accepts at most 10 reference files")
+				return errors.New("a Muse request accepts at most 10 reference files")
 			}
 			limit := museMaxReferenceBytes
 			if part.FileName() == "" {
@@ -250,7 +250,7 @@ func (r *MuseMediaRequest) parseMultipart(reader *multipart.Reader) error {
 			} else {
 				uploaded += len(data)
 				if uploaded > museMaxReferenceTotal {
-					return errors.New("Muse references exceed 100 MiB in total")
+					return errors.New("references for Muse exceed 100 MiB in total")
 				}
 				mediaType, err := museReferenceMIME(data, part.Header.Get("Content-Type"), part.FileName())
 				if err != nil {
@@ -315,11 +315,11 @@ func (r *MuseMediaRequest) PrepareReferences(ctx context.Context) ([]string, err
 		}
 		dataURL, mediaType, size, err := normalizeMuseReference(ctx, value)
 		if err != nil {
-			return nil, fmt.Errorf("Muse reference %d: %w", i+1, err)
+			return nil, fmt.Errorf("reference %d for Muse: %w", i+1, err)
 		}
 		total += size
 		if total > museMaxReferenceTotal {
-			return nil, errors.New("Muse references exceed 100 MiB in total")
+			return nil, errors.New("references for Muse exceed 100 MiB in total")
 		}
 		r.Images = append(r.Images, dataURL)
 		if strings.HasPrefix(mediaType, "image/") {

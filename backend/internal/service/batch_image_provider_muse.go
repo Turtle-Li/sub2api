@@ -62,7 +62,7 @@ func (e *museImageBatchExecutor) Execute(ctx context.Context, account *Account, 
 		return nil, err
 	}
 	if task.TaskID == "" || len(task.TaskID) > 256 {
-		return nil, errors.New("Muse returned no valid task ID")
+		return nil, errors.New("missing valid Muse task ID")
 	}
 	receipt := []byte(task.TaskID)
 	if err := e.store.Put(ctx, request.StateKey, "text/plain", bytes.NewReader(receipt), int64(len(receipt))); err != nil {
@@ -76,13 +76,13 @@ func (e *museImageBatchExecutor) Resume(ctx context.Context, account *Account, r
 		return nil, errImageBatchItemPending
 	}
 	if !exists {
-		return nil, errors.New("Muse submission outcome unknown; no durable task ID")
+		return nil, errors.New("submission outcome unknown for Muse; no durable task ID")
 	}
 	body, size, _, err := e.store.Open(ctx, request.StateKey)
 	if err != nil {
 		return nil, errImageBatchItemPending
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	if size <= 0 || size > 256 {
 		return nil, errors.New("invalid Muse task receipt")
 	}
@@ -98,30 +98,30 @@ func (e *museImageBatchExecutor) Resume(ctx context.Context, account *Account, r
 	case "queued", "processing":
 		return nil, errImageBatchItemPending
 	case "failed":
-		return nil, errors.New("Muse image task failed")
+		return nil, errors.New("image task failed on Muse")
 	case "completed":
 		if len(task.Data) != 1 {
-			return nil, errors.New("Muse returned invalid image count")
+			return nil, errors.New("invalid image count in Muse response")
 		}
 		return decodeMuseImage(task.Data[0].Base64)
 	default:
-		return nil, errors.New("Muse returned unknown task status")
+		return nil, errors.New("unknown task status in Muse response")
 	}
 }
 func decodeMuseImage(encoded string) (*OpenAIImageBatchItemResult, error) {
 	if len(encoded) == 0 || len(encoded) > base64.StdEncoding.EncodedLen(museImageMaxBytes) {
-		return nil, errors.New("Muse image exceeds size limit")
+		return nil, errors.New("image from Muse exceeds size limit")
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil || len(data) == 0 || len(data) > museImageMaxBytes {
-		return nil, errors.New("Muse returned invalid image bytes")
+		return nil, errors.New("invalid image bytes in Muse response")
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 64*1024*1024 || (format != "png" && format != "jpeg" && format != "webp") {
-		return nil, errors.New("Muse returned unsupported image content")
+		return nil, errors.New("unsupported image content in Muse response")
 	}
 	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-		return nil, errors.New("Muse returned corrupt image content")
+		return nil, errors.New("corrupt image content in Muse response")
 	}
 	return &OpenAIImageBatchItemResult{Base64Data: encoded, MimeType: "image/" + format}, nil
 }
@@ -130,7 +130,7 @@ func (e *museImageBatchExecutor) call(ctx context.Context, account *Account, met
 		return nil, ErrBatchImageProviderUnsupportedAccount
 	}
 	if e.gateway == nil || e.gateway.httpUpstream == nil || e.gateway.concurrencyService == nil {
-		return nil, errors.New("Muse account runtime is unavailable")
+		return nil, errors.New("the Muse account runtime is unavailable")
 	}
 	if _, err := ResolveAccountProxyURL(account); err != nil {
 		return nil, err
@@ -181,24 +181,24 @@ func (e *museImageBatchExecutor) call(ctx context.Context, account *Account, met
 	}
 	resp, err := send(req, "", account)
 	if err != nil {
-		return nil, errors.New("Muse transport failed")
+		return nil, errors.New("transport failed for Muse")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	expected := http.StatusOK
 	if method == http.MethodPost {
 		expected = http.StatusAccepted
 	}
 	if resp.StatusCode != expected {
-		return nil, errors.New("Muse request rejected")
+		return nil, errors.New("request rejected by Muse")
 	}
 	limit := int64(base64.StdEncoding.EncodedLen(museImageMaxBytes) + 65536)
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil || int64(len(data)) > limit {
-		return nil, errors.New("Muse response exceeds size limit")
+		return nil, errors.New("response from Muse exceeds size limit")
 	}
 	var task museImageTask
 	if err := json.Unmarshal(data, &task); err != nil {
-		return nil, errors.New("Muse response is invalid")
+		return nil, errors.New("invalid response from Muse")
 	}
 	return &task, nil
 }

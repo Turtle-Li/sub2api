@@ -25,7 +25,7 @@ func (r *apiKeyRepository) ListImageStudioKeys(ctx context.Context, userID int64
 	if err != nil {
 		return nil, nil, fmt.Errorf("list image studio keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]service.ImageStudioKey, 0)
 	var total int64
 	for rows.Next() {

@@ -49,7 +49,7 @@ AND ($3::bigint = 0 OR (j.id, i.id) < ($3, $4))`
 	if err != nil {
 		return nil, fmt.Errorf("read image studio gallery: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	result := make([]service.BatchImageGalleryRecord, 0)
 	for rows.Next() {
 		job, item := &service.BatchImageJob{}, &service.BatchImageItem{}

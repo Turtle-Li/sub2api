@@ -253,7 +253,7 @@ func channelMonitorV3ProbeResponseVerdict(body []byte) string {
 	if !terminal {
 		return "incomplete"
 	}
-	if !(text || reasoning && budgetEnd) {
+	if !text && (!reasoning || !budgetEnd) {
 		return "empty"
 	}
 	return "valid"
@@ -277,10 +277,9 @@ func (w *channelMonitorV3ProbeWriter) Write(b []byte) (int, error) {
 		w.status = http.StatusOK
 	}
 	if w.body.Len()+len(b) <= 64*1024 {
-		w.body.Write(b)
-	} else {
-		w.overflow = true
+		return w.body.Write(b)
 	}
+	w.overflow = true
 	return len(b), nil
 }
 func (w *channelMonitorV3ProbeWriter) Flush() {}

@@ -68,16 +68,16 @@ func museReferenceMIME(data []byte, declared, name string) (string, error) {
 	// Never let a claimed audio or document type bypass the image audit.
 	if strings.HasPrefix(detected, "image/") || strings.HasPrefix(mediaType, "image/") {
 		if !validMuseImageType(data, mediaType, detected) {
-			return "", errors.New("Muse reference does not match its declared image format")
+			return "", errors.New("reference for Muse does not match its declared image format")
 		}
 	}
 	return mediaType, nil
 }
 
 func validMuseImageType(data []byte, mediaType, detected string) bool {
-	if mediaType != detected &&
-		!((mediaType == "image/heic" || mediaType == "image/heif" || mediaType == "image/avif") &&
-			(detected == "image/heic" || detected == "image/heif" || detected == "image/avif")) {
+	compatibleISO := (mediaType == "image/heic" || mediaType == "image/heif" || mediaType == "image/avif") &&
+		(detected == "image/heic" || detected == "image/heif" || detected == "image/avif")
+	if mediaType != detected && !compatibleISO {
 		return false
 	}
 	switch mediaType {
@@ -175,10 +175,10 @@ func validateMuseReferenceURL(u *url.URL) error {
 	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if isBlockedHostname(host) || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
-		return errors.New("Muse reference URL must resolve to a public address")
+		return errors.New("a Muse reference URL must resolve to a public address")
 	}
 	if address, err := netip.ParseAddr(host); err == nil && !isMusePublicAddress(address) {
-		return errors.New("Muse reference URL must resolve to a public address")
+		return errors.New("a Muse reference URL must resolve to a public address")
 	}
 	return nil
 }
@@ -217,11 +217,11 @@ func dialMusePublicReference(ctx context.Context, network, address string) (net.
 	}
 	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil || len(addresses) == 0 {
-		return nil, errors.New("Muse reference host could not be resolved")
+		return nil, errors.New("the Muse reference host could not be resolved")
 	}
 	for _, ip := range addresses {
 		if !isMusePublicAddress(ip) {
-			return nil, errors.New("Muse reference URL must resolve to a public address")
+			return nil, errors.New("a Muse reference URL must resolve to a public address")
 		}
 	}
 	// Use the checked IP for the actual connection; net/http still verifies the
@@ -231,7 +231,7 @@ func dialMusePublicReference(ctx context.Context, network, address string) (net.
 			return conn, nil
 		}
 	}
-	return nil, errors.New("Muse reference host could not be reached")
+	return nil, errors.New("the Muse reference host could not be reached")
 }
 
 func fetchMuseReference(ctx context.Context, rawURL string) ([]byte, string, string, error) {

@@ -83,7 +83,7 @@ func (e *workBuddyImageExecutor) Execute(ctx context.Context, a *Account, r Open
 	if err != nil {
 		return nil, errors.New("WorkBuddy submission outcome unknown")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New("WorkBuddy image request failed")
 	}

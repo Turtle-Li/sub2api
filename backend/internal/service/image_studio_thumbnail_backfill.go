@@ -44,7 +44,7 @@ func (s *BatchImageDownloadService) backfillThumbnails(ctx context.Context, owne
 		return err
 	}
 	if permit != nil {
-		defer permit.Release(context.WithoutCancel(ctx))
+		defer func() { _ = permit.Release(context.WithoutCancel(ctx)) }()
 	}
 	if err := previews.Repo.DeferBatchImageThumbnailBackfill(ctx, job.BatchID, time.Now().Add(2*time.Minute)); err != nil {
 		return err
@@ -72,7 +72,7 @@ func (s *BatchImageDownloadService) backfillThumbnails(ctx context.Context, owne
 	if err != nil {
 		return ErrBatchImageResultMissing
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), batchImageDownloadScannerMaxLineBytes)
 	for scanner.Scan() {

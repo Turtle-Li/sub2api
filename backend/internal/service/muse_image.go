@@ -167,7 +167,7 @@ func (t *MuseImageTask) UsageResult() *OpenAIForwardResult {
 // a generation when the original client or provider connection goes away.
 func (s *OpenAIGatewayService) ForwardMuseImage(ctx context.Context, c *gin.Context, account *Account, id, idempotencyKey string, body []byte) (*MuseImageTask, error) {
 	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityMuseImage) {
-		return nil, errors.New("Muse image account is not configured")
+		return nil, errors.New("the Muse image account is not configured")
 	}
 	base, proxy, token, err := s.museUpstream(ctx, account)
 	if err != nil {
@@ -240,12 +240,12 @@ func (s *OpenAIGatewayService) WriteMuseImageContent(ctx context.Context, c *gin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > museImageResultMaxBytes {
-		return errors.New("Muse image output is unavailable")
+		return errors.New("image output from Muse is unavailable")
 	}
 	data, err := readUpstreamResponseBodyLimited(resp.Body, museImageResultMaxBytes)
 	mediaType := museReferenceTypes[path.Ext(filename)]
 	if err != nil || !validMuseImageType(data, mediaType, sniffMuseMedia(data)) {
-		return errors.New("Muse output does not match its image format")
+		return errors.New("output from Muse does not match its image format")
 	}
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Length", strconv.Itoa(len(data)))
@@ -260,7 +260,7 @@ func (s *OpenAIGatewayService) ReserveMuseImageSubmission(ctx context.Context, k
 		return nil
 	}
 	if s == nil || s.cache == nil {
-		return errors.New("Muse image submission cache is unavailable")
+		return errors.New("the Muse image submission cache is unavailable")
 	}
 	bindingID := "muse-image-admission:" + scopedKey
 	lease := grokVideoPendingBillingKey(bindingID, key.UserID, key.ID)
@@ -292,7 +292,7 @@ func (s *OpenAIGatewayService) ResolveMuseImageSubmission(ctx context.Context, k
 
 func (s *OpenAIGatewayService) SettleMuseImage(ctx context.Context, input *OpenAIRecordUsageInput) error {
 	if s == nil || s.cache == nil || s.usageBillingRepo == nil || input == nil || input.Result == nil || input.APIKey == nil {
-		return errors.New("Muse image settlement is unavailable")
+		return errors.New("settlement for the Muse image is unavailable")
 	}
 	result, key := input.Result, input.APIKey
 	task := grokVideoPendingBillingKey("muse-image-settlement:"+result.ResponseID, key.UserID, key.ID)
@@ -320,11 +320,11 @@ func (s *OpenAIGatewayService) SettleMuseImage(ctx context.Context, input *OpenA
 	}
 	result.BillableImageSize, result.museImageUnitPrice = s.museImageWalletPrice(ctx, key, result.ImageSize)
 	if result.museImageUnitPrice <= 0 {
-		return errors.New("Muse image price is unavailable")
+		return errors.New("the Muse image price is unavailable")
 	}
 	claimed, err := s.cache.ClaimGrokVideoBilled(ctx, task, 20*time.Second)
 	if err != nil || !claimed {
-		return errors.New("Muse image settlement is in progress")
+		return errors.New("settlement for the Muse image is in progress")
 	}
 	if err := s.RecordUsage(ctx, input); err != nil {
 		return err

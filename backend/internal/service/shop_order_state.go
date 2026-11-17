@@ -13,10 +13,6 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-func createShopFulfillmentTx(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder, p ShopProduct) error {
-	return createShopFulfillmentSnapshotTx(ctx, client, o, p, nil)
-}
-
 func createShopFulfillmentSnapshotTx(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder, p ShopProduct, card *ShopDaypassCheckout) error {
 	snapshot, err := shopProductMap(p)
 	if err != nil {

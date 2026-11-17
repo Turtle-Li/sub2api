@@ -45,8 +45,12 @@ func (c *batchImageThumbnailCache) get(key string) []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if entry := c.entries[key]; entry != nil {
+		value, ok := entry.Value.(batchImageThumbnailValue)
+		if !ok {
+			panic("invalid image studio thumbnail cache entry")
+		}
 		c.order.MoveToFront(entry)
-		return entry.Value.(batchImageThumbnailValue).data
+		return value.data
 	}
 	return nil
 }
@@ -67,7 +71,10 @@ func (c *batchImageThumbnailCache) put(key string, data []byte) {
 	c.size += len(data)
 	for c.size > studioThumbnailCacheBytes || len(c.entries) > studioThumbnailCacheEntries {
 		entry := c.order.Back()
-		value := entry.Value.(batchImageThumbnailValue)
+		value, ok := entry.Value.(batchImageThumbnailValue)
+		if !ok {
+			panic("invalid image studio thumbnail cache entry")
+		}
 		delete(c.entries, value.key)
 		c.size -= len(value.data)
 		c.order.Remove(entry)
