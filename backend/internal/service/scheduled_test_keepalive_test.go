@@ -18,14 +18,16 @@ import (
 
 type keepAlivePlanRepoStub struct {
 	ScheduledTestPlanRepository
-	created  bool
-	plans    []*ScheduledTestPlan
-	claimed  bool
-	claims   int
-	advanced int
-	updates  int
-	success  bool
-	nextRun  time.Time
+	created      bool
+	plans        []*ScheduledTestPlan
+	claimed      bool
+	claims       int
+	advanced     int
+	updates      int
+	success      bool
+	claimedAt    time.Time
+	claimNextRun time.Time
+	nextRun      time.Time
 }
 
 func (r *keepAlivePlanRepoStub) Create(_ context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
@@ -41,9 +43,10 @@ func (r *keepAlivePlanRepoStub) Update(_ context.Context, plan *ScheduledTestPla
 	return plan, nil
 }
 
-func (r *keepAlivePlanRepoStub) ClaimIdleRun(_ context.Context, _ *ScheduledTestPlan, _ time.Time, next time.Time) (bool, error) {
+func (r *keepAlivePlanRepoStub) ClaimIdleRun(_ context.Context, _ *ScheduledTestPlan, startedAt time.Time, next time.Time) (bool, error) {
 	r.claims++
-	r.nextRun = next
+	r.claimedAt = startedAt
+	r.claimNextRun = next
 	return r.claimed, nil
 }
 
@@ -213,7 +216,10 @@ func TestScheduledTestRunner_KeepAliveAdmissionAndOutcomes(t *testing.T) {
 				} else {
 					require.Equal(t, 1, tester.calls, "never retry an outbound attempt")
 					require.InDelta(t, 90, tester.deadline.Seconds(), 2)
-					require.False(t, repo.nextRun.Before(now.Add(6*time.Hour)), "cooldown must survive crashes")
+					require.False(t, repo.claimedAt.IsZero())
+					cooldownEnd := repo.claimedAt.Add(6 * time.Hour)
+					require.False(t, repo.claimNextRun.Before(cooldownEnd), "claim must persist the cooldown before the attempt")
+					require.False(t, repo.nextRun.Before(cooldownEnd), "recording the result must preserve the cooldown")
 				}
 			}
 			completed := !tc.busy && !tc.recent && !tc.lost
