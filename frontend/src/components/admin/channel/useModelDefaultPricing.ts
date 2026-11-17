@@ -4,7 +4,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { normalizePricingCurrency, perTokenToMTok, type PricingFormEntry } from './types'
 
 const priceFields = [
-  'input_price', 'output_price', 'cache_write_price', 'cache_write_1h_price',
+  'input_price', 'output_price', 'cache_write_price', 'cache_write_1h_price', 'cache_write_12h_price',
   'cache_read_price', 'image_input_price', 'image_output_price',
 ] as const
 

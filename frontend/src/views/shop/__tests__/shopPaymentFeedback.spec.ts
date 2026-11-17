@@ -6,7 +6,7 @@ import { PAYMENT_RECOVERY_STORAGE_KEY, readPaymentRecoverySnapshot } from '@/com
 
 const createOrder = vi.hoisted(() => vi.fn())
 const push = vi.hoisted(() => vi.fn())
-vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: '1' } }), useRouter: () => ({ push }) }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: '1' }, query: {} }), useRouter: () => ({ push }) }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ contactInfo: '' }) }))
 vi.mock('@/api/payment', () => ({ paymentAPI: { getCheckoutInfo: async () => ({ data: { methods: { alipay: { currency: 'CNY' } } } }) } }))
 vi.mock('@/api/shop', () => ({ shopAPI: {

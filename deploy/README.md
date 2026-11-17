@@ -283,6 +283,15 @@ boundaries. Use the same immutable image for both stages and follow the ordered
 inventory/fence/CAS gates in
 `../docs/operations/SUB2_DUAL_NODE_RUNTIME_CERT_EGRESS.md`.
 
+### Release the application with the current Caddy routes
+
+When the Caddy template has no changes to publish and live ingress includes
+separately managed routes such as `api-proxy`, dispatch the production
+workflow with `deployment_target=aws-candidate` and `deploy_caddy=false`.
+The same verified image receiver and blue-green helper still switch the
+application upstream. Only the subsequent template upload is skipped.
+Review the live Caddy routes before and after this mode.
+
 ### Build an image without updating the old origin
 
 Dispatch `.github/workflows/sub2api-production-deploy.yml` from `main` with

@@ -13,6 +13,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Tests that exercise real commits must remove their fixtures from the shared
+// integration database. Transaction-scoped fixtures already roll back.
+func cleanupCommittedFixture(t *testing.T, deleteSQL string, id int64) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, err := integrationDB.ExecContext(context.Background(), deleteSQL, id)
+		require.NoError(t, err)
+	})
+}
+
 func mustCreateUser(t *testing.T, client *dbent.Client, u *service.User) *service.User {
 	t.Helper()
 	ctx := context.Background()
@@ -91,12 +101,14 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 		SetRateMultiplier(g.RateMultiplier).
 		SetIsExclusive(g.IsExclusive).
 		SetForceOpenaiFast(g.ForceOpenAIFast).
+		SetForceOpenaiUltrafast(g.ForceOpenAIUltrafast).
 		SetFreeOpenaiFast(g.FreeOpenAIFast).
 		SetModelAllowlist(service.DomainGroupModelAllowlist(g.ModelAllowlist)).
 		SetCodexModelsManifestConfig(g.CodexModelsManifestConfig).
 		SetProfitControlEnabled(g.ProfitControlEnabled).
 		SetProfitMinMargin(g.ProfitMinMargin).
-		SetProfitSafetyBuffer(g.ProfitSafetyBuffer)
+		SetProfitSafetyBuffer(g.ProfitSafetyBuffer).
+		SetRequirePrivacySet(g.RequirePrivacySet)
 	if g.Description != "" {
 		create.SetDescription(g.Description)
 	}

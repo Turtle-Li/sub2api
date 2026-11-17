@@ -94,6 +94,29 @@ describe('ccswitchImport utils', () => {
     expect(params.get('endpoint')).toBe(endpoint)
     expect(params.get('model')).toBe(OPENAI_CC_SWITCH_CODEX_MODEL)
     expect(atob(params.get('usageScript') || '')).toBe(baseInput.usageScript)
+    const payload = JSON.parse(decodeBase64Utf8(params.get('config') || ''))
+    expect(params.get('configFormat')).toBe('json')
+    const configEndpoint = endpoint.endsWith('/v1') ? endpoint : `${endpoint}/v1`
+    expect(payload.config).toContain(`base_url = "${configEndpoint}"`)
+    expect(payload.config).toContain(`model = "${OPENAI_CC_SWITCH_CODEX_MODEL}"`)
+    expect(payload.auth.OPENAI_API_KEY).toBe(baseInput.apiKey)
+    expect(payload.config).toContain('supports_websockets = true')
+    expect(payload.config).toContain('[features]\nresponses_websockets_v2 = true')
+  })
+
+  it('preserves UTF-8 endpoints and escaped API keys in the embedded settings', () => {
+    const apiKey = 'sk-"test\\key'
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      apiKey,
+      baseUrl: 'https://example.com/网关',
+      platform: 'openai',
+      clientType: 'claude'
+    }))
+    const payload = JSON.parse(decodeBase64Utf8(params.get('config') || ''))
+    expect(payload.config).toContain('base_url = "https://example.com/网关/v1"')
+    expect(payload.auth.OPENAI_API_KEY).toBe(apiKey)
+    expect(params.get('apiKey')).toBe(apiKey)
   })
 
   it.each([
@@ -114,6 +137,7 @@ describe('ccswitchImport utils', () => {
     expect(params.get('app')).toBe('grokbuild')
     expect(params.get('endpoint')).toBe('https://api.example.com/v1')
     expect(params.get('model')).toBe(GROK_CC_SWITCH_MODEL)
+    expect(params.has('config')).toBe(false)
   })
 
   it.each([

@@ -29,6 +29,8 @@ func TestDailyRequestQuota_SettlementDeduplicatesAndResets(t *testing.T) {
 					"quota_reset_timezone": "Asia/Shanghai", "quota_daily_used": 7,
 				},
 			})
+			cleanupCommittedFixture(t, "DELETE FROM accounts WHERE id = $1", account.ID)
+			cleanupCommittedFixture(t, "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
 			accountRepo := newAccountRepositoryWithSQL(client, integrationDB, nil)
 			stale, err := accountRepo.GetByID(ctx, account.ID)
 			require.NoError(t, err)
@@ -97,6 +99,8 @@ func TestDailyRequestQuota_FreeBatchCaptureCountsSuccessfulItemsOnce(t *testing.
 		Name: "batch-request-quota-" + uuid.NewString(), Type: service.AccountTypeAPIKey,
 		Extra: map[string]any{"quota_daily_request_limit": 10},
 	})
+	cleanupCommittedFixture(t, "DELETE FROM accounts WHERE id = $1", account.ID)
+	cleanupCommittedFixture(t, "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
 	repo := NewUsageBillingRepository(client, integrationDB)
 	cmd := &service.BatchImageBalanceHoldCommand{
 		RequestID: uuid.NewString(), BatchID: uuid.NewString(), APIKeyID: account.ID,

@@ -182,7 +182,8 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 // the shared response, and never synthesizes models absent from this account.
 func projectAccountModelAliases(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
 	crossPlatform := group != nil && group.Platform != PlatformComposite && account.Platform != group.Platform
-	if !crossPlatform && (account.IsOpenAIPassthroughEnabled() || len(account.GetModelMapping()) == 0) {
+	passthrough := account.IsOpenAIPassthroughEnabled()
+	if !crossPlatform && ((passthrough && !account.IsOpenAIPassthroughModelFilterEnabled()) || len(account.GetModelMapping()) == 0) {
 		return body, nil
 	}
 	field, idField := "data", "id"
@@ -245,6 +246,10 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 			continue
 		}
 		target, matched := account.ResolveMappedModel(id)
+		if passthrough {
+			// Filtering changes eligibility, never the upstream/public model name.
+			target, matched = id, account.IsModelSupported(id)
+		}
 		raw, available := byID[strings.TrimSpace(target)]
 		if (!matched && len(account.GetModelMapping()) > 0) || !available {
 			continue

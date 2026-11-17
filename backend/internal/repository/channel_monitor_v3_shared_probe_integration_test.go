@@ -15,9 +15,13 @@ func TestChannelMonitorV3SharedProbePoolsRecheckPublicBindings(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
 	a := mustCreateAccount(t, client, &service.Account{Name: "shared-" + uuid.NewString(), Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey})
+	cleanupCommittedFixture(t, `DELETE FROM accounts WHERE id=$1`, a.ID)
 	source := mustCreateGroup(t, client, &service.Group{Name: "source-" + uuid.NewString(), Platform: service.PlatformDeepseek})
+	cleanupCommittedFixture(t, `DELETE FROM groups WHERE id=$1`, source.ID)
 	follower := mustCreateGroup(t, client, &service.Group{Name: "follower-" + uuid.NewString(), Platform: service.PlatformKimi})
+	cleanupCommittedFixture(t, `DELETE FROM groups WHERE id=$1`, follower.ID)
 	private := mustCreateGroup(t, client, &service.Group{Name: "private-" + uuid.NewString(), Platform: service.PlatformKimi, IsExclusive: true})
+	cleanupCommittedFixture(t, `DELETE FROM groups WHERE id=$1`, private.ID)
 	for _, id := range []int64{source.ID, follower.ID, private.ID} {
 		mustBindAccountToGroup(t, client, a.ID, id, 1)
 	}

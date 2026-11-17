@@ -272,7 +272,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 		c.Status(http.StatusOK)
 	}
 	session := newAntigravityCompatStreamSession(originalModel, startTime, adapter, writer)
-	events, stopScanner, maxLineSize := s.startAntigravityCompatScanner(resp.Body)
+	events, stopScanner, maxLineSize, queueBudget := s.startAntigravityCompatScanner(resp.Body)
 	defer stopScanner()
 
 	timeout := s.antigravityCompatStreamTimeout()
@@ -288,9 +288,12 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 	for {
 		select {
 		case event, open := <-events:
+			if open {
+				queueBudget.release(len(event.line))
+			}
 			if !open {
 				if !session.hasMeaningfulData() && !writer.Disconnected() {
-					return nil, antigravityCompatEmptyStreamError()
+					return finishAntigravityCompatNoContent(c, session, "empty_stream")
 				}
 				return session.finish()
 			}
@@ -306,7 +309,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 				return session.collectResult(true), nil
 			}
 			if !session.hasMeaningfulData() {
-				return nil, antigravityCompatEmptyStreamError()
+				return finishAntigravityCompatNoContent(c, session, "stream_timeout")
 			}
 			logger.LegacyPrintf("service.antigravity_gateway", "Stream data interval timeout (%s)", prefix)
 			writeAntigravityCompatStreamError(c, adapter, writer, "stream_timeout")
@@ -322,7 +325,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 
 func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 	body io.Reader,
-) (<-chan antigravityCompatScanEvent, func(), int) {
+) (<-chan antigravityCompatScanEvent, func(), int, *sseQueueBudget) {
 	maxLineSize := defaultMaxLineSize
 	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -330,17 +333,23 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 	scanner := bufio.NewScanner(body)
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
+	scanner.Split(newBoundedSSESplit(s.antigravitySSEConfig(), maxLineSize, nil))
 
+	queueBudget := newSSEQueueBudget(s.antigravitySSEConfig())
 	events := make(chan antigravityCompatScanEvent, 16)
 	done := make(chan struct{})
 	go func() {
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		send := func(event antigravityCompatScanEvent) bool {
+			if !queueBudget.acquire(len(event.line), done) {
+				return false
+			}
 			select {
 			case events <- event:
 				return true
 			case <-done:
+				queueBudget.release(len(event.line))
 				return false
 			}
 		}
@@ -353,7 +362,7 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 			send(antigravityCompatScanEvent{err: err})
 		}
 	}()
-	return events, func() { close(done) }, maxLineSize
+	return events, func() { close(done) }, maxLineSize, queueBudget
 }
 
 func (s *AntigravityGatewayService) antigravityCompatStreamTimeout() time.Duration {
@@ -404,7 +413,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatReadError(
 	prefix string,
 ) (*antigravityStreamResult, error) {
 	if !session.hasMeaningfulData() && !session.writer.Disconnected() {
-		return nil, antigravityCompatEmptyStreamError()
+		return finishAntigravityCompatNoContent(c, session, "stream_read_error")
 	}
 	if disconnect, handled := handleStreamReadError(err, session.writer.Disconnected(), prefix); handled {
 		return session.collectResult(disconnect), nil
@@ -416,6 +425,14 @@ func (s *AntigravityGatewayService) handleAntigravityCompatReadError(
 	}
 	writeAntigravityCompatStreamError(c, session.adapter, session.writer, "stream_read_error")
 	return nil, fmt.Errorf("stream read error: %w", err)
+}
+
+func finishAntigravityCompatNoContent(c *gin.Context, session *antigravityCompatStreamSession, reason string) (*antigravityStreamResult, error) {
+	if IsResponseCommitted(c) && c.Writer.Written() {
+		writeAntigravityCompatStreamError(c, session.adapter, session.writer, reason)
+		return session.collectResult(false), newAntigravityCompatCommittedNoContentError(reason)
+	}
+	return nil, antigravityCompatEmptyStreamError()
 }
 
 func writeAntigravityCompatStreamError(

@@ -57,6 +57,7 @@ const cardSelection = computed<ShopDaypassSelection | undefined>(() => {
   if (!product.value?.daypass_cards || !cardInventory.value || cardLoading.value || cardError.value) return
   if (cardMode.value === 'new') return { action: 'new' }
   if (selectedCard.value) return { action: 'renew', card_id: selectedCard.value.card_id }
+  return undefined
 })
 const estimate = computed(() => {
   if (!cardSelection.value || !cardInventory.value) return

@@ -204,13 +204,13 @@
           @toggle-schedulable="handleBulkToggleSchedulable"
           @add-to-pool="openAssignToPool"
         />
-        <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden" :aria-busy="loading" :inert="loading && accounts.length > 0">
         <!-- 页面单滚动条（flow 模式）下表格没有有界滚动容器，不启用虚拟化 -->
         <DataTable
           ref="dataTableRef"
           :columns="cols"
           :data="accounts"
-          :loading="loading"
+          :loading="loading && accounts.length === 0"
           row-key="id"
           :server-side-sort="true"
           @sort="handleSort"

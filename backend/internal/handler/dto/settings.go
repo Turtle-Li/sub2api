@@ -435,6 +435,7 @@ type PublicSettings struct {
 	ShopEntryEnabled                    bool                            `json:"shop_entry_enabled"`
 	PricingCurrency                     service.PricingCurrencySettings `json:"pricing_currency"`
 	// PaymentBalanceDisabled lets the user shell derive recharge-only and subscription-only site modes.
+	MCPEnabled             bool   `json:"mcp_enabled"`
 	PaymentBalanceDisabled bool   `json:"payment_balance_disabled"`
 	Version                string `json:"version"`
 	// 服务器全局时区（IANA 名称与当前 UTC 偏移，如 "Asia/Shanghai" / "+08:00"）。

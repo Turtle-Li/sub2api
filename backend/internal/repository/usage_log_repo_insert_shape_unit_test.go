@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,14 @@ var (
 	usageLogStaticInsertShapeRe = regexp.MustCompile(`(?s)INSERT INTO usage_logs \((.*?)\) VALUES \((.*?)\)`)
 	usageLogPlaceholderRe       = regexp.MustCompile(`\$(\d+)`)
 )
+
+func usageLogColumnArgIndex(t *testing.T, column string) int {
+	t.Helper()
+	columns := strings.Split(strings.TrimPrefix(usageLogSelectColumns, "id, "), ", ")
+	idx := slices.Index(columns, column)
+	require.NotEqual(t, -1, idx, "missing usage log column %s", column)
+	return idx
+}
 
 // newSQLCapturingMock 返回把实际下发 SQL 记录到 captured 的 sqlmock；语句一律视为匹配，
 // 参数仍由 WithArgs 校验。
@@ -129,7 +138,8 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	idx := len(prepared.args) - 6
+	idx := usageLogColumnArgIndex(t, "upstream_request_id")
+	require.Equal(t, idx+1, usageLogColumnArgIndex(t, "session_id"))
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)
@@ -150,7 +160,7 @@ func TestPrepareUsageLogInsert_SettlementCurrencyWiring(t *testing.T) {
 		Currency: "cny", CreatedAt: time.Now().UTC(),
 	})
 
-	currencyIdx := len(prepared.args) - 3
+	currencyIdx := usageLogColumnArgIndex(t, "currency")
 	require.Equal(t, "text", usageLogInsertArgTypes[currencyIdx])
 	require.Equal(t, service.PricingCurrencyCNY, prepared.args[currencyIdx])
 

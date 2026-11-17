@@ -192,7 +192,9 @@ func TestChannelMonitorV3ProbeCaptureOverflowFailsClosed(t *testing.T) {
 
 func TestChannelMonitorV3ProbePreservesOwnedDeadline(t *testing.T) {
 	for _, detach := range []func(context.Context) (context.Context, context.CancelFunc){
-		detachUpstreamContext,
+		func(ctx context.Context) (context.Context, context.CancelFunc) {
+			return detachUpstreamContext(ctx)
+		},
 		func(ctx context.Context) (context.Context, context.CancelFunc) {
 			return detachStreamUpstreamContext(ctx, true)
 		},

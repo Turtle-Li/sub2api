@@ -128,7 +128,7 @@ func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Cont
 	c.Header("Cache-Control", "private, no-store")
 	if endpoint == MuseVideoContent {
 		if !completed {
-			writeGrokMediaErrorResponse(c, http.StatusConflict, "invalid_request_error", "Video content is not ready")
+			writeGrokMediaErrorResponse(c, http.StatusConflict, "invalid_request_error", "Video content is not ready", "")
 			return nil, nil, errors.New("Muse video output is not ready")
 		}
 		if err := s.writeMuseVideoContent(ctx, c, account, base, proxy, task.Result.Filename); err != nil {
@@ -204,13 +204,13 @@ func validMuseTaskStatus(status string) bool {
 func museUpstreamError(c *gin.Context, status int, lookup bool) error {
 	switch {
 	case status == http.StatusNotFound && lookup:
-		writeGrokMediaErrorResponse(c, status, "not_found_error", "Muse task not found")
+		writeGrokMediaErrorResponse(c, status, "not_found_error", "Muse task not found", "")
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
-		writeGrokMediaErrorResponse(c, status, "invalid_request_error", "Muse rejected the media parameters or references; check format, size and reference video duration")
+		writeGrokMediaErrorResponse(c, status, "invalid_request_error", "Muse rejected the media parameters or references; check format, size and reference video duration", "")
 	case status == http.StatusConflict:
-		writeGrokMediaErrorResponse(c, status, "invalid_request_error", "Muse Idempotency-Key was reused with a different request")
+		writeGrokMediaErrorResponse(c, status, "invalid_request_error", "Muse Idempotency-Key was reused with a different request", "")
 	case status == http.StatusTooManyRequests:
-		writeGrokMediaErrorResponse(c, status, "rate_limit_error", "Muse is temporarily rate limited")
+		writeGrokMediaErrorResponse(c, status, "rate_limit_error", "Muse is temporarily rate limited", "")
 	}
 	return fmt.Errorf("Muse upstream returned HTTP %d", status)
 }

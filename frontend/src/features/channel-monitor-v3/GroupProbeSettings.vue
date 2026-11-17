@@ -18,7 +18,7 @@
     <section v-for="section in sections" :key="section.platform" class="mt-6" :aria-label="platformLabel(section.platform)">
       <h4 class="mb-3 flex items-center gap-2 text-sm font-semibold"><PlatformIcon :platform="section.platform" size="sm" />{{ platformLabel(section.platform) }} <span class="text-gray-500">{{ section.rows.length }}</span></h4>
       <div class="divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-600 dark:border-dark-600">
-        <GroupProbeRow v-for="row in section.rows" :key="row.group.id" :group="row.group" :target="row.target" :sources="sourceOptions" @remove="removeGroup(row.target)" />
+        <GroupProbeRow v-for="row in section.rows" :key="row.group.id" :group="row.group" :target="row.target" :sources="sourceOptions" @remove="removeGroup(row.target)" @update="Object.assign(row.target, $event)" />
       </div>
     </section>
     <p v-if="!sections.length" class="py-10 text-center text-sm leading-6 text-gray-600 dark:text-dark-200" data-testid="status-groups-empty">{{ t('channelMonitorV3.probes.empty') }}</p>

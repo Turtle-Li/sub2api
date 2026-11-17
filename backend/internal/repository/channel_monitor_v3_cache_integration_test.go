@@ -16,7 +16,9 @@ func TestChannelMonitorV3CacheUsesRealSharedAccountTraffic(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
 	makeGroup := func(platform string, private bool) *service.Group {
-		return mustCreateGroup(t, client, &service.Group{Name: "cache-" + uuid.NewString(), Platform: platform, IsExclusive: private})
+		group := mustCreateGroup(t, client, &service.Group{Name: "cache-" + uuid.NewString(), Platform: platform, IsExclusive: private})
+		cleanupCommittedFixture(t, "DELETE FROM groups WHERE id = $1", group.ID)
+		return group
 	}
 	target := makeGroup(service.PlatformAnthropic, false)
 	peer := makeGroup(service.PlatformAnthropic, false)
@@ -26,12 +28,15 @@ func TestChannelMonitorV3CacheUsesRealSharedAccountTraffic(t *testing.T) {
 	_, err := integrationDB.ExecContext(ctx, `UPDATE groups SET status='disabled' WHERE id=$1`, inactive.ID)
 	require.NoError(t, err)
 	account := mustCreateAccount(t, client, &service.Account{Name: "cache-" + uuid.NewString(), Platform: service.PlatformAnthropic})
+	cleanupCommittedFixture(t, "DELETE FROM accounts WHERE id = $1", account.ID)
 	unrelated := mustCreateAccount(t, client, &service.Account{Name: "cache-other-" + uuid.NewString(), Platform: service.PlatformAnthropic})
+	cleanupCommittedFixture(t, "DELETE FROM accounts WHERE id = $1", unrelated.ID)
 	mustBindAccountToGroup(t, client, account.ID, target.ID, 1)
 	mustBindAccountToGroup(t, client, account.ID, peer.ID, 1)
 	mustBindAccountToGroup(t, client, account.ID, private.ID, 1)
 	mustBindAccountToGroup(t, client, account.ID, otherPlatform.ID, 1)
 	user := mustCreateUser(t, client, &service.User{Email: uuid.NewString() + "@example.com"})
+	cleanupCommittedFixture(t, "DELETE FROM users WHERE id = $1", user.ID)
 	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, GroupID: &peer.ID})
 	usage := NewUsageLogRepository(client, integrationDB)
 	to := time.Now().UTC().Truncate(time.Hour)

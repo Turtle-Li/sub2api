@@ -102,7 +102,12 @@
   Claude defaults and explicit client limits. Do not lower thinking to work
   around this bug.
 
-## Upstream v0.2.19 integration
+## Upstream release integration
+
+- Read `docs/operations/UPSTREAM_V0222_20261117.md` for the v0.2.22 merge,
+  migrations and AWS release path. Preserve gateway-owned paid reserves,
+  settlement currency and media contracts when changing cache TTL billing.
+  Current auth snapshots use version 29. MCP and group UltraFast are opt-in.
 
 - Read `docs/operations/UPSTREAM_V0219_20261029.md` for the pinned upstream
   source, additive migrations and merge contracts. Preserve transaction-owned

@@ -7,7 +7,7 @@
     <div class="mt-4 grid items-start gap-4 md:grid-cols-2">
       <div class="min-w-0">
         <label :for="`status-name-${group.id}`" class="input-label">{{ t('channelMonitorV3.probes.displayName') }}</label>
-        <input :id="`status-name-${group.id}`" v-model.trim="target.display_name" class="input" maxlength="100" :placeholder="group.name" />
+        <input :id="`status-name-${group.id}`" v-model.trim="displayName" class="input" maxlength="100" :placeholder="group.name" />
       </div>
       <div v-if="supportsCheck" class="min-w-0">
         <label :for="`probe-source-${group.id}`" class="input-label">{{ t('channelMonitorV3.probes.source') }}</label>
@@ -24,7 +24,7 @@
           <p v-else-if="!models.length" class="text-gray-600 dark:text-dark-200">{{ t('channelMonitorV3.probes.noModels') }}</p>
         </div>
       </div>
-      <label v-if="supportsCheck && !following" class="flex min-h-10 items-center gap-2 text-sm md:mt-7"><input v-model="target.enabled" type="checkbox" :disabled="!target.enabled && (loading || !models.includes(target.model))" />{{ t('channelMonitorV3.probes.groupEnabled') }}</label>
+      <label v-if="supportsCheck && !following" class="flex min-h-10 items-center gap-2 text-sm md:mt-7"><input v-model="enabled" type="checkbox" :disabled="!target.enabled && (loading || !models.includes(target.model))" />{{ t('channelMonitorV3.probes.groupEnabled') }}</label>
     </div>
     <p v-if="!following" class="mt-2 text-xs leading-6 text-gray-600 dark:text-dark-200">{{ t(supportsCheck ? 'channelMonitorV3.probes.requestHelp' : 'channelMonitorV3.probes.passiveOnly') }}</p>
   </div>
@@ -41,8 +41,16 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import Select from '@/components/common/Select.vue'
 
 const props = defineProps<{ group: AdminGroup; target: MonitorV3GroupProbeConfig['groups'][number]; sources: ReadonlyArray<{ readonly value: number; readonly label: string }> }>()
-defineEmits<{ remove: [] }>()
+const emit = defineEmits<{ remove: []; update: [changes: Partial<MonitorV3GroupProbeConfig['groups'][number]>] }>()
 const { t } = useI18n()
+const displayName = computed({
+  get: () => props.target.display_name ?? '',
+  set: (display_name: string) => emit('update', { display_name }),
+})
+const enabled = computed({
+  get: () => props.target.enabled,
+  set: (enabled: boolean) => emit('update', { enabled }),
+})
 const models = ref<string[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -72,12 +80,11 @@ async function loadModels() {
   } finally { if (mounted) loading.value = false }
 }
 function selectModel(value: string | number | boolean | null) {
-  if (typeof value === 'string' && models.value.includes(value)) props.target.model = value
+  if (typeof value === 'string' && models.value.includes(value)) emit('update', { model: value })
 }
 function selectSource(value: string | number | boolean | null) {
   if (typeof value !== 'number' || !sourceOptions.value.some(option => option.value === value && !option.disabled)) return
-  props.target.source_group_id = value || undefined
-  if (value > 0) props.target.enabled = false
+  emit('update', value > 0 ? { source_group_id: value, enabled: false } : { source_group_id: undefined })
 }
 watch(following, value => { if (!value && supportsCheck.value && !loading.value && !models.value.length) void loadModels() })
 onMounted(() => { if (supportsCheck.value && !following.value) void loadModels() })

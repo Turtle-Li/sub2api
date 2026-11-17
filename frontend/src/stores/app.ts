@@ -384,6 +384,7 @@ export const useAppStore = defineStore('app', () => {
           settlement_currency: 'USD',
           usd_to_cny_rate: 6.75,
         },
+        mcp_enabled: false,
       })
     }
 

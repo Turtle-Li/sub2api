@@ -214,7 +214,7 @@ func TestClaudePassthroughBoundsPendingFrame(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	_, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-test")
-	require.ErrorContains(t, err, "SSE frame exceeds maximum size")
+	require.ErrorIs(t, err, errSSETransportLimit)
 	require.Empty(t, rec.Body.String())
 }
 
@@ -233,7 +233,7 @@ func TestClaudeChatBoundsPendingFrame(t *testing.T) {
 			} else {
 				_, err = svc.handleCCBufferedFromAnthropic(resp, c, "claude-test", "claude-test", nil, time.Now())
 			}
-			require.ErrorContains(t, err, "SSE frame exceeds maximum size")
+			require.ErrorIs(t, err, errSSETransportLimit)
 			if stream {
 				require.NotContains(t, rec.Body.String(), "[DONE]")
 			} else {
