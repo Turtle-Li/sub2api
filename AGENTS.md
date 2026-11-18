@@ -104,6 +104,11 @@
 
 ## Upstream release integration
 
+- Read `docs/operations/UPSTREAM_V0223_20261118.md` for the v0.2.23 update.
+  Keep the channel Ultra Fast multiplier independent from currency and time
+  bands, and carry Anthropic 5m/1h usage without collapsing the OpenAI
+  30m/12h buckets or the actual versus billable image usage split.
+
 - Read `docs/operations/UPSTREAM_V0222_20261117.md` for the v0.2.22 merge,
   migrations and AWS release path. Preserve gateway-owned paid reserves,
   settlement currency and media contracts when changing cache TTL billing.
