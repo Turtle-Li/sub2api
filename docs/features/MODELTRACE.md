@@ -12,9 +12,9 @@ Task: MODELTRACE-20261013 (feature). Source baseline: Turtle-Li/sub2api
   mapping, proxy, outbound identity and TLS profile. No scheduler fallback to
   another account and no credentials sent to a ModelTrace website.
 - MT-3: Errors and insufficient samples are reported separately from model
-  attribution. Optional mismatch notification and scheduling pause are governed
-  by `MODELTRACE_ALERTS_20261021.md`; both default to off. Probes do not repair
-  turn states, change provider availability, or debit customer balances.
+  attribution. Neither LM Detector entry point triggers the legacy mismatch
+  actions in `MODELTRACE_ALERTS_20261021.md`. Probes do not repair turn states,
+  change provider availability, or debit customer balances.
 - MT-4: Periodic checks are opt-in (disabled by default). Manual tasks survive
   the submitting browser request and have bounded concurrency and execution time.
 - MT-5: Only administrators can use the endpoints/page. Scores describe
@@ -38,6 +38,11 @@ Task: MODELTRACE-20261013 (feature). Source baseline: Turtle-Li/sub2api
   Verify fingerprint implementation, embedded bank and license before edits.
   Adopt the challenge generation, integer parsing, robust statistical classifier
   and fixed fingerprint bank; do not replace them with invented quality scores.
+- Manual and scheduled probes: `Ikaleio/lm-detector` at
+  `33fb43f26670be0ed7817ab13e5c4c4731ccb76a`; use the unmodified upstream Go SDK
+  and the frozen reference data from the same revision. See `MODELTRACE_UPSTREAM.md`
+  for source/test paths, asset hashes, and license. The legacy detector is
+  retained for rollback, not run as a fallback in either entry point.
 
 ## Design and task DAG
 
@@ -102,23 +107,26 @@ scheduling. Config updates preserve omitted fields; explicit `models: []`
 still clears the model list. No database migration is required.
 
 Admin navigation → ModelTrace → add an account → configure GPT model names →
-run a check. Each default check requests three valid challenge samples; the
-upstream retry ceiling is three additional attempts. These requests consume
-the selected upstream account's quota. The periodic switch affects scheduled
-checks only. History retains the latest check plus five previous checks per
-configured account/model.
+run a check. Both “立即检测” and scheduled checks send the configured number
+of challenges, up to three, without extra retries. They use the selected
+account and reasoning effort, and consume that account's upstream quota. Three
+valid samples are required for a calibrated ranking. Partial or different
+candidates are not a mismatch verdict; an expected model absent from the
+ranked bank is reported as “缺少参考关系”. An exact calibrated candidate is a
+fingerprint match, not verified identity.
 
-Use the same requested model and reasoning effort when comparing accounts.
-An attribution to another model is a signal to repeat and inspect; low sample
-counts, unsupported bank candidates and closely related model fingerprints
-limit interpretation. Global parameters can enable Feishu notification and/or
-pause new business calls through the anomalous account. Exact matches and
-configured allowed relations pass; `gpt-6.1-sol` → `gpt-6-astra` is allowed by
-default. Failed probes, unsupported detected fingerprints and expected models
-without bank coverage or an explicit allowed relation do not trigger actions.
-Pause applies to the entire account, keeps monitoring available, and requires
-manual recovery in Accounts; a later matching probe does not resume traffic.
-See `MODELTRACE_ALERTS_20261021.md` for configuration and delivery semantics.
+The periodic switch, cron, cooldown skips, account locking and per-model
+deadlines are unchanged. The latest result plus five previous checks per
+configured model are retained; LM Detector results are marked in history.
+Use the same model and reasoning effort when comparing accounts. Scores from
+different detectors are not directly comparable.
+
+Neither entry point sends Feishu notifications, pauses business scheduling or
+changes legacy notification cooldown state. The old implementation, settings,
+and allowed `gpt-6.1-sol` → `gpt-6-astra` relation are retained for rollback;
+the relation is not an LM Detector reference for `gpt-6.1-sol`. Switching
+detectors does not resume accounts already paused. See
+`MODELTRACE_ALERTS_20261021.md` for the historical policy.
 
 Submission and deployment are separate from implementation. No live account
 probe or production deployment is part of local validation.

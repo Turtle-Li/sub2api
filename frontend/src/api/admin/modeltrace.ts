@@ -3,7 +3,9 @@ import type { AccountPlatform, AccountType } from '@/types'
 
 export interface ModelTraceRecord {
   detected_model: string
+  detector?: 'lm-detector'
   probability: number
+  probability_status?: 'reference_calibrated' | 'unavailable'
   latency_ms: number
   tested_at: string
   error?: string

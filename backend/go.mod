@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	entgo.io/ent v0.14.5
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Ikaleio/lm-detector/sdk/go v0.2.1-0.20261118004648-33fb43f26670
 	github.com/MoeForge/moego v0.1.0-alpha.1
 	github.com/alibabacloud-go/captcha-20230305 v1.1.3
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.13

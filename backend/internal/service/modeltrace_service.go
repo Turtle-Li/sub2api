@@ -33,7 +33,9 @@ const (
 // ModelTraceRecord represents one single probe execution record.
 type ModelTraceRecord struct {
 	DetectedModel      string                    `json:"detected_model"`
+	Detector           string                    `json:"detector,omitempty"`
 	Probability        float64                   `json:"probability"`
+	ProbabilityStatus  string                    `json:"probability_status,omitempty"`
 	LatencyMs          int64                     `json:"latency_ms"`
 	TestedAt           time.Time                 `json:"tested_at"`
 	Error              string                    `json:"error,omitempty"`
@@ -533,7 +535,7 @@ func (s *ModelTraceService) SubmitProbe(ctx context.Context, accountID int64, mo
 		}
 		defer unlock()
 		s.finishTask(key, "running", "")
-		record, probeErr := s.probeModelLocked(workerCtx, accountID, modelID)
+		record, probeErr := s.probeModelLocked(workerCtx, accountID, modelID, s.executeLMDetectorProbe)
 		if probeErr != nil {
 			s.finishTask(key, "failed", probeErr.Error())
 		} else if record.Error != "" {
@@ -553,7 +555,7 @@ func (s *ModelTraceService) finishTask(key modelTraceTaskKey, status, errText st
 	s.tasks[key] = task
 }
 
-// ProbeModel runs an on-demand ModelTrace probe for internal callers.
+// ProbeModel runs the legacy ModelTrace probe for internal callers.
 func (s *ModelTraceService) ProbeModel(ctx context.Context, accountID int64, modelID string) (*ModelTraceRecord, error) {
 	logger.LegacyPrintf("service.modeltrace", "[ModelTrace] manual probe for account %d model %s waiting for probe lock", accountID, modelID)
 	unlock, err := s.acquireAccountLock(ctx, accountID)
@@ -563,10 +565,10 @@ func (s *ModelTraceService) ProbeModel(ctx context.Context, accountID int64, mod
 	}
 	defer unlock()
 
-	return s.probeModelLocked(ctx, accountID, modelID)
+	return s.probeModelLocked(ctx, accountID, modelID, s.executeProbe)
 }
 
-func (s *ModelTraceService) probeModelLocked(ctx context.Context, accountID int64, modelID string) (result *ModelTraceRecord, probeErr error) {
+func (s *ModelTraceService) probeModelLocked(ctx context.Context, accountID int64, modelID string, execute func(context.Context, *Account, string) *ModelTraceRecord) (result *ModelTraceRecord, probeErr error) {
 	ctx, probeCancel := context.WithTimeout(ctx, modelTraceTimeout)
 	defer probeCancel()
 	l := logger.FromContext(ctx).With(
@@ -605,13 +607,17 @@ func (s *ModelTraceService) probeModelLocked(ctx context.Context, accountID int6
 	}
 
 	expectedModel := strings.ToLower(strings.TrimSpace(account.GetMappedModel(modelID)))
-	record := s.executeProbe(ctx, account, modelID)
+	record := execute(ctx, account, modelID)
 	record.ExpectedModel = expectedModel
 	if err := ctx.Err(); err != nil {
 		// Keep a terminal failure visible when the caller cancels the probe.
 		record.Error = err.Error()
 		record.DetectedModel = "Unknown"
 		record.Probability = 0
+		record.MatchStatus = "inconclusive"
+		if record.Detector != "" {
+			record.ProbabilityStatus = modelTraceProbabilityUnavailable
+		}
 	}
 	return s.saveProbeResult(ctx, accountID, modelID, record)
 }
@@ -645,18 +651,8 @@ probeLoop:
 			break
 		}
 		if attempt > 0 {
-			latest, err := s.accountRepo.GetByID(ctx, account.ID)
-			if err != nil {
+			if err := s.checkModelTraceMonitor(ctx, account.ID, modelID); err != nil {
 				lastErr = err
-				break
-			}
-			current := DecodeModelTraceConfig(latest.Extra)
-			if current == nil || !current.IsEnabled() {
-				lastErr = fmt.Errorf("account monitoring is paused or removed")
-				break
-			}
-			if _, exists := current.Models[modelID]; !exists {
-				lastErr = fmt.Errorf("model is not configured for modeltrace")
 				break
 			}
 		}
@@ -742,6 +738,21 @@ probeLoop:
 		LatencyMs:     latency,
 		TestedAt:      time.Now(),
 	}
+}
+
+func (s *ModelTraceService) checkModelTraceMonitor(ctx context.Context, accountID int64, modelID string) error {
+	latest, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	current := DecodeModelTraceConfig(latest.Extra)
+	if current == nil || !current.IsEnabled() {
+		return fmt.Errorf("account monitoring is paused or removed")
+	}
+	if _, exists := current.Models[modelID]; !exists {
+		return fmt.Errorf("model is not configured for modeltrace")
+	}
+	return nil
 }
 
 // requestCompletion dispatches challenge prompt through the authentic AccountTestService pipeline,
@@ -880,7 +891,7 @@ func (s *ModelTraceService) runAccountCycle(ctx context.Context, account *Accoun
 			continue
 		}
 
-		_, probeErr := s.probeModelLocked(ctx, account.ID, modelID)
+		_, probeErr := s.probeModelLocked(ctx, account.ID, modelID, s.executeLMDetectorProbe)
 		if probeErr != nil {
 			logger.LegacyPrintf("service.modeltrace", "[ModelTrace] probe failed for account %d model %s: %v", account.ID, modelID, probeErr)
 		}

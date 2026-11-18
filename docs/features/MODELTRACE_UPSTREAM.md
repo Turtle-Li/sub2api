@@ -5,6 +5,41 @@ integration. It is research for the target port; it does not authorize copying
 the upstream account, usage, or platform behavior without the differences in
 `MODELTRACE.md`.
 
+## Active Detector Pin: 2026-11-18
+
+- Repository: https://github.com/Ikaleio/lm-detector, revision
+  `33fb43f26670be0ed7817ab13e5c4c4731ccb76a`. The unmodified Go module
+  `github.com/Ikaleio/lm-detector/sdk/go` is pinned to
+  `v0.2.1-0.20261118004648-33fb43f26670` with `go.sum` checksums.
+- Source and contract: `sdk/go/lmfpd.go` (`GenerateChallenges`, `Analyze`),
+  `sdk/go/challenge.go`, `sdk/go/templates.json`, `sdk/go/analysis.go`,
+  `sdk/go/ranker.go`, `sdk/go/data.go` (single local-directory `Load`).
+  Parity runner: `sdk/go/cmd/conformance/main.go`, using `sdk/conformance/`
+  plus the frozen data in `data/` at the same revision.
+- Bundled data in `backend/internal/pkg/lmdetector/data/`: `shared_detector.bin`
+  is copied unchanged, SHA-256
+  `f6cf5bb49f621690da7eba3173b34ea978af19b51987a65e0b37c424d5904343`.
+  Upstream `data/unified_bank.json` SHA-256 is
+  `8e7a0083dc66d941229c49e195c503a4362d1b33edd2aa6318877849eef7b691`;
+  the bundled JSON keeps only `built_at` and each model's `id`, `display_name`,
+  `family`, `family_name`, and `response_count`, in upstream order. The SDK
+  validates the build ID, model order, and reference counts against the binary.
+- Adoption: upstream prompts, number parsing, validity diagnostics, ranking
+  and calibration. Local differences: continue to use Sub2API's selected
+  account transport, manual queue, cron, and history; never call SDK `Detect`
+  or remote data sources. Both entry points share the same detector and
+  evidence-only verdicts. The legacy pin and policy remain for rollback, not
+  as a second probe or an automatic fallback.
+- Limits: bank built `2026-11-17T19:37:59.839365+00:00`, 72 labels including
+  `gpt-6.2-sol` and `gpt-6.2-astra`, but not `gpt-6.1-sol`. The two 6.2
+  references were collected with `low` reasoning. Calibrated probabilities
+  are closed-set, not proof of routing across providers or reasoning efforts.
+  Keep results evidence-only; automatic actions require a separately approved
+  mismatch policy validated with representative same-route responses.
+- License: MIT, Copyright (c) 2026 xqy2006. Preserve the upstream notice in
+  source and redistributions. The original `sdk/go/LICENSE` accompanies the
+  bundled data and is embedded with it in the binary.
+
 ## Update check: 2026-10-21
 
 - The original `xqy2006/ModelTrace` main branch still resolves to

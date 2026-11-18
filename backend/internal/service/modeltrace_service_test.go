@@ -240,19 +240,25 @@ func TestModelTraceCanceledProbeSavesFailure(t *testing.T) {
 func TestModelTraceScheduledModelsHaveIndependentBoundedDeadlines(t *testing.T) {
 	cfg := &ModelTraceAccountConfig{Models: map[string]*ModelTraceModelConfig{"gpt-5.4": {}, "gpt-5.6-sol": {}}}
 	repo := &modelTraceContextRepo{modelTraceTestRepo: modelTraceTestRepo{account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ID: 31, Status: StatusActive, Extra: map[string]any{ModelTraceExtraKey: cfg}}}}
-	svc := NewModelTraceService(repo, &modelTraceTestSettings{}, nil, nil)
+	settings := &modelTraceStoredSettings{raw: `{"enabled":true,"probe_count":10,"interval_seconds":0}`}
+	svc := NewModelTraceService(repo, settings, &AccountTestService{accountRepo: repo}, nil)
+	t.Cleanup(svc.Stop)
 	svc.runAccountCycle(context.Background(), repo.account, cfg)
 	saved := DecodeModelTraceConfig(repo.account.Extra)
-	require.NotNil(t, saved.Models["gpt-5.4"].Latest)
-	require.NotNil(t, saved.Models["gpt-5.6-sol"].Latest)
-	require.Len(t, repo.readDeadlines, 12)
-	for _, start := range []int{0, 6} {
+	for _, model := range saved.Models {
+		require.NotNil(t, model.Latest)
+		require.Equal(t, modelTraceLMDetector, model.Latest.Detector)
+		require.Equal(t, "inconclusive", model.Latest.MatchStatus)
+		require.Len(t, model.Latest.Requests, 3)
+	}
+	require.Len(t, repo.readDeadlines, 16)
+	for _, start := range []int{0, 8} {
 		require.True(t, repo.readDeadlines[start].IsZero(), "account cycle must not impose a shared model deadline")
 		require.WithinDuration(t, time.Now().Add(modelTraceTimeout), repo.readDeadlines[start+1], time.Second, "each model probe must have its own bounded deadline")
-		for _, offset := range []int{2, 3, 4} {
-			require.Equal(t, repo.readDeadlines[start+1], repo.readDeadlines[start+offset], "switch rechecks must retain the model deadline")
+		for _, offset := range []int{2, 3, 4, 5, 6} {
+			require.Equal(t, repo.readDeadlines[start+1], repo.readDeadlines[start+offset], "requests and switch rechecks must retain the model deadline")
 		}
-		require.WithinDuration(t, time.Now().Add(5*time.Second), repo.readDeadlines[start+5], time.Second)
+		require.WithinDuration(t, time.Now().Add(5*time.Second), repo.readDeadlines[start+7], time.Second)
 	}
 }
 

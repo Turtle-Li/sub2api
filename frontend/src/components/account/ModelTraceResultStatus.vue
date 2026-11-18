@@ -5,6 +5,7 @@
       class="rounded px-1.5 py-0.5 font-medium"
       :class="statusClass"
     >{{ t(`admin.modelTrace.verdict.${record.match_status}`) }}</span>
+    <span v-if="record.detector === 'lm-detector'" class="text-gray-600 dark:text-gray-300">LM Detector</span>
     <span v-if="record.account_paused" class="text-rose-700 dark:text-rose-300">
       {{ t('admin.modelTrace.callsPaused') }}
     </span>

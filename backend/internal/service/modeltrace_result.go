@@ -35,11 +35,17 @@ func (s *ModelTraceService) saveProbeResult(ctx context.Context, accountID int64
 		model = &ModelTraceModelConfig{}
 		cfg.Models[modelID] = model
 	}
-	policy := s.GetGlobalConfig(saveCtx)
-	record.MatchStatus = modelTraceMatchStatus(record, policy)
+	legacy := record.Detector == ""
+	var policy ModelTraceGlobalConfig
+	if legacy {
+		policy = s.GetGlobalConfig(saveCtx)
+		record.MatchStatus = modelTraceMatchStatus(record, policy)
+	}
 	if !modelTraceAccountSupported(account) || !strings.EqualFold(strings.TrimSpace(account.GetMappedModel(modelID)), record.ExpectedModel) {
 		record.MatchStatus = "inconclusive"
-		record.ActionError = "Model mapping changed during probe; repeat the probe"
+		if legacy {
+			record.ActionError = "Model mapping changed during probe; repeat the probe"
+		}
 	}
 	if model.Latest != nil {
 		model.History = append([]ModelTraceRecord{*model.Latest}, model.History...)
@@ -48,7 +54,7 @@ func (s *ModelTraceService) saveProbeResult(ctx context.Context, accountID int64
 		}
 	}
 	model.Latest = record
-	if record.MatchStatus == "match" {
+	if legacy && record.MatchStatus == "match" {
 		model.Alert = nil
 	}
 	now := time.Now()
@@ -56,7 +62,7 @@ func (s *ModelTraceService) saveProbeResult(ctx context.Context, accountID int64
 	if err := s.accountRepo.UpdateExtra(saveCtx, accountID, map[string]any{ModelTraceExtraKey: cfg}); err != nil {
 		return nil, fmt.Errorf("save modeltrace result: %w", err)
 	}
-	if cfg.IsEnabled() && record.MatchStatus == "mismatch" && (policy.NotifyOnMismatch || policy.PauseOnMismatch) {
+	if legacy && cfg.IsEnabled() && record.MatchStatus == "mismatch" && (policy.NotifyOnMismatch || policy.PauseOnMismatch) {
 		actionCtx, actionCancel := context.WithTimeout(ctx, 15*time.Second)
 		defer actionCancel()
 		s.applyMismatchPolicy(actionCtx, account, model, policy)

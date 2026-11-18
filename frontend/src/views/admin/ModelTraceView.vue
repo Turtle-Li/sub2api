@@ -244,8 +244,11 @@
 
                     <!-- Probability -->
                     <td class="whitespace-nowrap px-4 py-3 text-sm">
-                      <template v-if="cfg.latest && !cfg.latest.error">
-                        <div class="flex items-center gap-2">
+                      <template v-if="cfg.latest && !cfg.latest.error && cfg.latest.probability_status !== 'unavailable'">
+                        <div
+                          class="flex items-center gap-2"
+                          :title="cfg.latest.probability_status === 'reference_calibrated' ? t('admin.modelTrace.referenceProbability') : undefined"
+                        >
                           <span
                             class="font-mono text-xs font-semibold"
                             :class="probTextClass(cfg.latest.probability)"
@@ -644,7 +647,12 @@
                 {{ rec.detected_model || '-' }}
               </td>
               <td class="whitespace-nowrap px-3 py-2">
-                <span v-if="!rec.error" :class="probTextClass(rec.probability)" class="font-mono font-semibold">
+                <span
+                  v-if="!rec.error && rec.probability_status !== 'unavailable'"
+                  :class="probTextClass(rec.probability)"
+                  :title="rec.probability_status === 'reference_calibrated' ? t('admin.modelTrace.referenceProbability') : undefined"
+                  class="font-mono font-semibold"
+                >
                   {{ (rec.probability * 100).toFixed(1) }}%
                 </span>
                 <span v-else class="text-gray-400">-</span>

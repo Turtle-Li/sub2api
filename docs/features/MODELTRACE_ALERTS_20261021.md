@@ -5,10 +5,15 @@ Implemented and validated locally on 2026-10-21; production release was
 authorized and verified on 2026-10-22 (Asia/Shanghai), as recorded below.
 Live fingerprint classification and Feishu delivery are outside validation.
 
-## Behavior
+Since the LM Detector switch documented in `MODELTRACE_UPSTREAM.md`, both manual
+and scheduled checks are evidence-only. The settings, history and action code
+below remain for rollback; LM Detector results neither run these actions nor
+change their cooldown state. Accounts already paused stay paused.
 
-Every completed probe records its mapped expected model, a verdict and action
-outcomes alongside the existing bounded history. Matching model IDs pass.
+## Legacy Behavior
+
+Legacy probes record their mapped expected model, verdict and action outcomes
+alongside the existing bounded history. Matching model IDs pass.
 Explicit allowed relations also pass; `gpt-6.1-sol` → `gpt-6-astra` is the
 default relation. A `gpt-5.6-luna` result for that expected model is a mismatch.
 An actual request for `gpt-5.6-luna` that detects itself passes.
@@ -23,8 +28,7 @@ capability scores are used.
 An opted-in mismatch can send a Feishu message, pause account scheduling, or
 both. A complete successful probe is enough; there is no extra confirmation
 count or confidence threshold. Operators should choose policy with the bank's
-closed-set statistical limits in mind. Manual probes use the same policy even
-when automatic monitoring is off.
+closed-set statistical limits in mind.
 
 Pause uses `AccountRepository.SetSchedulable(false)`, which updates the existing
 scheduler snapshot/outbox and database recheck boundary. It stops new business
@@ -33,11 +37,10 @@ stop ModelTrace rechecks. Restore scheduling manually in Accounts after review.
 A matching probe clears notification deduplication state, but never resumes
 business traffic automatically.
 
-## Global parameters
+## Legacy Policy Settings
 
-Stored in the existing ModelTrace settings JSON; no migration or credential
-field is added. Existing probe count, interval, effort and cron settings retain
-their behavior.
+Stored in the existing ModelTrace settings JSON without migration or new
+credentials. The legacy settings are not applied to LM Detector checks.
 
 | Field | Default | Contract |
 | --- | --- | --- |
