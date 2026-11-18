@@ -40,6 +40,8 @@ type AvailableChannel struct {
 	RestrictModels     bool
 	Groups             []AvailableGroupRef
 	SupportedModels    []SupportedModel
+	// Publish saved supplements only to viewers who can access their source group.
+	AdditionalModelsByGroup map[int64][]SupportedModel
 }
 
 // ListAvailable 返回所有渠道的可用视图：每个渠道附带关联分组信息与支持模型列表。
@@ -63,50 +65,59 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 	if err != nil {
 		return nil, fmt.Errorf("list active groups: %w", err)
 	}
-	groupByID := make(map[int64]AvailableGroupRef, len(groups))
+	groupByID := make(map[int64]*Group, len(groups))
 	for i := range groups {
-		g := groups[i]
-		groupByID[g.ID] = AvailableGroupRef{
-			ID:                 g.ID,
-			Name:               g.Name,
-			I18n:               g.I18n,
-			Platform:           g.Platform,
-			SubscriptionType:   g.SubscriptionType,
-			RateMultiplier:     g.RateMultiplier,
-			PeakRateEnabled:    g.PeakRateEnabled,
-			PeakStart:          g.PeakStart,
-			PeakEnd:            g.PeakEnd,
-			PeakRateMultiplier: g.PeakRateMultiplier,
-			IsExclusive:        g.IsExclusive,
-		}
+		groupByID[groups[i].ID] = &groups[i]
 	}
 
 	out := make([]AvailableChannel, 0, len(channels))
 	for i := range channels {
 		ch := &channels[i]
+		ch.normalizeBillingModelSource()
+		supported := ch.SupportedModels()
+		fillGlobalPricingFallback(s.pricingService, supported)
+		s.populateMinimalProbeMetadata(supported, time.Now())
+		snapshot := ch.gptDisplayModelsByGroup()
+
 		groups := make([]AvailableGroupRef, 0, len(ch.GroupIDs))
+		var additional map[int64][]SupportedModel
 		for _, gid := range ch.GroupIDs {
-			if ref, ok := groupByID[gid]; ok {
-				groups = append(groups, ref)
+			g := groupByID[gid]
+			if g == nil {
+				continue
+			}
+			groups = append(groups, AvailableGroupRef{
+				ID:                 g.ID,
+				Name:               g.Name,
+				I18n:               g.I18n,
+				Platform:           g.Platform,
+				SubscriptionType:   g.SubscriptionType,
+				RateMultiplier:     g.RateMultiplier,
+				PeakRateEnabled:    g.PeakRateEnabled,
+				PeakStart:          g.PeakStart,
+				PeakEnd:            g.PeakEnd,
+				PeakRateMultiplier: g.PeakRateMultiplier,
+				IsExclusive:        g.IsExclusive,
+			})
+			if models := s.modelCatalog.savedModels(ch, g, supported, snapshot[gid]); len(models) > 0 {
+				if additional == nil {
+					additional = make(map[int64][]SupportedModel)
+				}
+				additional[gid] = models
 			}
 		}
 		sort.SliceStable(groups, func(i, j int) bool { return groups[i].Name < groups[j].Name })
 
-		ch.normalizeBillingModelSource()
-
-		supported := ch.SupportedModels()
-		fillGlobalPricingFallback(s.pricingService, supported)
-		s.populateMinimalProbeMetadata(supported, time.Now())
-
 		out = append(out, AvailableChannel{
-			ID:                 ch.ID,
-			Name:               ch.Name,
-			Description:        ch.Description,
-			Status:             ch.Status,
-			BillingModelSource: ch.BillingModelSource,
-			RestrictModels:     ch.RestrictModels,
-			Groups:             groups,
-			SupportedModels:    supported,
+			ID:                      ch.ID,
+			Name:                    ch.Name,
+			Description:             ch.Description,
+			Status:                  ch.Status,
+			BillingModelSource:      ch.BillingModelSource,
+			RestrictModels:          ch.RestrictModels,
+			Groups:                  groups,
+			SupportedModels:         supported,
+			AdditionalModelsByGroup: additional,
 		})
 	}
 

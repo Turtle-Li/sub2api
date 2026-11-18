@@ -52,27 +52,38 @@
     </header>
 
 
-    <!-- 模型价格表:整行(含 hover 底色/分区底色)顶到卡片边缘,左右留白由表格首列/末列的 padding 提供 -->
-    <div>
-      <PlazaModelPricingTable
-        v-if="group.models.length > 0"
-        :models="group.models"
-        :platform="group.platform"
-        :rate-multiplier="group.rate_multiplier"
-        :user-rate-multiplier="group.user_rate_multiplier ?? null"
-        :image-rate-independent="group.image_rate_independent"
-        :image-rate-multiplier="group.image_rate_multiplier"
-        :video-rate-independent="group.video_rate_independent"
-        :video-rate-multiplier="group.video_rate_multiplier"
-        :peak-window="peakWindow"
-        :peak-rate-multiplier="group.peak_rate_multiplier"
-        :display-currency="group.display_currency"
-        :display-usd-rate="group.display_usd_rate"
-      />
-      <p v-else class="px-5 py-4 text-center text-sm text-gray-400 dark:text-dark-500">
-        {{ t('modelPlaza.detail.noModels') }}
-      </p>
+    <div v-if="priceSections.length">
+      <div
+        v-for="section in priceSections"
+        :key="section.kind"
+        class="border-t border-gray-100 first:border-t-0 dark:border-dark-700/60"
+      >
+        <div v-if="section.title" class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-3">
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ section.title }}</h3>
+          <p v-if="section.kind === 'image'" class="text-xs text-gray-600 dark:text-dark-300">
+            {{ t(group.image_rate_independent ? 'modelPlaza.detail.fixedImageRate' : 'modelPlaza.detail.groupImageRate') }}
+          </p>
+        </div>
+        <PlazaModelPricingTable
+          :models="section.models"
+          :image-only="section.kind === 'image'"
+          :platform="group.platform"
+          :rate-multiplier="group.rate_multiplier"
+          :user-rate-multiplier="group.user_rate_multiplier ?? null"
+          :image-rate-independent="group.image_rate_independent"
+          :image-rate-multiplier="group.image_rate_multiplier"
+          :video-rate-independent="group.video_rate_independent"
+          :video-rate-multiplier="group.video_rate_multiplier"
+          :peak-window="peakWindow"
+          :peak-rate-multiplier="group.peak_rate_multiplier"
+          :display-currency="group.display_currency"
+          :display-usd-rate="group.display_usd_rate"
+        />
+      </div>
     </div>
+    <p v-else class="px-5 py-4 text-center text-sm text-gray-400 dark:text-dark-500">
+      {{ t('modelPlaza.detail.noModels') }}
+    </p>
   </section>
 </template>
 
@@ -81,8 +92,9 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
+import { BILLING_MODE_IMAGE, BILLING_MODE_PER_REQUEST } from '@/constants/channel'
 import PlazaModelPricingTable from './PlazaModelPricingTable.vue'
-import type { ModelPlazaGroup } from '@/api/modelPlaza'
+import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
 import type { GroupPlatform, SubscriptionType } from '@/types'
 import { platformBorderStrongClass } from '@/utils/platformColors'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
@@ -94,6 +106,30 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+
+const priceSections = computed(() => {
+  const other: PlazaModel[] = []
+  const perImage: PlazaModel[] = []
+  const otherImage: PlazaModel[] = []
+  for (const model of props.group.models) {
+    const isGPTImage = model.platform === 'openai' && (model.gpt_image ?? model.name.toLowerCase().startsWith('gpt-image-'))
+    if (!isGPTImage) {
+      other.push(model)
+      continue
+    }
+    const mode = model.pricing?.billing_mode
+    if (mode === BILLING_MODE_IMAGE || mode === BILLING_MODE_PER_REQUEST) {
+      perImage.push(model)
+    } else {
+      otherImage.push(model)
+    }
+  }
+  return [
+    { kind: 'text', models: other, title: perImage.length || otherImage.length ? t('modelPlaza.detail.gptTextModels') : '' },
+    { kind: 'image', models: perImage, title: t('modelPlaza.detail.gptImagePrices') },
+    { kind: 'otherImage', models: otherImage, title: t('modelPlaza.detail.gptImageOtherPricing') }
+  ].filter(section => section.models.length > 0)
+})
 
 /** 高峰窗口描述(含倍率与服务器时区标注);分组未启用高峰为空串。 */
 const peakWindow = computed(() => {

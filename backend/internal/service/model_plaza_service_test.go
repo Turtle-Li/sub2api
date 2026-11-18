@@ -16,7 +16,7 @@ func newPlazaService(channels []Channel, groups []Group, pricing *PricingService
 	repo := &mockChannelRepository{
 		listAllFn: func(ctx context.Context) ([]Channel, error) { return channels, nil },
 	}
-	return NewModelPlazaService(repo, &stubGroupRepoForAvailable{activeGroups: groups}, pricing, nil, nil)
+	return NewModelPlazaService(repo, &stubGroupRepoForAvailable{activeGroups: groups}, pricing, nil, nil, nil)
 }
 
 func plazaPricedChannel(id int64, name string, groupIDs []int64, platform string, models ...string) Channel {
@@ -403,7 +403,7 @@ func TestListPlazaGroups_RepoErrorsPropagate(t *testing.T) {
 	repo := &mockChannelRepository{
 		listAllFn: func(ctx context.Context) ([]Channel, error) { return nil, sentinel },
 	}
-	svc := NewModelPlazaService(repo, &stubGroupRepoForAvailable{}, nil, nil, nil)
+	svc := NewModelPlazaService(repo, &stubGroupRepoForAvailable{}, nil, nil, nil, nil)
 	out, err := svc.ListGroups(context.Background())
 	require.Nil(t, out)
 	require.ErrorIs(t, err, sentinel)
@@ -411,7 +411,7 @@ func TestListPlazaGroups_RepoErrorsPropagate(t *testing.T) {
 	svc2 := NewModelPlazaService(
 		&mockChannelRepository{listAllFn: func(ctx context.Context) ([]Channel, error) { return nil, nil }},
 		&stubGroupRepoForAvailable{listActiveErr: sentinel},
-		nil, nil, nil,
+		nil, nil, nil, nil,
 	)
 	out2, err2 := svc2.ListGroups(context.Background())
 	require.Nil(t, out2)
@@ -426,9 +426,9 @@ func newPlazaServiceWithBilling(channels []Channel, groups []Group, groupPlatfor
 			return groupPlatforms, nil
 		},
 	}
-	cs := NewChannelService(repo, nil, nil, nil, nil)
+	cs := NewChannelService(repo, nil, nil, nil, nil, nil)
 	bs := NewBillingService(&config.Config{}, catalog)
-	return NewModelPlazaService(repo, &stubGroupRepoForAvailable{activeGroups: groups}, catalog, bs, NewModelPricingResolver(cs, bs))
+	return NewModelPlazaService(repo, &stubGroupRepoForAvailable{activeGroups: groups}, catalog, bs, NewModelPricingResolver(cs, bs), nil)
 }
 
 func plazaModelsByName(models []PlazaModel) map[string]PlazaModel {
@@ -652,6 +652,56 @@ func TestListGroups_ImageModelShowsGroupPerImagePrices(t *testing.T) {
 	require.InDelta(t, 0.3, *image.Intervals[1].PerRequestPrice, 1e-12)
 	require.InDelta(t, defaultImageGenerationPrice*2, *image.Intervals[2].PerRequestPrice, 1e-12)
 	require.Equal(t, BillingModeToken, models["gpt-5.4"].Pricing.BillingMode)
+}
+
+func TestListGroups_GPTImageQuoteFollowsGroupCountBilling(t *testing.T) {
+	const model = "gpt-image-2"
+	channels := []Channel{{
+		ID: 1, Status: StatusActive, GroupIDs: []int64{10, 20},
+		ModelPricing: []ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{model}, BillingMode: BillingModeToken,
+			InputPrice: testPtrFloat64(5e-6), ImageOutputPrice: testPtrFloat64(30e-6)}},
+	}}
+	groups := []Group{
+		{ID: 10, Platform: PlatformOpenAI, RateMultiplier: .3, ImageCountBilling: true,
+			ImagePrice1K: testPtrFloat64(0), ImagePrice2K: testPtrFloat64(.2), ImagePrice4K: testPtrFloat64(.4)},
+		{ID: 20, Platform: PlatformOpenAI, RateMultiplier: 1, ImagePrice1K: testPtrFloat64(.2)},
+	}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformOpenAI, 20: PlatformOpenAI}, nil)
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+
+	fixed := out[0].Models[0].Pricing
+	require.Equal(t, BillingModeImage, fixed.BillingMode)
+	require.Equal(t, []PricingInterval{
+		{TierLabel: "1K", PerRequestPrice: testPtrFloat64(0)},
+		{TierLabel: "2K", PerRequestPrice: testPtrFloat64(.2), SortOrder: 1},
+		{TierLabel: "4K", PerRequestPrice: testPtrFloat64(.4), SortOrder: 2},
+	}, fixed.Intervals)
+	require.Equal(t, BillingModeToken, out[1].Models[0].Pricing.BillingMode)
+}
+
+func TestListGroups_GPTImageFixedGroupCardKeepsPricePriorityAndCurrency(t *testing.T) {
+	const model = "gpt-image-2"
+	channels := []Channel{{
+		ID: 1, Status: StatusActive, GroupIDs: []int64{10},
+		ModelMapping: map[string]map[string]string{PlatformOpenAI: {model: model}},
+	}}
+	groups := []Group{{
+		ID: 10, Platform: PlatformOpenAI, ImageCountBilling: true, ImagePrice1K: testPtrFloat64(.2),
+		ModelPricing: []ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{model}, BillingMode: BillingModeImage,
+			Currency: PricingCurrencyCNY, PerRequestPrice: testPtrFloat64(6.75)}},
+	}}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformOpenAI}, nil)
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+
+	price := out[0].Models[0].Pricing
+	require.Equal(t, BillingModeImage, price.BillingMode)
+	require.Equal(t, PricingCurrencyUSD, price.Currency)
+	require.InDelta(t, 1, *price.PerRequestPrice, 1e-12)
+	require.Empty(t, price.Intervals)
 }
 
 func TestListGroups_CNYCardIsOfficialReference(t *testing.T) {

@@ -47,6 +47,7 @@ function mountTable(
   rateMultiplier: number,
   userRateMultiplier?: number | null,
   extraProps?: {
+    imageOnly?: boolean
     imageRateIndependent?: boolean
     imageRateMultiplier?: number | null
     videoRateIndependent?: boolean
@@ -72,6 +73,37 @@ function mountTable(
 }
 
 describe('PlazaModelPricingTable', () => {
+  it('quotes a fixed image price once across identical resolution tiers, ignoring the personal text rate', () => {
+    const model = tokenModel({ name: 'gpt-image-2.5-sunburst', platform: 'openai' })
+    model.pricing!.billing_mode = 'image'
+    model.pricing!.intervals = ['1K', '2K', '4K'].map(tier_label => ({
+      tier_label, min_tokens: 0, max_tokens: null, input_price: null, output_price: null,
+      cache_write_price: null, cache_read_price: null, per_request_price: .2
+    }))
+    const wrapper = mountTable([model], .3, .1, {
+      imageOnly: true, imageRateIndependent: true, imageRateMultiplier: 1,
+      displayCurrency: 'CNY', displayUsdRate: 1
+    })
+    const body = wrapper.get('tbody').text()
+    expect(body).toContain('1K / 2K / 4K')
+    expect(body.split('$0.20')).toHaveLength(2)
+    expect(body).not.toContain('$0.02')
+    expect(wrapper.findAll('thead th')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('keeps each different image price when using the group rate and preserves a zero-price tier', () => {
+    const model = tokenModel({ name: 'gpt-image-2', platform: 'openai' })
+    model.pricing!.billing_mode = 'per_request'
+    model.pricing!.intervals = [0, .2, .5].map((per_request_price, i) => ({
+      tier_label: ['1K', '2K', '4K'][i], min_tokens: 0, max_tokens: null, input_price: null, output_price: null,
+      cache_write_price: null, cache_read_price: null, per_request_price
+    }))
+    const wrapper = mountTable([model], .5, null, { imageOnly: true, displayCurrency: 'CNY', displayUsdRate: 1 })
+    for (const price of ['$0.00', '$0.10', '$0.25']) expect(wrapper.get('tbody').text()).toContain(price)
+    wrapper.unmount()
+  })
+
   it.each([false, true])('shows independent 12h prices without a 1h label (intervals=%s)', (intervals) => {
     const model = tokenModel({ name: 'gpt-6-luna', platform: 'openai' })
     model.pricing!.cache_write_price = null

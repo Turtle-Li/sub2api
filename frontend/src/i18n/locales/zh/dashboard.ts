@@ -693,6 +693,11 @@ export default {
     },
     detail: {
       noModels: '该分组暂未配置模型',
+      gptTextModels: '文字模型',
+      gptImagePrices: 'GPT 生图价格',
+      gptImageOtherPricing: 'GPT 生图 · 其他计费方式',
+      fixedImageRate: '按张计费，不受文字模型分组倍率影响',
+      groupImageRate: '按张计费，已应用当前分组或专属倍率',
       noPricing: '未配置定价',
       peakNote: '高峰时段 {window} 计费倍率 ×{multiplier}',
       longContextDisabledNote: '该分组未启用长上下文阶梯计费，超阈值请求仍按基础档计费，官方阶梯仅供参考'
@@ -718,6 +723,7 @@ export default {
       timePricingWeekdays: '工作日',
       timePricingRateHint: '生效倍率 {rate} × 时段倍率 {multiplier}',
       paidPrice: '实付价格(折后)',
+      imagePrice: '实付单张价',
       officialPrice: '官方价格',
       rate: '折扣倍率',
       unitPerMillion: '$ / 1M token',

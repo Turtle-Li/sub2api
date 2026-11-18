@@ -59,6 +59,14 @@ type updateChannelRequest struct {
 	AccountStatsPricingRules   *[]accountStatsPricingRuleRequest `json:"account_stats_pricing_rules"`
 }
 
+type gptDisplayPreviewRequest struct {
+	GroupIDs       []int64                      `json:"group_ids" binding:"dive,gt=0"`
+	ModelPricing   []channelModelPricingRequest `json:"model_pricing"`
+	ModelMapping   map[string]map[string]string `json:"model_mapping"`
+	RestrictModels bool                         `json:"restrict_models"`
+	HiddenModels   []string                     `json:"hidden_models"`
+}
+
 type channelModelPricingRequest struct {
 	Platform                   string                     `json:"platform" binding:"omitempty,max=50"`
 	Models                     []string                   `json:"models" binding:"required,min=1,max=100"`
@@ -697,4 +705,24 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 		models = slices.Compact(models)
 	}
 	response.Success(c, gin.H{"models": models})
+}
+
+func (h *ChannelHandler) PreviewGPTDisplayModels(c *gin.Context) {
+	var req gptDisplayPreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("VALIDATION_ERROR", err.Error()))
+		return
+	}
+	models, err := h.channelService.PreviewGPTDisplayModels(c.Request.Context(), &service.Channel{
+		GroupIDs:       req.GroupIDs,
+		ModelPricing:   pricingRequestToService(req.ModelPricing, true),
+		ModelMapping:   req.ModelMapping,
+		RestrictModels: req.RestrictModels,
+		FeaturesConfig: map[string]any{"model_plaza_hidden_models": req.HiddenModels},
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"models_by_group": models})
 }

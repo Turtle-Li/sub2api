@@ -193,6 +193,34 @@ func TestBuildPlatformSections_GroupsByPlatform(t *testing.T) {
 	require.Equal(t, "claude-sonnet-4-6", sections[0].SupportedModels[0].Name)
 }
 
+func TestBuildPlatformSections_FollowedModelsRequireVisibleSourceGroup(t *testing.T) {
+	const platform = service.PlatformOpenAI
+	ch := service.AvailableChannel{
+		SupportedModels: []service.SupportedModel{{Name: "gpt-6-sol", Platform: platform}},
+		AdditionalModelsByGroup: map[int64][]service.SupportedModel{
+			1: {{Name: "gpt-6.2-sol", Platform: platform}},
+			2: {{Name: "gpt-6.2-astra", Platform: platform}, {Name: "gpt-6.2-sol", Platform: platform}},
+		},
+	}
+	public := userAvailableGroup{ID: 1, Platform: platform}
+	private := userAvailableGroup{ID: 2, Platform: platform, IsExclusive: true}
+	for _, tc := range []struct {
+		groups []userAvailableGroup
+		want   []string
+	}{
+		{[]userAvailableGroup{public}, []string{"gpt-6-sol", "gpt-6.2-sol"}},
+		{[]userAvailableGroup{public, private}, []string{"gpt-6-sol", "gpt-6.2-astra", "gpt-6.2-sol"}},
+	} {
+		sections := buildPlatformSections(ch, tc.groups)
+		require.Len(t, sections, 1)
+		var modelNames []string
+		for _, model := range sections[0].SupportedModels {
+			modelNames = append(modelNames, model.Name)
+		}
+		require.Equal(t, tc.want, modelNames)
+	}
+}
+
 func TestBuildPlatformSections_CompositeGroupExpandsAcrossConfiguredModelPlatforms(t *testing.T) {
 	anthropicPrice := 3e-6
 	openAIPrice := 2.5e-6
