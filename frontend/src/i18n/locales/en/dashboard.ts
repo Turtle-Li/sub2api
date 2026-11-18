@@ -689,6 +689,11 @@ export default {
     detail: {
       noModels: 'No models configured for this group',
       noPricing: 'Pricing not configured',
+      gptTextModels: 'Text models',
+      gptImagePrices: 'GPT image generation prices',
+      gptImageOtherPricing: 'GPT image generation · other pricing',
+      fixedImageRate: 'Charged per image, independently of the text-model group rate',
+      groupImageRate: 'Per-image price with the current group or personal rate applied',
       peakNote: 'Peak hours {window}: billing rate ×{multiplier}',
       longContextDisabledNote: 'Long-context tier pricing is disabled for this group: requests above the threshold are billed at the base tier; official tiers are for reference only'
     },
@@ -714,6 +719,7 @@ export default {
       timePricingWeekdays: 'Weekdays',
       timePricingRateHint: 'Effective rate {rate} × period multiplier {multiplier}',
       paidPrice: 'Your Price (Discounted)',
+      imagePrice: 'Price per image',
       officialPrice: 'Official Price',
       rate: 'Rate',
       unitPerMillion: '$ / 1M tokens',

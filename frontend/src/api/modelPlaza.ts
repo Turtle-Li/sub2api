@@ -47,6 +47,7 @@ export interface PlazaTimePricing {
 export interface PlazaModel {
   name: string
   platform: string
+  gpt_image?: boolean
   /** 实收口径的展示定价：档位可提供绝对单价或相对基础价倍率；均为标准时段价。 */
   pricing: UserSupportedModelPricing | null
   official_pricing: PlazaOfficialPricing | null

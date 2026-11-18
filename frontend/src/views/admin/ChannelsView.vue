@@ -331,6 +331,45 @@
               </div>
             </div>
 
+            <div v-if="section.platform === 'openai'" class="space-y-2 border-t border-gray-200 pt-3 dark:border-dark-600">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 flex-1 basis-56">
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ t('admin.channels.form.gptDisplayModels') }}</p>
+                  <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
+                    {{ t(form.restrict_models ? 'admin.channels.form.gptDisplayRestricted' : 'admin.channels.form.gptDisplayHint') }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-secondary px-3 py-1.5 text-xs"
+                  :disabled="submitting || gptPreviewLoading || form.restrict_models || !section.group_ids.length"
+                  :aria-busy="gptPreviewLoading"
+                  @click="previewGPTDisplayModels"
+                >
+                  {{ t(gptPreviewLoading ? 'admin.channels.form.gptDisplaySyncing' : 'admin.channels.form.gptDisplaySync') }}
+                </button>
+              </div>
+              <p v-if="gptPreviewError" role="alert" class="text-xs text-red-700 dark:text-red-300">{{ gptPreviewError }}</p>
+              <p v-else-if="gptPreviewStale" role="status" class="text-xs text-amber-800 dark:text-amber-200">
+                {{ t('admin.channels.form.gptDisplayStale') }}
+              </p>
+              <p v-else-if="gptPreview && !gptPreviewChanges.length" role="status" class="text-xs text-gray-600 dark:text-gray-300">
+                {{ t('admin.channels.form.gptDisplayUnchanged') }}
+              </p>
+              <details v-else-if="gptPreviewChanges.length" open class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-dark-800">
+                <summary class="cursor-pointer font-medium text-gray-900 dark:text-gray-100">
+                  <span role="status">{{ t('admin.channels.form.gptDisplaySummary', gptPreviewTotals) }}</span>
+                </summary>
+                <ul class="mt-2 max-h-36 space-y-2 overflow-y-auto">
+                  <li v-for="change in gptPreviewChanges" :key="change.id" class="break-words text-gray-700 dark:text-gray-200">
+                    <p class="font-medium">{{ change.group }}</p>
+                    <p v-if="change.added.length">{{ t('admin.channels.form.gptDisplayAdded', { models: change.added.join(', ') }) }}</p>
+                    <p v-if="change.removed.length">{{ t('admin.channels.form.gptDisplayRemoved', { models: change.removed.join(', ') }) }}</p>
+                  </li>
+                </ul>
+              </details>
+            </div>
+
             <!-- Web Search Emulation (platform whitelist, hidden when global disabled) -->
             <div v-if="WEB_SEARCH_EMULATION_PLATFORMS.has(section.platform) && webSearchGlobalEnabled" class="border-t border-gray-200 pt-3 dark:border-dark-600">
               <div class="flex items-center justify-between">
@@ -607,7 +646,7 @@
           <button
             type="submit"
             form="channel-form"
-            :disabled="submitting"
+            :disabled="submitting || gptPreviewLoading"
             class="btn btn-primary"
           >
             {{ submitting
@@ -636,12 +675,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
-import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
+import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule, GPTDisplayModelsByGroup, GPTDisplayPreviewRequest } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
 import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formReasoningEffortMultipliersToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, normalizePricingCurrency, perTokenToMTok, validateIntervals, validateReasoningEffortMultipliers, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
@@ -784,6 +823,80 @@ const form = reactive({
   platforms: [] as PlatformSection[],
   apply_pricing_to_account_stats: false,
 })
+
+const gptDisplayFeature = 'gpt_display_models_by_group'
+const gptPreview = ref<{ signature: string; models: GPTDisplayModelsByGroup } | null>(null)
+const gptPreviewRequest = shallowRef<AbortController | null>(null)
+const gptPreviewLoading = computed(() => gptPreviewRequest.value !== null)
+const gptPreviewError = ref('')
+const plazaHiddenModels = computed(() => [...new Set(form.plaza_hidden_models.split(/[\s,，]+/).filter(Boolean))])
+
+const gptPreviewInput = computed((): GPTDisplayPreviewRequest => {
+  const openai = form.platforms.find(section => section.enabled && section.platform === 'openai')
+  const { model_mapping, model_pricing } = formToAPI()
+  return {
+    group_ids: [...(openai?.group_ids ?? [])].sort((a, b) => a - b),
+    model_mapping: { openai: model_mapping.openai ?? {} },
+    model_pricing: model_pricing.filter(price => price.platform === 'openai'),
+    restrict_models: form.restrict_models,
+    hidden_models: plazaHiddenModels.value
+  }
+})
+const gptPreviewSignature = computed(() => JSON.stringify(gptPreviewInput.value))
+const gptPreviewStale = computed(() => gptPreview.value !== null && gptPreview.value.signature !== gptPreviewSignature.value)
+
+function readSavedGPTDisplayModels(value: unknown): GPTDisplayModelsByGroup {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).flatMap(([id, names]) =>
+    /^\d+$/.test(id) && Array.isArray(names)
+      ? [[id, names.filter((name: unknown): name is string => typeof name === 'string')]]
+      : []
+  ))
+}
+
+const gptPreviewChanges = computed(() => {
+  if (!gptPreview.value || gptPreviewStale.value) return []
+  const prior = readSavedGPTDisplayModels(editingChannel.value?.features_config?.[gptDisplayFeature])
+  const next = gptPreview.value.models
+  return [...new Set([...Object.keys(prior), ...Object.keys(next)])].flatMap(id => {
+    const before = new Set(prior[id] ?? [])
+    const after = new Set(next[id] ?? [])
+    const added = [...after].filter(model => !before.has(model))
+    const removed = [...before].filter(model => !after.has(model))
+    if (!added.length && !removed.length) return []
+    const group = allGroups.value.find(item => item.id === Number(id))?.name ?? `#${id}`
+    return [{ id, group, added, removed }]
+  })
+})
+const gptPreviewTotals = computed(() => gptPreviewChanges.value.reduce(
+  (totals, change) => ({ added: totals.added + change.added.length, removed: totals.removed + change.removed.length }),
+  { added: 0, removed: 0 }
+))
+
+function clearGPTPreview() {
+  gptPreviewRequest.value?.abort()
+  gptPreviewRequest.value = null
+  gptPreview.value = null
+  gptPreviewError.value = ''
+}
+
+async function previewGPTDisplayModels() {
+  if (gptPreviewLoading.value || submitting.value || form.restrict_models || !gptPreviewInput.value.group_ids.length) return
+  clearGPTPreview()
+  const controller = new AbortController()
+  const signature = gptPreviewSignature.value
+  gptPreviewRequest.value = controller
+  try {
+    const { models_by_group } = await adminAPI.channels.previewGPTDisplayModels(gptPreviewInput.value, controller.signal)
+    if (!controller.signal.aborted) gptPreview.value = { signature, models: models_by_group }
+  } catch (error: unknown) {
+    if (!controller.signal.aborted) {
+      gptPreviewError.value = extractApiErrorMessage(error, t('admin.channels.form.gptDisplayError'))
+    }
+  } finally {
+    if (gptPreviewRequest.value === controller) gptPreviewRequest.value = null
+  }
+}
 
 let abortController: AbortController | null = null
 
@@ -1148,6 +1261,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
   const featuresConfig: Record<string, unknown> = editingChannel.value?.features_config
     ? { ...editingChannel.value.features_config }
     : {}
+  delete featuresConfig[gptDisplayFeature]
 
   for (const section of form.platforms) {
     if (!section.enabled) continue
@@ -1218,11 +1332,8 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     section => section.enabled && section.platform === 'anthropic' && section.bedrock_cc_compat
   )
 
-  const plazaHiddenModels = Array.from(new Set(
-    form.plaza_hidden_models.split(/[\s,，]+/).map((name) => name.trim()).filter(Boolean)
-  ))
-  if (plazaHiddenModels.length > 0) {
-    featuresConfig.model_plaza_hidden_models = plazaHiddenModels
+  if (plazaHiddenModels.value.length > 0) {
+    featuresConfig.model_plaza_hidden_models = plazaHiddenModels.value
   } else {
     delete featuresConfig.model_plaza_hidden_models
   }
@@ -1393,6 +1504,7 @@ function handleSort(key: string, order: 'asc' | 'desc') {
 
 // ── Dialog ──
 function resetForm() {
+  clearGPTPreview()
   form.name = ''
   form.description = ''
   form.status = 'active'
@@ -1415,6 +1527,7 @@ async function openCreateDialog() {
 }
 
 async function openEditDialog(channel: Channel) {
+  clearGPTPreview()
   editingChannel.value = channel
   form.name = channel.name
   form.description = channel.description || ''
@@ -1522,7 +1635,7 @@ function closeDialog() {
 }
 
 async function handleSubmit() {
-  if (submitting.value) return
+  if (submitting.value || gptPreviewLoading.value) return
   if (!form.name.trim()) {
     appStore.showError(t('admin.channels.nameRequired', 'Please enter a channel name'))
     return
@@ -1646,6 +1759,9 @@ async function handleSubmit() {
   }
 
   const { group_ids, model_pricing, model_mapping, features_config } = formToAPI()
+  if (gptPreview.value && !gptPreviewStale.value) {
+    features_config[gptDisplayFeature] = gptPreview.value.models
+  }
 
   submitting.value = true
   try {
@@ -1738,6 +1854,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  clearGPTPreview()
   clearTimeout(searchTimeout)
   abortController?.abort()
   document.removeEventListener('click', handleRuleAccountClickOutside)

@@ -1092,6 +1092,7 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestRunnerService,
 	ProvideModelTraceService,
 	NewGroupCapacityService,
+	NewChannelModelCatalog,
 	NewChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,

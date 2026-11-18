@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -165,6 +166,7 @@ type ChannelService struct {
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	pricingService       *PricingService // 用于「可用渠道」展示时回落到全局定价；可为 nil（测试场景）
 	cachePubSub          ChannelCachePubSub
+	modelCatalog         *ChannelModelCatalog
 
 	cache   atomic.Value // *channelCache
 	cacheSF singleflight.Group
@@ -173,13 +175,14 @@ type ChannelService struct {
 // NewChannelService 创建渠道服务实例。
 // pricingService 仅供 ListAvailable 在渠道未配置定价时回落到全局 LiteLLM 数据；
 // 计费热路径走独立的 ModelPricingResolver，与此参数无关。可传 nil。
-func NewChannelService(repo ChannelRepository, groupRepo GroupRepository, authCacheInvalidator APIKeyAuthCacheInvalidator, pricingService *PricingService, cachePubSub ChannelCachePubSub) *ChannelService {
+func NewChannelService(repo ChannelRepository, groupRepo GroupRepository, authCacheInvalidator APIKeyAuthCacheInvalidator, pricingService *PricingService, cachePubSub ChannelCachePubSub, modelCatalog *ChannelModelCatalog) *ChannelService {
 	s := &ChannelService{
 		repo:                 repo,
 		groupRepo:            groupRepo,
 		authCacheInvalidator: authCacheInvalidator,
 		pricingService:       pricingService,
 		cachePubSub:          cachePubSub,
+		modelCatalog:         modelCatalog,
 	}
 	s.subscribeCacheUpdates(context.Background())
 	return s
@@ -980,7 +983,14 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 		channel.BillingModelSource = input.BillingModelSource
 	}
 	if input.FeaturesConfig != nil {
-		channel.FeaturesConfig = mergeWebSearchEmulationDimensions(channel.FeaturesConfig, input.FeaturesConfig)
+		features := mergeWebSearchEmulationDimensions(channel.FeaturesConfig, input.FeaturesConfig)
+		if _, replace := features[featureKeyGPTDisplayModels]; !replace {
+			if saved, ok := channel.FeaturesConfig[featureKeyGPTDisplayModels]; ok {
+				features = maps.Clone(features)
+				features[featureKeyGPTDisplayModels] = saved
+			}
+		}
+		channel.FeaturesConfig = features
 	}
 	if input.ApplyPricingToAccountStats != nil {
 		channel.ApplyPricingToAccountStats = *input.ApplyPricingToAccountStats

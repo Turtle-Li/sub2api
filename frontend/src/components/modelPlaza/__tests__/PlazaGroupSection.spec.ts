@@ -92,6 +92,24 @@ function mountSection(g: ModelPlazaGroup) {
 const NOTE = 'modelPlaza.detail.longContextDisabledNote'
 
 describe('PlazaGroupSection 长上下文说明', () => {
+  it('separates GPT generation from text models that accept image input', () => {
+    const sol = { ...ladderModel(1), name: 'gpt-6.2-sol', platform: 'openai' }
+    const image = {
+      ...sol,
+      name: 'gpt-image-2.5-flare',
+      pricing: { ...sol.pricing!, billing_mode: 'image' as const }
+    }
+    const tokenBilledImage = { ...sol, name: 'gpt-image-2', gpt_image: true }
+    const wrapper = mountSection(group({ platform: 'openai', image_rate_independent: true, models: [sol, image, tokenBilledImage] }))
+    const tables = wrapper.findAllComponents(PlazaModelPricingTable)
+    expect(tables.map(table => table.props('models').map(model => model.name))).toEqual([
+      ['gpt-6.2-sol'], ['gpt-image-2.5-flare'], ['gpt-image-2']
+    ])
+    expect(tables.map(table => table.props('imageOnly'))).toEqual([false, true, false])
+    expect(wrapper.text()).toContain('modelPlaza.detail.fixedImageRate')
+    wrapper.unmount()
+  })
+
   it('passes video-specific rates to the pricing table', () => {
     const wrapper = mountSection(group({ video_rate_independent: true, video_rate_multiplier: 0 }))
     expect(wrapper.findComponent(PlazaModelPricingTable).props()).toMatchObject({

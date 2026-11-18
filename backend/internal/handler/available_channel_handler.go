@@ -2,6 +2,7 @@ package handler
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -250,10 +251,28 @@ func buildPlatformSections(
 	sections := make([]userChannelPlatformSection, 0, len(platforms))
 	for _, platform := range platforms {
 		platformSet := map[string]struct{}{platform: {}}
+		groups := groupsByPlatform[platform]
+		models := toUserSupportedModels(ch.SupportedModels, platformSet)
+		if len(ch.AdditionalModelsByGroup) > 0 {
+			seen := make(map[string]bool, len(models))
+			for _, m := range models {
+				seen[strings.ToLower(m.Name)] = true
+			}
+			for _, g := range groups {
+				for _, m := range toUserSupportedModels(ch.AdditionalModelsByGroup[g.ID], platformSet) {
+					key := strings.ToLower(m.Name)
+					if !seen[key] {
+						models = append(models, m)
+						seen[key] = true
+					}
+				}
+			}
+			sort.SliceStable(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+		}
 		sections = append(sections, userChannelPlatformSection{
 			Platform:        platform,
-			Groups:          groupsByPlatform[platform],
-			SupportedModels: toUserSupportedModels(ch.SupportedModels, platformSet),
+			Groups:          groups,
+			SupportedModels: models,
 		})
 	}
 	return sections

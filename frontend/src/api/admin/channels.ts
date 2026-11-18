@@ -211,5 +211,25 @@ export async function syncPricingModels(platform: string): Promise<SyncPricingMo
   return data
 }
 
-const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, syncPricingModels }
+export type GPTDisplayModelsByGroup = Record<string, string[]>
+
+export interface GPTDisplayPreviewRequest {
+  group_ids: number[]
+  model_pricing: ChannelModelPricing[]
+  model_mapping: Record<string, Record<string, string>>
+  restrict_models: boolean
+  hidden_models: string[]
+}
+
+export async function previewGPTDisplayModels(
+  req: GPTDisplayPreviewRequest,
+  signal?: AbortSignal
+): Promise<{ models_by_group: GPTDisplayModelsByGroup }> {
+  const { data } = await apiClient.post<{ models_by_group: GPTDisplayModelsByGroup }>(
+    '/admin/channels/gpt-display-models/preview', req, { signal }
+  )
+  return data
+}
+
+const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, syncPricingModels, previewGPTDisplayModels }
 export default channelsAPI

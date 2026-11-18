@@ -72,6 +72,7 @@ type modelPlazaModel struct {
 	Platform        string                     `json:"platform"`
 	Pricing         *userSupportedModelPricing `json:"pricing"`
 	OfficialPricing *modelPlazaOfficialPricing `json:"official_pricing"`
+	GPTImage        bool                       `json:"gpt_image,omitempty"`
 	// LongContextBasis 多档时的计价基准："whole_request"（整单按档）| "marginal"（仅超出部分）。
 	LongContextBasis string `json:"long_context_basis,omitempty"`
 	// TimePricing 分时倍率时段，落在时段内的请求整单乘倍率；无分时省略。
@@ -215,6 +216,7 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 			Platform:         m.Platform,
 			Pricing:          toUserPricing(m.Pricing),
 			OfficialPricing:  toModelPlazaOfficialPricing(m.OfficialPricing),
+			GPTImage:         m.GPTImage,
 			LongContextBasis: string(m.LongContextBasis),
 			TimePricing:      toModelPlazaTimePricing(m.TimePricing),
 		})

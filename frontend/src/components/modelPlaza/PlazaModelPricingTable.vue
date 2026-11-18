@@ -1,5 +1,25 @@
 <template>
-  <div class="plaza-pricing-table overflow-x-auto" :style="accentStyle">
+  <table v-if="imageOnly" class="w-full border-collapse text-left text-sm tabular-nums">
+    <thead class="border-y border-gray-100 text-xs font-medium text-gray-600 dark:border-dark-700/60 dark:text-dark-300">
+      <tr>
+        <th scope="col" class="w-1/2 px-5 py-2 font-medium">{{ t('modelPlaza.table.model') }}</th>
+        <th scope="col" class="px-5 py-2 text-right font-medium">{{ t('modelPlaza.table.imagePrice') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="{ model, quotes } in imageRows" :key="`${model.platform}:${model.name}`" class="border-b border-gray-100 last:border-0 dark:border-dark-700/60">
+        <th scope="row" class="break-all px-5 py-3 align-top font-medium text-gray-900 dark:text-white">{{ model.name }}</th>
+        <td class="px-5 py-3 text-right align-top text-gray-900 dark:text-white">
+          <div v-for="(quote, index) in quotes" :key="index" class="flex flex-wrap items-baseline justify-end gap-x-2">
+            <span v-if="quote.label" class="text-xs text-gray-600 dark:text-dark-300">{{ quote.label }}</span>
+            <span class="whitespace-nowrap font-semibold">{{ paidRequestPrice(model, quote.price) }} <span class="text-xs font-normal text-gray-600 dark:text-dark-300">{{ t('modelPlaza.table.perUnitImage') }}</span></span>
+          </div>
+          <span v-if="!quotes.length" class="text-xs text-gray-600 dark:text-dark-300">{{ t('modelPlaza.detail.noPricing') }}</span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <div v-else class="plaza-pricing-table overflow-x-auto" :style="accentStyle">
     <table class="w-full min-w-[1000px] table-auto border-collapse text-sm tabular-nums">
       <colgroup>
         <col class="w-[25%]" />
@@ -352,6 +372,7 @@ function reasoningEffortMultipliers(model: PlazaModel): [string, number][] {
 
 const props = defineProps<{
   models: PlazaModel[]
+  imageOnly?: boolean
   /** 分组平台;实付分区底色随平台着色,未知平台回退品牌青。 */
   platform?: string
   /** 分组默认倍率。 */
@@ -412,6 +433,8 @@ const sortedModels = computed(() => {
     return b.name.localeCompare(a.name)
   })
 })
+
+const imageRows = computed(() => sortedModels.value.map(model => ({ model, quotes: imageQuotes(model) })))
 
 const effectiveRate = computed(() => props.userRateMultiplier ?? props.rateMultiplier)
 const hasCustomRate = computed(
@@ -501,8 +524,8 @@ function requestRate(m: PlazaModel): number {
   if (billingMode(m) === BILLING_MODE_VIDEO && props.videoRateIndependent === true) {
     return Math.max(0, props.videoRateMultiplier ?? 1)
   }
-  return billingMode(m) === BILLING_MODE_IMAGE && props.imageRateIndependent === true
-    ? (props.imageRateMultiplier ?? 1)
+  return (props.imageOnly || billingMode(m) === BILLING_MODE_IMAGE) && props.imageRateIndependent === true
+    ? Math.max(0, props.imageRateMultiplier ?? 1)
     : effectiveRate.value
 }
 
@@ -599,6 +622,21 @@ function tierHint(m: PlazaModel): string {
 /** 按次/按图模式的阶梯定价(仅保留配了按次价的档位)。 */
 function requestIntervals(m: PlazaModel): UserPricingInterval[] {
   return (m.pricing?.intervals ?? []).filter((iv) => iv.per_request_price != null)
+}
+
+function imageQuotes(model: PlazaModel): { label: string; price: number }[] {
+  const tiers = requestIntervals(model).flatMap(tier => tier.per_request_price == null
+    ? []
+    : [{ label: tierLabel(tier), price: tier.per_request_price }])
+  if (tiers.length === 0) {
+    const price = model.pricing?.per_request_price
+    return price == null ? [] : [{ label: '', price }]
+  }
+  const labels = ['1K', '2K', '4K']
+  if (tiers.length === labels.length && labels.every(label => tiers.some(tier => tier.label === label && tier.price === tiers[0].price))) {
+    return [{ label: labels.join(' / '), price: tiers[0].price }]
+  }
+  return tiers
 }
 
 /**

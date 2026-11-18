@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -26,6 +27,7 @@ type PlazaModel struct {
 	Platform        string
 	Pricing         *ChannelModelPricing
 	OfficialPricing *PlazaOfficialPricing
+	GPTImage        bool
 	// LongContextBasis 多档时的计价基准（整单 / 仅超出部分），单档为空。
 	LongContextBasis ContextPricingBasis
 	// TimePricing 计费会生效的分时倍率时段；无分时为 nil。
@@ -77,6 +79,7 @@ type ModelPlazaService struct {
 	pricingService *PricingService
 	billingService *BillingService
 	resolver       *ModelPricingResolver
+	modelCatalog   *ChannelModelCatalog
 }
 
 // NewModelPlazaService 创建模型广场服务。
@@ -86,6 +89,7 @@ func NewModelPlazaService(
 	pricingService *PricingService,
 	billingService *BillingService,
 	resolver *ModelPricingResolver,
+	modelCatalog *ChannelModelCatalog,
 ) *ModelPlazaService {
 	return &ModelPlazaService{
 		channelRepo:    channelRepo,
@@ -93,6 +97,7 @@ func NewModelPlazaService(
 		pricingService: pricingService,
 		billingService: billingService,
 		resolver:       resolver,
+		modelCatalog:   modelCatalog,
 	}
 }
 
@@ -165,6 +170,7 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		ch.normalizeBillingModelSource()
 		supported := ch.SupportedModels()
 		fillGlobalPricingFallback(s.pricingService, supported)
+		snapshot := ch.gptDisplayModelsByGroup()
 
 		for _, gid := range ch.GroupIDs {
 			pg, ok := byGroup[gid]
@@ -176,8 +182,11 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 				idx = make(map[modelKey]int, len(supported))
 				modelIdx[gid] = idx
 			}
-			for j := range supported {
-				m := supported[j]
+			models := supported
+			if extra := s.modelCatalog.savedModels(ch, groupEnt[gid], supported, snapshot[gid]); len(extra) > 0 {
+				models = slices.Concat(supported, extra)
+			}
+			for _, m := range models {
 				if pg.Platform == PlatformComposite {
 					if !isConcreteRequestPlatform(m.Platform) {
 						continue
@@ -201,6 +210,7 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 					Name:     m.Name,
 					Platform: m.Platform,
 					Pricing:  m.Pricing,
+					GPTImage: m.Platform == PlatformOpenAI && (IsGPTImageGenerationModel(m.Name) || IsGPTImageGenerationModel(m.ProbeModelName)),
 				})
 			}
 		}
@@ -266,16 +276,16 @@ func plazaDisplayCurrency(policy PricingCurrencySettings, g *Group) (string, flo
 // token 模型取计费阶梯表（单价与档位均由真实计费函数得出），
 // 图片/按次模型（或阶梯表不可用时）沿用渠道定价与分组图片档位价。
 func (s *ModelPlazaService) fillDisplayPricing(ctx context.Context, m *PlazaModel, g *Group) {
-	if groupPricing := matchGroupModelPricing(g, m.Name); groupPricing != nil {
+	groupPricing := matchGroupModelPricing(g, m.Name)
+	if groupPricing != nil {
 		m.Pricing = groupPricing
-		// 分组模型级固定价就是实收价，不能再被分组图片兜底档位覆盖。
-		// 否则模型广场会显示 image_price_1k/2k/4k，而实际按 model_pricing 扣费。
-		if groupPricing.BillingMode == BillingModeImage || groupPricing.BillingMode == BillingModePerRequest {
-			return
-		}
 	}
 	if s.billingService != nil {
 		m.Pricing = s.billingService.pricingCardInUSD(m.Pricing)
+	}
+	// 分组模型级固定价优先于分组图片兜底档位。
+	if groupPricing != nil && (groupPricing.BillingMode == BillingModeImage || groupPricing.BillingMode == BillingModePerRequest) {
+		return
 	}
 	if s.showsGroupImagePricing(ctx, m, g) {
 		m.Pricing = s.plazaGroupImagePricing(m.Name, g)
@@ -307,7 +317,12 @@ func (s *ModelPlazaService) showsGroupImagePricing(ctx context.Context, m *Plaza
 		return false
 	}
 	resolved := s.resolver.Resolve(ctx, PricingInput{Model: m.Name, GroupID: &g.ID, Group: g})
-	return resolved == nil || (resolved.Source != PricingSourceGroup && resolved.Source != PricingSourceChannel)
+	if resolved == nil || (resolved.Source != PricingSourceGroup && resolved.Source != PricingSourceChannel) {
+		return true
+	}
+	// The dedicated GPT image endpoint honors the group's explicit per-image switch
+	// even when its price card is token-based. Mixed text/image requests are unchanged.
+	return m.GPTImage && g.ImageCountBilling && resolved.Mode == BillingModeToken
 }
 
 func (s *ModelPlazaService) isImageGenerationModel(model string) bool {
@@ -327,7 +342,7 @@ func (s *ModelPlazaService) plazaGroupImagePricing(model string, g *Group) *Chan
 	out := &ChannelModelPricing{BillingMode: BillingModeImage}
 	for i, tier := range []string{"1K", "2K", "4K"} {
 		price := s.billingService.getImageUnitPrice(model, tier, cfg)
-		if price <= 0 {
+		if price < 0 {
 			continue
 		}
 		out.Intervals = append(out.Intervals, PricingInterval{TierLabel: tier, PerRequestPrice: &price, SortOrder: i})

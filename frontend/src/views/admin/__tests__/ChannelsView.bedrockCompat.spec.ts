@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Channel, CreateChannelRequest, UpdateChannelRequest } from '@/api/admin/channels'
 import ChannelsView from '@/views/admin/ChannelsView.vue'
 
-const { listChannels, createChannel, updateChannel, getGroups, showSuccess, showError } = vi.hoisted(() => ({
+const { listChannels, createChannel, updateChannel, previewGPTDisplayModels, getGroups, showSuccess, showError } = vi.hoisted(() => ({
   listChannels: vi.fn(),
   createChannel: vi.fn(),
   updateChannel: vi.fn(),
+  previewGPTDisplayModels: vi.fn(),
   getGroups: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
@@ -15,7 +16,7 @@ const { listChannels, createChannel, updateChannel, getGroups, showSuccess, show
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
-    channels: { list: listChannels, create: createChannel, update: updateChannel },
+    channels: { list: listChannels, create: createChannel, update: updateChannel, previewGPTDisplayModels },
     groups: { getAll: getGroups },
     settings: { getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false }) }
   }
@@ -25,7 +26,8 @@ vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess, showError })
 
 vi.mock('vue-i18n', async () => ({
   ...await vi.importActual<typeof import('vue-i18n')>('vue-i18n'),
-  useI18n: () => ({ t: (key: string) => key })
+  useI18n: () => ({ t: (key: string, values?: { models?: string } | string) =>
+    typeof values === 'object' && values.models ? `${key} ${values.models}` : key })
 }))
 
 function mountView() {
@@ -86,11 +88,12 @@ function makeChannel(features: Record<string, unknown>): Channel {
   }
 }
 
-describe('ChannelsView Bedrock compatibility', () => {
+describe('ChannelsView channel feature configuration', () => {
   let stored: Channel[]
 
   beforeEach(() => {
     vi.clearAllMocks()
+    previewGPTDisplayModels.mockReset()
     localStorage.clear()
     stored = []
     listChannels.mockImplementation(async () => ({ items: stored, total: stored.length }))
@@ -172,6 +175,69 @@ describe('ChannelsView Bedrock compatibility', () => {
       group_ids: [22],
       features_config: { bedrock_cc_compat: false, future_feature: { enabled: true } }
     })
+    wrapper.unmount()
+  })
+
+  it('previews GPT display changes on click and saves only the display snapshot', async () => {
+    const channel = makeChannel({ gpt_display_models_by_group: { '22': ['gpt-6.1-sol'] }, future_feature: { enabled: true } })
+    channel.model_mapping = { openai: { 'gpt-6-sol': 'gpt-6-sol' } }
+    stored = [channel]
+    previewGPTDisplayModels.mockResolvedValue({ models_by_group: { '22': ['gpt-6.2-astra', 'gpt-6.2-sol'] } })
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await clickButton(wrapper, 'admin.groups.platforms.openai')
+    expect(previewGPTDisplayModels).not.toHaveBeenCalled()
+    await clickButton(wrapper, 'admin.channels.form.gptDisplaySync')
+    expect(previewGPTDisplayModels).toHaveBeenCalledOnce()
+    expect(previewGPTDisplayModels.mock.calls[0][0]).toMatchObject({ group_ids: [22], model_mapping: channel.model_mapping })
+    expect(updateChannel).not.toHaveBeenCalled()
+    const preview = wrapper.get('details')
+    expect(preview.text()).toContain('OpenAI group')
+    expect(preview.text()).toContain('gptDisplayAdded gpt-6.2-astra, gpt-6.2-sol')
+    expect(preview.text()).toContain('gptDisplayRemoved gpt-6.1-sol')
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    const payload = updateChannel.mock.calls[0][1]
+    expect(payload.features_config.gpt_display_models_by_group).toEqual({ '22': ['gpt-6.2-astra', 'gpt-6.2-sol'] })
+    expect(payload.features_config.future_feature).toEqual({ enabled: true })
+    expect(payload.model_pricing).toEqual([])
+    expect(payload.model_mapping).toEqual(channel.model_mapping)
+    wrapper.unmount()
+  })
+
+  it('does not save a preview after the display filters change', async () => {
+    const saved = { '22': ['gpt-6.1-sol'] }
+    stored = [makeChannel({ gpt_display_models_by_group: saved })]
+    previewGPTDisplayModels.mockResolvedValue({ models_by_group: { '22': ['gpt-6.2-sol'] } })
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await clickButton(wrapper, 'admin.groups.platforms.openai')
+    await clickButton(wrapper, 'admin.channels.form.gptDisplaySync')
+    await clickButton(wrapper, 'admin.channels.form.basicSettings')
+    await wrapper.get('textarea[placeholder="admin.channels.form.plazaHiddenModelsPlaceholder"]').setValue('gpt-6.2-sol')
+    await clickButton(wrapper, 'admin.groups.platforms.openai')
+    expect(wrapper.get('[role="status"]').text()).toBe('admin.channels.form.gptDisplayStale')
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('gpt_display_models_by_group')
+    wrapper.unmount()
+  })
+
+  it('keeps the saved GPT list when the preview fails', async () => {
+    const saved = { '22': ['gpt-6.1-sol'] }
+    stored = [makeChannel({ gpt_display_models_by_group: saved })]
+    previewGPTDisplayModels.mockRejectedValue(new Error('Cannot read group models'))
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await clickButton(wrapper, 'admin.groups.platforms.openai')
+    await clickButton(wrapper, 'admin.channels.form.gptDisplaySync')
+    expect(wrapper.get('[role="alert"]').text()).toBe('Cannot read group models')
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('gpt_display_models_by_group')
     wrapper.unmount()
   })
 })
