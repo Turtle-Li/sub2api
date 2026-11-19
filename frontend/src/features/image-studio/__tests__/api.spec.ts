@@ -61,6 +61,43 @@ describe('Image Studio session adapter', () => {
     await api.image(task, 1)
     expect(apiClient.get).toHaveBeenLastCalledWith('/image-studio/batches/a/items/one/content', expect.objectContaining({ params: { image_index: 1 } }))
   })
+  it('loads one explicitly chosen archive item via the owning key without forwarding auth to COS', async () => {
+    const task = { job: { id: 'archive-job' }, item: { custom_id: 'one' } } as StudioTask
+    const signal = new AbortController().signal
+    const body = JSON.stringify({ key: 'one', status: { code: 'INVALID_ARGUMENT', message: 'invalid input' } }) + '\n'
+    const url = 'https://image-1309919944.cos.ap-shanghai.myqcloud.com/fixture.jsonl?signature=fixture'
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { data: [{ index: 0, size: body.length, content_type: 'application/x-ndjson', url }] } })
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(body))
+    try {
+      const result = await studioAPI(42, signal).archivePreview(task, signal)
+      expect(result).toMatchObject({ status: 'failed', images: [], error: { code: 'INVALID_ARGUMENT' } })
+      expect(apiClient.get).toHaveBeenCalledOnce()
+      expect(apiClient.get).toHaveBeenCalledWith('/image-studio/batches/archive-job/result-files', expect.objectContaining({ signal, headers: { 'X-API-Key-ID': '42' } }))
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(fetch).toHaveBeenCalledWith(url, expect.objectContaining({ credentials: 'omit', redirect: 'error', signal, headers: { Accept: 'application/x-ndjson, application/json' } }))
+    } finally { fetch.mockRestore() }
+  })
+  it.each(['workspace', 'drawer'] as const)('cancels a private archive read when the %s closes', async scope => {
+    const workspace = new AbortController()
+    const drawer = new AbortController()
+    const task = { job: { id: 'archive-job' }, item: { custom_id: 'one' } } as StudioTask
+    const url = 'https://image-1309919944.cos.ap-shanghai.myqcloud.com/fixture.jsonl?signature=fixture'
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { data: [{ index: 0, size: 12, content_type: 'application/x-ndjson', url }] } })
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, options) => new Promise<Response>((_resolve, reject) => {
+      const signal = options?.signal
+      if (!signal) { reject(new Error('Archive request must be abortable')); return }
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    }))
+    try {
+      const pending = studioAPI(42, workspace.signal).archivePreview(task, drawer.signal)
+      const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+      const cancelled = scope === 'workspace' ? workspace : drawer
+      cancelled.abort()
+      await rejected
+      expect(apiClient.get).toHaveBeenCalledOnce()
+    } finally { fetch.mockRestore() }
+  })
   it('waits for a peer backfill and retries only the thumbnail', async () => {
     vi.useFakeTimers()
     try {

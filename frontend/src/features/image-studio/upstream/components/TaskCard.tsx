@@ -1,7 +1,7 @@
 import React from 'react'
 // Adapted from 88lin/gpt-image-studio 5523a592, MIT; see UPSTREAM.md.
 import { useEffect, useState, useRef, type ReactNode } from 'react'
-import { taskDisplay, type StudioTask, type studioAPI } from '../../api'
+import { isImageOutputGone, taskDisplay, type StudioTask, type studioAPI } from '../../api'
 import { useNearViewport } from '../hooks/useNearViewport'
 import { modelBadge } from '../../ModelPicker'
 import ViewportTooltip from './ViewportTooltip'
@@ -51,22 +51,26 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
  const [aspectRatio, setAspectRatio] = useState<number | null>(null)
  const [imageError, setImageError] = useState('')
  const display = taskDisplay(record)
- const task = { status: ['failed', 'cancelled', 'output_deleted'].includes(display.status) ? 'error' : ['success', 'completed'].includes(display.status) || record.item.image_count ? 'done' : 'running', outputImages: Array.from({length: record.item.image_count}, (_, i) => `${record.id}/${i}`), apiProvider: record.job.provider, apiProfileName: '', apiModel: record.job.model }
- const badge = modelBadge(task.apiProvider, task.apiModel)
+ const isExpired = display.status === 'output_deleted'
  const isInterrupted = display.status === 'cancelled'
- const hasPreviewImage = task.status === 'done' && Boolean(thumbSrc)
+ const status = isExpired ? 'expired' : isInterrupted ? 'cancelled' : display.status === 'failed' ? 'error' : display.canOpenArchive ? 'archived' : ['succeeded', 'success', 'completed'].includes(display.status) ? 'done' : 'running'
+ const badge = modelBadge(record.job.provider, record.job.model)
+ const hasPreviewImage = display.canViewOutput && Boolean(thumbSrc)
+ const outputImages = Array.from({ length: record.item.image_count }, (_, i) => `${record.id}/${i}`)
  useEffect(() => {
-   if (!nearViewport || !record.item.image_count || record.job.status !== 'completed') return
+   if (!nearViewport || !display.canViewOutput) return
    const controller = new AbortController()
    let active = true; let url = ''
    setImageError('')
    setThumbSrc('')
    setAspectRatio(null)
-   api.thumbnail(record, controller.signal).then(blob => { if (active) { url = URL.createObjectURL(blob); setThumbSrc(url) } }).catch(error => { if (active) setImageError(error instanceof Error ? error.message : '图片加载失败') })
+   api.thumbnail(record, controller.signal).then(blob => { if (active) { url = URL.createObjectURL(blob); setThumbSrc(url) } }).catch(error => {
+     if (active) setImageError(isImageOutputGone(error) ? '图片已过期或已清理。' : error instanceof Error ? error.message : '预览暂时不可用。')
+   })
    return () => { active = false; controller.abort(); if (url) URL.revokeObjectURL(url) }
- }, [nearViewport, record, api])
+ }, [nearViewport, record, api, display.canViewOutput])
  return <div className="relative rounded-xl">
-   <div ref={cardRef} data-status={isInterrupted ? 'cancelled' : task.status} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
+   <div ref={cardRef} data-status={status} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div
@@ -74,7 +78,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
           style={hasPreviewImage && aspectRatio ? { aspectRatio: String(aspectRatio) } : undefined}
           className="studio-card-preview w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0"
         >
-          {task.status === 'running' && (
+          {status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
                 className="w-8 h-8 text-blue-400 animate-spin"
@@ -98,10 +102,10 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
               <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
             </div>
           )}
-          {task.status === 'error' && (
+          {(status === 'error' || isInterrupted || isExpired) && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
-                className={`w-7 h-7 ${isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}
+                className={`w-7 h-7 ${isExpired ? 'studio-muted' : isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -113,21 +117,22 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
                   d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <span className={`text-xs text-center leading-tight ${isInterrupted ? 'text-yellow-500' : 'text-red-400'}`}>
+              <span className={`text-xs text-center leading-tight ${isExpired ? 'studio-muted' : isInterrupted ? 'text-yellow-500' : 'text-red-400'}`}>
                 {display.label}
               </span>
             </div>
           )}
-          {task.status === 'done' && thumbSrc && (
+          {hasPreviewImage && (
             <>
               <img
                 src={thumbSrc}
-                data-image-id={task.outputImages[0]}
-                data-output-image-ids={task.outputImages.join(',')}
+                data-image-id={outputImages[0]}
+                data-output-image-ids={outputImages.join(',')}
                 className="saveable-image w-full h-auto block object-cover"
                 loading="lazy"
                 decoding="async"
                 alt={record.item.prompt_preview || "生成图片"}
+                onError={() => { setThumbSrc(''); setAspectRatio(null); setImageError('无法显示这张预览图。') }}
                 onLoad={event => {
                   const { naturalWidth, naturalHeight } = event.currentTarget
                   if (naturalWidth > 0 && naturalHeight > 0) {
@@ -135,14 +140,14 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
                   }
                 }}
               />
-              {(task.outputImages.length > 1) && (
+              {(outputImages.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {task.outputImages.length}
+                  {outputImages.length}
                 </span>
               )}
             </>
           )}
-          {task.status === 'done' && !thumbSrc && (
+          {(status === 'done' || status === 'archived') && !hasPreviewImage && (
             <svg
               className="w-8 h-8 text-gray-300"
               fill="none"
@@ -164,8 +169,8 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
         <div className="studio-card-body flex-1 p-3 flex flex-col min-w-0">
           <div className="studio-card-caption flex-1 min-h-0 overflow-hidden">
             <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">{record.item.prompt_preview || '(无提示词)'}</p>
-            {display.message && <p className="text-xs text-red-400 line-clamp-2">{display.message}</p>}
-            {imageError && <p className="text-xs text-red-400">{imageError}</p>}
+            {display.message && <p className={`text-xs line-clamp-2 ${isExpired ? 'studio-muted' : 'text-red-400'}`}>{display.message}</p>}
+            {display.canViewOutput && imageError && <p className="text-xs studio-muted" role="status">{imageError}</p>}
           </div>
           <div className="studio-card-footer mt-auto flex items-center gap-1.5">
             <span className="studio-card-model" title={badge.title}>
@@ -205,7 +210,7 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
                 tooltip="继续改图"
                 onClick={onEditOutputs}
                 className="studio-card-action rounded-md transition"
-                disabled={!task.outputImages?.length}
+                disabled={!display.canViewOutput}
               >
                 <svg
                   className="w-4 h-4"

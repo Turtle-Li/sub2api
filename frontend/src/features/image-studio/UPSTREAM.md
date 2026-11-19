@@ -123,6 +123,11 @@ Current redesign and acceptance: `docs/features/IMAGE_STUDIO_REDESIGN_20261108.m
 
 ## Catalogue and gallery refinement (2026-11-08)
 
+The [November 19 follow-up](../../../../docs/features/IMAGE_STUDIO_MODELS_AND_HISTORY_20261119.md)
+uses the server's existing retention deadline to distinguish expired output from
+task failure. This is a host-only projection. The pinned card/viewport behavior,
+VSO variant authorization boundary, and separate original read remain intact.
+
 The owner also maps platform/model selection and gallery delivery to VSO
 `4edef85ab3716fd43989b4a49561a148ba500d93`. Inspected its `workspace.js`
 platform/price UI, `GalleryCardQueryService` and its paging/cursor tests,

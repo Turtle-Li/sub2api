@@ -115,6 +115,34 @@ func TestFetchOpenAIAccountModelsPreservesEmptyCatalog(t *testing.T) {
 	require.Empty(t, models, "an empty upstream catalog must not become a static model list")
 }
 
+func TestFetchOpenAIAccountModelsOffersExplicitImageVariantsOmittedByRelay(t *testing.T) {
+	gateway := newCodexModelsAPIKeyTestService(&codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		return ordinaryModelsUpstreamResponse(`{"data":[{"id":"text-alias"},{"id":"gpt-image-2.6"},{"id":"gpt-image-2.5-flare"}]}`), nil
+	}})
+	svc := &AccountTestService{openaiGatewayService: gateway}
+	account := newCodexModelsAPIKeyTestAccount("https://models.example/v1")
+	account.Credentials["model_mapping"] = map[string]any{
+		"text-alias":             "text-alias",
+		"gpt-image-2.6":          "gpt-image-2.6",
+		"gpt-image-2.5":          "gpt-image-2.5",
+		"gpt-image-2.5-flare":    "gpt-image-2.5-flare",
+		"gpt-image-2.6-sunburst": "gpt-image-2.6-sunburst",
+		"gpt-image-2.6-flare":    "other-text-model",
+		"gpt-image-2.*":          "gpt-image-2.6-sunburst",
+	}
+	ctx := context.Background()
+	models, err := svc.FetchOpenAIAccountModels(ctx, account)
+	require.NoError(t, err)
+	var IDs []string
+	for _, model := range models {
+		IDs = append(IDs, model.ID)
+	}
+	require.ElementsMatch(t, []string{"text-alias", "gpt-image-2.6", "gpt-image-2.5-flare", "gpt-image-2.6-sunburst"}, IDs)
+	upstream, err := gateway.FetchOpenAIModelsList(ctx, account)
+	require.NoError(t, err)
+	require.NotContains(t, string(upstream.Body), "gpt-image-2.6-sunburst", "picker choices must not change shared discovery")
+}
+
 func TestResolveOpenAIAccountTestModelOAuthSkipsRetiredAndPrefersStableLiveTextModel(t *testing.T) {
 	_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[
 		{"slug":"gpt-image-2.5-flare"},

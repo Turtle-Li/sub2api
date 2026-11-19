@@ -145,6 +145,9 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
       imageQueue = request.then(() => undefined, () => undefined)
       return request
     },
+    archivePreview(task: StudioTask, requestSignal: AbortSignal) {
+      return owned(task.job).archivePreview(task, requestSignal)
+    },
     async thumbnail(task: StudioTask, requestSignal: AbortSignal = signal) {
       signal.throwIfAborted()
       requestSignal.throwIfAborted()

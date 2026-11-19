@@ -366,11 +366,14 @@ func (s *BatchImageDownloadService) ResultFiles(ctx context.Context, owner Batch
 	if s.DeliveryStore == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled {
 		return nil, ErrBatchImageDeliveryNotConfigured
 	}
-	ttl := s.deliveryDownloadTTL()
+	expiresAt := time.Now().Add(s.deliveryDownloadTTL())
+	if job.OutputExpiresAt != nil && job.OutputExpiresAt.Before(expiresAt) {
+		expiresAt = *job.OutputExpiresAt
+	}
 	result := &BatchImageResultFiles{
 		Object:    "list",
 		BatchID:   job.BatchID,
-		ExpiresAt: time.Now().Add(ttl).Unix(),
+		ExpiresAt: expiresAt.Unix(),
 		Data:      make([]BatchImageResultFile, 0, fileCount),
 	}
 	for fileIndex := 0; fileIndex < fileCount; fileIndex++ {
@@ -384,6 +387,13 @@ func (s *BatchImageDownloadService) ResultFiles(ctx context.Context, owner Batch
 			return nil, ErrBatchImageResultMissing
 		}
 		name := fmt.Sprintf("%s-result-%04d.jsonl", job.BatchID, fileIndex+1)
+		ttl := time.Until(expiresAt)
+		if ttl < time.Second {
+			if job.OutputExpiresAt != nil && expiresAt.Equal(*job.OutputExpiresAt) {
+				return nil, ErrBatchImageOutputDeleted
+			}
+			return nil, ErrBatchImageDownloadFailed
+		}
 		signed, signErr := s.DeliveryStore.PresignGet(ctx, key, name, ttl)
 		if signErr != nil {
 			return nil, ErrBatchImageDownloadFailed
@@ -550,6 +560,9 @@ func (s *BatchImageDownloadService) getCompletedJob(ctx context.Context, owner B
 	}
 	switch job.Status {
 	case BatchImageJobStatusCompleted:
+		if job.OutputDeletedAt != nil || (job.OutputExpiresAt != nil && !job.OutputExpiresAt.After(time.Now())) {
+			return nil, ErrBatchImageOutputDeleted
+		}
 		return job, nil
 	case BatchImageJobStatusOutputDeleted:
 		return nil, ErrBatchImageOutputDeleted

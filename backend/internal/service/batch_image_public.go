@@ -145,6 +145,7 @@ type BatchImagePublicBatch struct {
 	SubmittedAt     *int64                 `json:"submitted_at"`
 	SettledAt       *int64                 `json:"settled_at"`
 	DownloadedAt    *int64                 `json:"downloaded_at,omitempty"`
+	OutputExpiresAt *int64                 `json:"output_expires_at,omitempty"`
 	OutputDeletedAt *int64                 `json:"output_deleted_at,omitempty"`
 	Error           *BatchImagePublicError `json:"error"`
 }
@@ -2125,6 +2126,7 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 		SubmittedAt:     batchImageUnixPtr(job.SubmittedAt),
 		SettledAt:       batchImageUnixPtr(job.SettledAt),
 		DownloadedAt:    batchImageUnixPtr(job.DownloadedAt),
+		OutputExpiresAt: batchImageUnixPtr(job.OutputExpiresAt),
 		OutputDeletedAt: batchImageUnixPtr(job.OutputDeletedAt),
 		Error:           publicError,
 	}
@@ -2265,17 +2267,18 @@ func batchImageModelPlatform(model string) (string, bool) {
 	return "", false
 }
 
+var openAIImageBatchModels = [...]string{
+	"gpt-image-2",
+	"gpt-image-2.5-flare",
+	"gpt-image-2.5-flare-2026-09-08",
+	"gpt-image-2.5-sunburst",
+	"gpt-image-2.5-sunburst-2026-09-08",
+	"gpt-image-2.6-flare",
+	"gpt-image-2.6-sunburst",
+}
+
 func isOpenAIImageBatchModel(model string) bool {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gpt-image-2",
-		"gpt-image-2.5-flare",
-		"gpt-image-2.5-flare-2026-09-08",
-		"gpt-image-2.5-sunburst",
-		"gpt-image-2.5-sunburst-2026-09-08":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(openAIImageBatchModels[:], strings.ToLower(strings.TrimSpace(model)))
 }
 
 func batchImageModelsFromAccountMapping(account *Account) []string {
@@ -2339,17 +2342,12 @@ func batchImageAccountSupportsProviderModel(providerName string, account *Accoun
 }
 
 func defaultBatchImageModelCandidates() []string {
-	return []string{
-		"gpt-image-2",
-		"gpt-image-2.5-flare",
-		"gpt-image-2.5-flare-2026-09-08",
-		"gpt-image-2.5-sunburst",
-		"gpt-image-2.5-sunburst-2026-09-08",
+	return append(openAIImageBatchModels[:],
 		"gemini-2.5-flash-image",
 		"gemini-3-pro-image",
 		"gemini-3.1-flash-image",
 		"gemini-3.1-flash-lite-image",
-	}
+	)
 }
 
 func batchImageGCSRef(provider, ref string) string {

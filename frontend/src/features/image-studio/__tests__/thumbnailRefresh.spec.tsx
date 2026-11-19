@@ -1,12 +1,12 @@
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StudioTask, studioAPI } from '../api'
 import TaskCard from '../upstream/components/TaskCard'
 import TaskGrid from '../upstream/components/TaskGrid'
 
 vi.mock('../upstream/hooks/useNearViewport', () => ({ useNearViewport: () => true }))
-vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+beforeEach(() => vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true))
 let cleanup = () => {}
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -64,6 +64,27 @@ describe('gallery cover refresh', () => {
     })
     await act(async () => { image.dispatchEvent(new Event('load')) })
     expect(Number(preview.style.aspectRatio)).toBeCloseTo(16 / 9, 3)
+    await act(async () => { image.dispatchEvent(new Event('error')) })
+    expect(preview.querySelector('img')).toBeNull()
+    expect(host.textContent).toContain('无法显示这张预览图。')
+  })
+
+  it('does not load a cover after retention ends, even before the cleanup runs', async () => {
+    const record = {
+      id: 'job/old-output',
+      job: { id: 'job', status: 'completed', model: 'fixture', output_expires_at: 1 },
+      item: { custom_id: 'old-output', status: 'succeeded', image_count: 1 },
+    } as StudioTask
+    const thumbnail = vi.fn().mockResolvedValue(new Blob(['cover'], { type: 'image/jpeg' }))
+    const api = { thumbnail } as unknown as ReturnType<typeof studioAPI>
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    cleanup = () => { act(() => root.unmount()); host.remove() }
+
+    await act(async () => root.render(<TaskCard record={record} api={api} onOpen={vi.fn()} onEditOutputs={vi.fn()} />))
+    expect(host.querySelector('.studio-source-card')?.getAttribute('data-status')).toBe('expired')
+    expect(host.querySelector('img')).toBeNull()
+    expect(thumbnail).not.toHaveBeenCalled()
   })
 
   it('distributes cards across waterfall columns and triggers downward loading when the bottom sentinel intersects', async () => {

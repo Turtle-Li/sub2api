@@ -3,11 +3,12 @@ import type { BatchImageModel } from '@/api/batchImage'
 import { modelIdentity } from './workspaceAPI'
 
 const platforms: Readonly<Record<string, string>> = {
-  gemini_api: 'Google Gemini', vertex: 'Google Vertex', openai_images: 'OpenAI',
+  gemini_api: 'Gemini', vertex: 'Gemini', openai_images: 'OpenAI',
   wan_images: '通义万相', seedream_images: '豆包 Seedream',
   muse_images: 'Muse', workbuddy_images: '腾讯混元',
 }
 export const modelPlatform = (provider: string) => platforms[provider] || provider
+const nativePlatforms = ['wan_images', 'seedream_images'] as const
 
 const tierWords: Readonly<Record<string, string>> = {
   pro: 'Pro', flash: 'Flash', lite: 'Lite', alpha: 'Alpha', edit: 'Edit', image: 'Image',
@@ -108,21 +109,26 @@ export function ModelPicker({ models, value, size, disabled, loading = false, on
     const existing = groups.get(name) || []
     existing.push(model); groups.set(name, existing)
   }
+  if (!loading) for (const provider of nativePlatforms) {
+    const name = modelPlatform(provider)
+    if (name.toLowerCase().includes(query) && !options.some(model => model.provider === provider)) groups.set(name, [])
+  }
   const active = groups.has(platform) ? platform : groups.keys().next().value
   const visible = active ? groups.get(active) || [] : []
   const selectedBadge = selected ? modelBadge(selected.provider, selected.id) : null
+  const geminiSelected = selectedBadge?.key === 'gemini'
   function close() { dialog.current?.close(); setOpen(false); trigger.current?.focus() }
   return <div className="studio-model-picker">
     <span className="studio-field-label" id="studio-model-label">图片模型</span>
     {/* Fixed-height, single-line trigger: long model IDs must not change the rail height. */}
-    <button ref={trigger} type="button" aria-label="图片模型" aria-haspopup="dialog" aria-expanded={open} title={selectedBadge?.title} className="studio-model-trigger" disabled={disabled || !models.length} onClick={() => {
+    <button ref={trigger} type="button" aria-label="图片模型" aria-haspopup="dialog" aria-expanded={open} title={geminiSelected ? 'Gemini' : selectedBadge?.title} className="studio-model-trigger" disabled={disabled || (loading && !models.length)} onClick={() => {
       setSearch(''); setPlatform(selected ? modelPlatform(selected.provider) : '')
       setOpen(true); dialog.current?.showModal(); dialog.current?.querySelector<HTMLInputElement>('input')?.focus()
     }}>
       <span className="studio-model-mark" data-platform={selectedBadge?.key || 'generic'} aria-hidden="true">{selectedBadge?.mark || 'AI'}</span>
       <span className="studio-model-copy">
-        <strong>{selectedBadge?.label || (loading ? '正在加载模型…' : '暂无可用模型')}</strong>
-        <small>{selected ? `${modelPlatform(selected.provider)} · ${selected.id}` : '生图模型'}</small>
+        <strong>{geminiSelected ? 'Gemini' : selectedBadge?.label || (loading ? '正在加载模型…' : '暂无可用模型')}</strong>
+        <small>{geminiSelected ? '点击查看具体模型' : selected ? `${modelPlatform(selected.provider)} · ${selected.id}` : '生图模型'}</small>
       </span>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
     </button>
@@ -132,25 +138,28 @@ export function ModelPicker({ models, value, size, disabled, loading = false, on
       <input type="search" autoFocus aria-label="搜索生图模型" placeholder="搜索平台或模型" value={search} onChange={event => setSearch(event.target.value)} />
       <div className="studio-model-browser">
         <nav className="studio-model-platforms" aria-label="模型平台">{[...groups].map(([name, entries]) => <button key={name} type="button" aria-pressed={active === name} onClick={() => setPlatform(name)}><span>{name}</span><small>{entries.length}</small></button>)}</nav>
-        <div className="studio-model-options" role="listbox" aria-label="可用生图模型" onKeyDown={event => {
+        {visible.length ? <div className="studio-model-options" role="listbox" aria-label="可用生图模型" onKeyDown={event => {
           if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
           const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'))
           const index = options.findIndex(option => option === document.activeElement)
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length
           event.preventDefault(); options[next]?.focus()
         }}>
-          {!visible.length && <p className="studio-model-empty">没有匹配的模型，试试其他名称。</p>}
           {visible.map(model => {
             const optionSize = model.capabilities?.image_sizes.includes(size) ? size : model.capabilities?.default_image_size || size || '1K'
             const price = modelPrice(model, optionSize)
             const badge = modelBadge(model.provider, model.id)
+            const routeHint = badge.key === 'gemini' && visible.some(other => other.id === model.id && other.provider !== model.provider)
+              ? (model.provider === 'gemini_api' ? ' · 线路 1' : ' · 线路 2') : ''
             return <button type="button" role="option" aria-selected={selected && modelIdentity(model) === modelIdentity(selected)} key={modelIdentity(model)} className="studio-model-option" title={badge.title} onClick={() => { onChange(modelIdentity(model)); close() }}>
             <span className="studio-model-mark" data-platform={badge.key} aria-hidden="true">{badge.mark}</span>
-            <span className="studio-model-option-copy"><strong>{model.id}</strong><small>{modelPlatform(model.provider)}{model.capabilities?.max_reference_images ? ` · 最多 ${model.capabilities.max_reference_images} 张参考图` : ''}</small></span>
+            <span className="studio-model-option-copy"><strong>{model.id}</strong><small>{modelPlatform(model.provider)}{routeHint}{model.capabilities?.max_reference_images ? ` · 最多 ${model.capabilities.max_reference_images} 张参考图` : ''}</small></span>
             <span className="studio-model-option-price"><strong>{price}</strong><small>{price === '价格待配置' ? `${optionSize} 分辨率` : `${optionSize} · 额度 / 张`}</small></span>
             <svg className="studio-model-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
           </button>})}
-        </div>
+        </div> : <div className="studio-model-empty">
+          {active ? <><strong>{active} 暂无可用模型</strong><p>如果你有该平台的分组权限，请绑定对应的 API 密钥；否则请联系管理员。</p><a className="studio-key-link" href="/keys">管理 API 密钥</a></> : <p>{loading ? '正在读取可用模型…' : '没有匹配的模型，试试其他名称。'}</p>}
+        </div>}
       </div>
       <p className="studio-model-footnote">价格随分辨率更新，消耗以任务结算为准。</p>
     </dialog>

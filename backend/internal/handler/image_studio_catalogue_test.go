@@ -27,7 +27,10 @@ type catalogueHTTPAccounts struct {
 }
 
 func (*catalogueHTTPAccounts) ListSchedulableByGroupIDAndPlatform(context.Context, int64, string) ([]service.Account, error) {
-	return []service.Account{{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2", "gpt-image-2.5-flare": "gpt-image-2.5-flare"}}}}, nil
+	return []service.Account{{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Credentials: map[string]any{"model_mapping": map[string]any{
+		"gpt-image-2": "gpt-image-2", "gpt-image-2.5-flare": "gpt-image-2.5-flare", "gpt-image-2.6-flare": "gpt-image-2.6-flare",
+		"gpt-image-2.5": "gpt-image-2.5", "gpt-image-2.6": "gpt-image-2.6",
+	}}}}, nil
 }
 
 type catalogueHTTPPricing struct{}
@@ -68,6 +71,9 @@ func TestImageStudioCatalogueConditionalReadRechecksAdmissionAndQuotes(t *testin
 	}
 	first := request("Bearer owner", "")
 	require.Equal(t, 200, first.Code, first.Body.String())
+	require.Contains(t, first.Body.String(), "gpt-image-2.6-flare")
+	require.NotContains(t, first.Body.String(), `"gpt-image-2.5"`)
+	require.NotContains(t, first.Body.String(), `"gpt-image-2.6"`)
 	etag := first.Header().Get("ETag")
 	require.NotEmpty(t, etag)
 	require.Equal(t, "private, no-cache", first.Header().Get("Cache-Control"))
@@ -86,6 +92,7 @@ func TestImageStudioCatalogueConditionalReadRechecksAdmissionAndQuotes(t *testin
 	filtered := request("Bearer owner", repriced.Header().Get("ETag"))
 	require.Equal(t, 200, filtered.Code)
 	require.NotContains(t, filtered.Body.String(), "gpt-image-2.5-flare")
+	require.NotContains(t, filtered.Body.String(), "gpt-image-2.6-flare")
 	group.AllowBatchImageGeneration = false
 	revoked := request("Bearer owner", filtered.Header().Get("ETag"))
 	require.Equal(t, 403, revoked.Code)

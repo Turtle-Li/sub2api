@@ -23,7 +23,7 @@ export interface BatchImageArchiveItem {
 }
 
 export interface BatchImageArchivePreview extends BatchImageArchiveItem {
-  image: Blob | null
+  images: Blob[]
 }
 
 export interface BatchImageArchiveZipOptions {
@@ -274,7 +274,7 @@ function validateCapabilities(files: BatchImageArchiveFileCapability[]): BatchIm
   return sorted
 }
 
-async function fetchArchiveFile(file: BatchImageArchiveFileCapability): Promise<Response> {
+async function fetchArchiveFile(file: BatchImageArchiveFileCapability, signal?: AbortSignal): Promise<Response> {
   let response: Response
   try {
     response = await fetch(file.url, {
@@ -284,8 +284,10 @@ async function fetchArchiveFile(file: BatchImageArchiveFileCapability): Promise<
       cache: 'no-store',
       redirect: 'error',
       referrerPolicy: 'no-referrer',
+      signal,
     })
   } catch {
+    signal?.throwIfAborted()
     throw new BatchImageArchiveError(
       'ARCHIVE_NETWORK_FAILED',
       'The browser could not read the private result archive. Check COS CORS and network access.',
@@ -328,6 +330,9 @@ async function visitResponseLines(
       }
       let newline = buffer.indexOf('\n')
       while (newline >= 0) {
+        if (newline > MAX_JSONL_LINE_BYTES) {
+          throw new BatchImageArchiveError('ARCHIVE_LINE_TOO_LARGE', 'A result archive line is too large.')
+        }
         const line = buffer.slice(0, newline).trim()
         buffer = buffer.slice(newline + 1)
         if (line && await visitor(parseBatchImageArchiveResultLine(line)) === true) {
@@ -338,6 +343,9 @@ async function visitResponseLines(
       }
     }
     buffer += decoder.decode()
+    if (buffer.length > MAX_JSONL_LINE_BYTES) {
+      throw new BatchImageArchiveError('ARCHIVE_LINE_TOO_LARGE', 'A result archive line is too large.')
+    }
     const finalLine = buffer.trim()
     if (finalLine && await visitor(parseBatchImageArchiveResultLine(finalLine)) === true) {
       return true
@@ -347,6 +355,7 @@ async function visitResponseLines(
     }
     return false
   } finally {
+    await reader.cancel().catch(() => undefined)
     reader.releaseLock()
   }
 }
@@ -354,19 +363,20 @@ async function visitResponseLines(
 async function visitArchiveLines(
   capabilitiesProvider: BatchImageArchiveCapabilityProvider,
   visitor: ResultLineVisitor,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   let files = validateCapabilities(await capabilitiesProvider())
   for (let position = 0; position < files.length; position += 1) {
     let file = files[position]
     let response: Response
     try {
-      response = await fetchArchiveFile(file)
+      response = await fetchArchiveFile(file, signal)
     } catch (error) {
       const status = error instanceof BatchImageArchiveError ? error.status : undefined
       if (status !== 401 && status !== 403) throw error
       files = validateCapabilities(await capabilitiesProvider())
       file = files[position]
-      response = await fetchArchiveFile(file)
+      response = await fetchArchiveFile(file, signal)
     }
     if (await visitResponseLines(response, file.size, visitor)) return true
   }
@@ -433,17 +443,17 @@ function decodeImage(image: ParsedInlineImage): Uint8Array {
 export async function loadBatchImageArchivePreview(
   capabilitiesProvider: BatchImageArchiveCapabilityProvider,
   customId: string,
+  signal?: AbortSignal,
 ): Promise<BatchImageArchivePreview> {
   let result: BatchImageArchivePreview | null = null
   await visitArchiveLines(capabilitiesProvider, (parsed) => {
     if (parsed.item.custom_id !== customId) return false
-    const firstImage = parsed.images[0]
     result = {
       ...parsed.item,
-      image: firstImage ? new Blob([decodeImage(firstImage)], { type: firstImage.mimeType }) : null,
+      images: parsed.images.map(image => new Blob([decodeImage(image)], { type: image.mimeType })),
     }
     return true
-  })
+  }, signal)
   if (!result) {
     return {
       custom_id: customId,
@@ -456,7 +466,7 @@ export async function loadBatchImageArchivePreview(
         message: 'provider result was not found for item',
         source: 'provider',
       },
-      image: null,
+      images: [],
     }
   }
   return result

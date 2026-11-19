@@ -222,9 +222,22 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 			model.Type = "model"
 		}
 	}
+	// Some compatible relays serve explicitly mapped Images models without
+	// listing them. Let admins test exact configured variants, without changing
+	// shared discovery or filling an empty mapping with assumed models.
+	if account != nil && account.Type == AccountTypeAPIKey && !account.IsOpenAIPassthroughEnabled() {
+		mapping := account.GetModelMapping()
+		seen := make(map[string]bool, len(payload.Data))
+		for _, model := range payload.Data {
+			seen[model.ID] = true
+		}
+		for _, model := range openai.DefaultModels {
+			if !seen[model.ID] && isOpenAIImageBatchModel(model.ID) && isOpenAIImageBatchModel(mapping[model.ID]) {
+				payload.Data = append(payload.Data, model)
+			}
+		}
+	}
 	// Codex discovery lists Responses drivers, not image_generation tool models.
-	// Add locally supported image choices only to the OAuth test picker; keep the
-	// shared upstream catalog and API-key discovery authoritative.
 	if account != nil && account.IsOpenAIOAuthLike() {
 		passthrough := account.IsOpenAIPassthroughEnabled()
 		seen := make(map[string]bool, len(payload.Data))

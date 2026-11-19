@@ -1,22 +1,49 @@
 import apiClient from '@/api/client'
-import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
+import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageResultFilesResponse, BatchImageSubmitRequest } from '@/api/batchImage'
+import { loadBatchImageArchivePreview } from '@/utils/batchImageArchive'
 
 export interface StudioKey { readonly id: number; readonly name: string; readonly group_id?: number | null; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean; readonly can_generate?: boolean; readonly has_history?: boolean }
 export interface ItemContinuation { readonly job: BatchImageJob; readonly cursor: number }
 export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem }
 export interface GalleryFilters { readonly status: string; readonly search: string; readonly root?: string }
 const itemStatuses: Readonly<Record<string, string>> = { pending: '排队中', queued: '排队中', running: '生成中', processing: '生成中', succeeded: '已完成', success: '已完成', completed: '已完成', failed: '失败', cancelled: '已取消', output_deleted: '图片已删除' }
+const failureMessages: ReadonlyMap<string, string> = new Map([
+  ['RESULT_DELIVERY_FAILED', '生成结果未能交付到作品库。'],
+  ['BATCH_IMAGE_DELIVERY_FAILED', '生成结果未能交付到作品库。'],
+  ['IMAGE_UPSCALE_STORE_FAILED', '图片处理后未能保存。'],
+  ['PROVIDER_ITEM_FAILED', '生成服务未能交付可用图片。'],
+  ['SAFETY_BLOCKED', '提示词或参考图未通过生成服务的内容检查。'],
+])
 export const itemStatusLabel = (status: string): string => itemStatuses[status] || status
 export function taskDisplay(task: StudioTask) {
-  const unfinished = ['pending', 'queued', 'running', 'processing', 'result_available'].includes(task.item.status)
-  const terminalBatch = ['cancelled', 'failed', 'output_deleted'].includes(task.job.status)
+  const { job, item } = task
+  const succeeded = ['succeeded', 'success', 'completed'].includes(item.status)
+  const archived = item.status === 'result_available' && (job.status === 'completed' || job.status === 'output_deleted')
+  const expired = job.output_expires_at != null && job.output_expires_at * 1000 <= Date.now()
+  const outputGone = expired || job.status === 'output_deleted' || job.output_deleted_at != null
+  if ((succeeded && item.image_count > 0 || archived) && outputGone) {
+    return { status: 'output_deleted', label: expired ? '图片已过期' : '图片已清理', message: expired ? '图片保留期已结束，任务记录仍可查看。' : '图片已清理，任务记录仍可查看。', canViewOutput: false, canOpenArchive: false }
+  }
+  if (archived && job.status === 'completed') {
+    return { status: 'archived', label: '归档结果', canViewOutput: false, canOpenArchive: true }
+  }
+  const unfinished = ['pending', 'queued', 'running', 'processing', 'result_available'].includes(item.status)
+  const terminalBatch = ['cancelled', 'failed', 'output_deleted'].includes(job.status)
   const projected = unfinished && terminalBatch
-  const status = projected ? task.job.status : task.item.status
+  const status = projected ? job.status : item.status
+  const error = item.error || (projected ? job.error : undefined)
   return {
     status,
     label: projected && status === 'failed' ? '任务失败' : status === 'output_deleted' ? '结果已清理' : itemStatusLabel(status),
-    message: task.item.error?.message || (projected ? task.job.error?.message : undefined),
+    message: failureMessages.get(error?.code || '') ?? error?.message,
+    canViewOutput: job.status === 'completed' && succeeded && item.image_count > 0 && !outputGone,
+    canOpenArchive: false,
+    error,
   }
+}
+
+export function isImageOutputGone(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'status' in error && error.status === 410
 }
 const base = '/image-studio'
 export const taskRoot = (task: StudioTask) => task.job.parent_batch_id || task.job.id
@@ -64,27 +91,41 @@ export function studioAPI(key: number, signal: AbortSignal) {
     async image(task: StudioTask, index = 0) {
       return (await apiClient.get<Blob>(`${base}/batches/${encodeURIComponent(task.job.id)}/items/${encodeURIComponent(task.item.custom_id)}/content`, { ...config, responseType: 'blob', params: { image_index: index } })).data
     },
-    async thumbnail(task: StudioTask, requestSignal: AbortSignal = signal) {
-      const controller = new AbortController()
-      const abort = () => controller.abort(signal.aborted ? signal.reason : requestSignal.reason)
-      const signals = [signal, requestSignal]
-      for (const source of signals) source.addEventListener('abort', abort, { once: true })
-      if (signals.some(source => source.aborted)) abort()
-      try {
+    archivePreview(task: StudioTask, requestSignal: AbortSignal) {
+      return withImageReadSignal(signal, requestSignal, readSignal => loadBatchImageArchivePreview(async () => {
+        readSignal.throwIfAborted()
+        return (await apiClient.get<BatchImageResultFilesResponse>(`${base}/batches/${encodeURIComponent(task.job.id)}/result-files`, { ...config, signal: readSignal })).data.data
+      }, task.item.custom_id, readSignal))
+    },
+    thumbnail(task: StudioTask, requestSignal: AbortSignal = signal) {
+      return withImageReadSignal(signal, requestSignal, async readSignal => {
         for (let attempt = 0; ; attempt++) {
           try {
-            controller.signal.throwIfAborted()
-            return (await apiClient.get<Blob>(`${base}/batches/${encodeURIComponent(task.job.id)}/items/${encodeURIComponent(task.item.custom_id)}/thumbnail`, { ...config, signal: controller.signal, responseType: 'blob', timeout: 120000 })).data
+            readSignal.throwIfAborted()
+            return (await apiClient.get<Blob>(`${base}/batches/${encodeURIComponent(task.job.id)}/items/${encodeURIComponent(task.item.custom_id)}/thumbnail`, { ...config, signal: readSignal, responseType: 'blob', timeout: 120000 })).data
           } catch (error) {
-            if (controller.signal.aborted || attempt >= 4 || typeof error !== 'object' || error === null || !('status' in error) || (error.status !== 503 && error.status !== 429)) throw error
-            await waitForThumbnail(2000 * 2 ** attempt, controller.signal)
+            if (readSignal.aborted || attempt >= 4 || typeof error !== 'object' || error === null || !('status' in error) || (error.status !== 503 && error.status !== 429)) throw error
+            await waitForThumbnail(2000 * 2 ** attempt, readSignal)
           }
         }
-      } finally {
-        for (const source of signals) source.removeEventListener('abort', abort)
-      }
+      })
     },
     async cancel(task: StudioTask) { return (await apiClient.post<StudioTask['job']>(`${base}/batches/${encodeURIComponent(task.job.id)}/cancel`, {}, config)).data },
+  }
+}
+
+async function withImageReadSignal<T>(workspace: AbortSignal, request: AbortSignal, read: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  workspace.throwIfAborted()
+  request.throwIfAborted()
+  if (workspace === request) return read(workspace)
+  const controller = new AbortController()
+  const abort = () => controller.abort(workspace.aborted ? workspace.reason : request.reason)
+  const sources = [workspace, request]
+  for (const source of sources) source.addEventListener('abort', abort, { once: true })
+  try {
+    return await read(controller.signal)
+  } finally {
+    for (const source of sources) source.removeEventListener('abort', abort)
   }
 }
 

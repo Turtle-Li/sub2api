@@ -14,7 +14,7 @@ func (r *batchImageRepository) ListBatchImageGalleryForOwner(ctx context.Context
 	query := `SELECT j.id, j.batch_id, j.parent_batch_id, j.task_name, j.status,
 j.provider, j.model, j.image_size, j.item_count, j.success_count, j.fail_count,
 j.estimated_cost, j.hold_amount, j.actual_cost, j.created_at, j.settled_at,
-j.output_deleted_at, j.last_error_code, j.last_error_message,
+j.output_expires_at, j.output_deleted_at, j.last_error_code, j.last_error_message,
 i.id, i.custom_id, i.status, i.prompt_preview, i.mime_type, i.file_extension,
 i.image_count, i.error_code, i.error_message
 FROM batch_image_jobs j JOIN batch_image_items i ON i.job_id = j.batch_id
@@ -30,7 +30,10 @@ AND ($3::bigint = 0 OR (j.id, i.id) < ($3, $4))`
 	case "pending":
 		query += ` AND j.status NOT IN ('completed', 'failed', 'cancelled', 'output_deleted')`
 	case "completed":
-		query += ` AND i.image_count > 0 AND j.output_deleted_at IS NULL`
+		query += ` AND j.status = 'completed'
+AND ((i.status = 'success' AND i.image_count > 0) OR i.status = 'result_available')
+AND j.output_deleted_at IS NULL
+AND (j.output_expires_at IS NULL OR j.output_expires_at > NOW())`
 	case "failed":
 		query += ` AND (i.status = 'failed' OR (j.status = 'failed' AND i.status IN ('pending', 'result_available')))`
 	}
@@ -56,7 +59,7 @@ AND ($3::bigint = 0 OR (j.id, i.id) < ($3, $4))`
 		if err := rows.Scan(&job.ID, &job.BatchID, &job.ParentBatchID, &job.TaskName, &job.Status,
 			&job.Provider, &job.Model, &job.ImageSize, &job.ItemCount, &job.SuccessCount, &job.FailCount,
 			&job.EstimatedCost, &job.HoldAmount, &job.ActualCost, &job.CreatedAt, &job.SettledAt,
-			&job.OutputDeletedAt, &job.LastErrorCode, &job.LastErrorMessage,
+			&job.OutputExpiresAt, &job.OutputDeletedAt, &job.LastErrorCode, &job.LastErrorMessage,
 			&item.ID, &item.CustomID, &item.Status, &item.PromptPreview, &item.MimeType, &item.FileExtension,
 			&item.ImageCount, &item.ErrorCode, &item.ErrorMessage); err != nil {
 			return nil, fmt.Errorf("scan image studio gallery: %w", err)

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
-import { listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type ItemContinuation } from './api'
+import { isImageOutputGone, listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type ItemContinuation } from './api'
 import { modelIdentity, workspaceAPI } from './workspaceAPI'
 import { cachedStudioKeys, cacheStudioKeys } from './cache'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
@@ -15,28 +15,74 @@ import { useEditContinuation } from './useEditContinuation'
 import './studio.css'
 
 type API = ReturnType<typeof workspaceAPI>
+const galleryFilters = [['all', '全部'], ['pending', '生成中'], ['completed', '可查看'], ['failed', '失败']] as const
+type GalleryFilter = (typeof galleryFilters)[number][0]
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : '请求失败，请刷新后重试' }
-function ImageAsset({ task, api, index = 0 }: { task: StudioTask; api: API; index?: number }) {
+const outputErrorMessage = (error: unknown) => isImageOutputGone(error) ? '图片已过期或已清理。' : errorMessage(error)
+function defaultStudioModel(models: readonly BatchImageModel[]) {
+  const preferred = models.find(model => modelIdentity(model) === 'openai_images:gpt-image-2.6-sunburst')
+    ?? models.find(model => modelIdentity(model) === 'openai_images:gpt-image-2.6-flare')
+    ?? models[0]
+  return preferred ? modelIdentity(preferred) : ''
+}
+function ImageAsset({ task, api, image, index = 0 }: { task: StudioTask; api: API; image?: Blob; index?: number }) {
   const [src, setSrc] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true; let url = ''
     setSrc(''); setError('')
-    if (task.item.image_count) api.image(task, index).then(blob => { if (active) { url = URL.createObjectURL(blob); setSrc(url) } }).catch(error => { if (active) setError(errorMessage(error)) })
+    const request = image ? Promise.resolve(image) : api.image(task, index)
+    request.then(blob => { if (active) { url = URL.createObjectURL(blob); setSrc(url) } }).catch(error => { if (active) setError(outputErrorMessage(error)) })
     return () => { active = false; if (url) URL.revokeObjectURL(url) }
-  }, [task.id, task.item.image_count, api, index])
-  return src ? <img src={src} alt={task.item.prompt_preview || '生成图片'} /> : <span className="studio-muted">{error || (task.item.image_count ? '图片加载中…' : taskDisplay(task).message || taskDisplay(task).label)}</span>
+  }, [task.id, api, image, index])
+  return src ? <img src={src} alt={task.item.prompt_preview || '生成图片'} onError={() => { setSrc(''); setError('无法显示这张图片。') }} /> : <span className="studio-muted">{error || '图片加载中…'}</span>
 }
 
 // Upstream DetailModal/Lightbox lifecycle hooks are retained verbatim, including nested ESC ownership.
-function DetailModal({ task, api, close, edit, cancel }: { task: StudioTask; api: API; close: () => void; edit: (index: number) => void; cancel: (task: StudioTask) => Promise<void> }) {
+function DetailModal({ task, api, close, edit, cancel }: { task: StudioTask; api: API; close: () => void; edit: (index: number, image?: Blob) => void; cancel: (task: StudioTask) => Promise<void> }) {
+  const [archive, setArchive] = useState<Awaited<ReturnType<API['archivePreview']>> | null>(null)
+  const [openingArchive, setOpeningArchive] = useState(false)
+  const archiveRequest = useRef<AbortController | null>(null)
+  useEffect(() => () => archiveRequest.current?.abort(), [])
+  const item = archive ? { ...archive, prompt_preview: task.item.prompt_preview } : task.item
+  const displayedTask = { ...task, item }
+  const display = taskDisplay(displayedTask)
   const dialog = useRef<HTMLDialogElement>(null)
   const [index, setIndex] = useState(0)
   const [viewer, setViewer] = useState('')
   const viewerURL = useRef('')
   useEffect(() => () => { if (viewerURL.current) URL.revokeObjectURL(viewerURL.current) }, [])
+  async function openArchive() {
+    if (archiveRequest.current) return
+    if (!taskDisplay(task).canOpenArchive) { setError('图片已过期或已清理。'); return }
+    const controller = new AbortController()
+    archiveRequest.current = controller
+    setOpeningArchive(true); setError('')
+    try {
+      const result = await api.archivePreview(task, controller.signal)
+      if (!controller.signal.aborted) {
+        if (taskDisplay(task).canOpenArchive) setArchive(result)
+        else setError('图片已过期或已清理。')
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setError(outputErrorMessage(error))
+    } finally {
+      if (!controller.signal.aborted) {
+        archiveRequest.current = null
+        setOpeningArchive(false)
+      }
+    }
+  }
+  async function imageAt(next: number) {
+    if (!taskDisplay(displayedTask).canViewOutput) throw new Error('图片已过期或已清理。')
+    return archive ? archive.images[next] : api.image(task, next)
+  }
+  function editCurrent() {
+    if (taskDisplay(displayedTask).canViewOutput) edit(index, archive?.images[index])
+    else setError('图片已过期或已清理。')
+  }
   async function view(next = index) {
-    try { const blob = await api.image(task, next); if (!dialog.current?.isConnected) return; const url = URL.createObjectURL(blob); if (viewerURL.current) URL.revokeObjectURL(viewerURL.current); viewerURL.current = url; setIndex(next); setViewer(url); dismissAllTooltips() } catch (error) { setError(errorMessage(error)) }
+    try { const blob = await imageAt(next); if (!dialog.current?.isConnected) return; const url = URL.createObjectURL(blob); if (viewerURL.current) URL.revokeObjectURL(viewerURL.current); viewerURL.current = url; setIndex(next); setViewer(url); dismissAllTooltips() } catch (error) { setError(outputErrorMessage(error)) }
   }
   const [error, setError] = useState('')
   useCloseOnEscape(true, close)
@@ -44,19 +90,24 @@ function DetailModal({ task, api, close, edit, cancel }: { task: StudioTask; api
   useEffect(() => { dialog.current?.showModal() }, [])
   async function download() {
     try {
-      const blob = await api.image(task, index); const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = `${task.job.id}-${task.item.custom_id}-${index}.${task.item.file_extension || 'png'}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
-    } catch (error) { setError(errorMessage(error)) }
+      const blob = await imageAt(index); const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `${task.job.id}-${item.custom_id}-${index}.${item.file_extension || 'png'}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) { setError(outputErrorMessage(error)) }
   }
-  return <dialog ref={dialog} className="studio-detail" onCancel={event => { event.preventDefault(); close() }}>
+  return <dialog ref={dialog} className="studio-detail" aria-label="任务详情" onCancel={event => { event.preventDefault(); close() }}>
     <div className="studio-actions"><strong>任务详情</strong><button onClick={close}>关闭</button></div>
-    <button className="studio-detail-image" onClick={() => void view()} disabled={!task.item.image_count} aria-label="放大图片"><ImageAsset task={task} api={api} index={index} /></button>
-    {task.item.image_count > 1 && <div className="studio-actions"><button disabled={index === 0} onClick={() => setIndex(index - 1)}>上一张</button><span>{index + 1} / {task.item.image_count}</span><button disabled={index + 1 >= task.item.image_count} onClick={() => setIndex(index + 1)}>下一张</button></div>}
+    {display.canViewOutput && <button className="studio-detail-image" onClick={() => void view()} aria-label="放大图片"><ImageAsset task={task} api={api} image={archive?.images[index]} index={index} /></button>}
+    {display.canViewOutput && item.image_count > 1 && <div className="studio-actions"><button disabled={index === 0} onClick={() => setIndex(index - 1)}>上一张</button><span>{index + 1} / {item.image_count}</span><button disabled={index + 1 >= item.image_count} onClick={() => setIndex(index + 1)}>下一张</button></div>}
+    <p className="studio-detail-state">{task.job.model} · {display.label}</p>
+    {display.message && <p className="studio-muted">{display.message}</p>}
+    {display.error?.code && <details className="studio-detail-error"><summary>错误详情</summary><p>{display.error.code}{display.error.message && display.error.message !== display.message && ` · ${display.error.message}`}</p></details>}
     <p className="studio-prompt">{task.item.prompt_preview}</p><p className="studio-muted">提示词预览可能被截断。重新生成前请核对完整内容。</p>
-    <p>{task.job.model} · {taskDisplay(task).label}</p>{taskDisplay(task).message && <p role="alert">{taskDisplay(task).message}</p>}{taskPending(task) && <button onClick={() => { void cancel(task).then(close).catch(error => setError(errorMessage(error))) }}>取消此批次</button>}<p>预扣 {task.job.hold_amount} · 实际消耗 {task.job.actual_cost ?? '待结算'}</p>
+    {(display.canViewOutput || display.canOpenArchive) && task.job.output_expires_at != null && <p className="studio-muted">{display.canOpenArchive ? '归档结果可查看至' : '原图可下载至'} {new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(task.job.output_expires_at * 1000)}（本地时间）</p>}
+    {taskPending(task) && <button onClick={() => { void cancel(task).then(close).catch(error => setError(errorMessage(error))) }}>取消此批次</button>}<p>预扣 {task.job.hold_amount} · 实际消耗 {task.job.actual_cost ?? '待结算'}</p>
     {error && <p role="alert">{error}</p>}
-    <div className="studio-actions"><button disabled={!task.item.image_count} onClick={() => void download()}>下载图片</button><button disabled={!task.item.image_count} onClick={() => edit(index)}>引用此图继续修改</button></div>
-    {viewer && <Lightbox src={viewer} imageId={`${task.id}/${index}`} onClose={() => setViewer('')} currentIndex={index} total={task.item.image_count} showNav={task.item.image_count > 1} onPrev={() => void view((index - 1 + task.item.image_count) % task.item.image_count)} onNext={() => void view((index + 1) % task.item.image_count)} onDownload={() => void download()} onEdit={() => edit(index)} />}
+    {display.canOpenArchive && <p className="studio-muted">此批次的图片或失败详情保存在归档中，打开后按需读取。</p>}
+    <div className="studio-actions">{display.canOpenArchive ? <button disabled={openingArchive} onClick={() => void openArchive()}>{openingArchive ? '正在读取归档…' : '打开归档结果'}</button> : <><button disabled={!display.canViewOutput} onClick={() => void download()}>下载图片</button><button disabled={!display.canViewOutput} onClick={editCurrent}>引用此图继续修改</button></>}</div>
+    {display.canViewOutput && viewer && <Lightbox src={viewer} imageId={`${task.id}/${index}`} onClose={() => setViewer('')} currentIndex={index} total={item.image_count} showNav={item.image_count > 1} onPrev={() => void view((index - 1 + item.image_count) % item.image_count)} onNext={() => void view((index + 1) % item.image_count)} onDownload={() => void download()} onEdit={editCurrent} />}
   </dialog>
 }
 
@@ -78,7 +129,7 @@ function StudioSession({ userId }: { readonly userId: number }) {
     return () => controller.abort()
   }, [userId])
   return <div className="image-studio">
-    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} userId={userId} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : '暂无可用的生图权限，请联系管理员开通。'}</div>}
+    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} userId={userId} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : <><p>暂无可用的生图权限，请绑定有权限的生图分组或联系管理员。</p><a className="studio-key-link" href="/keys">管理 API 密钥</a></>}</div>}
   </div>
 }
 
@@ -87,7 +138,7 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
   const composer = useRef<HTMLDialogElement>(null)
   const [mobile, setMobile] = useState(() => Boolean(window.matchMedia?.('(max-width: 760px)').matches))
   const [batchMode, setBatchMode] = useState(false)
-  const [filter, setFilter] = useState('all')
+  const [filter, setFilter] = useState<GalleryFilter>('all')
   const [notice, setNotice] = useState('')
   useEffect(() => {
     const query = window.matchMedia?.('(max-width: 760px)')
@@ -104,7 +155,8 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
   const loadedPages = useRef(1)
   const [itemContinuations, setItemContinuations] = useState<ItemContinuation[]>([])
   const [models, setModels] = useState<BatchImageModel[]>(api.client.cachedModels)
-  const [model, setModel] = useState(() => { const first = api.client.cachedModels()[0]; return first ? modelIdentity(first) : '' })
+  const [model, setModel] = useState(() => defaultStudioModel(api.client.cachedModels()))
+  const manuallySelectedModel = useRef(false)
   const [modelsUpdating, setModelsUpdating] = useState(true)
   const [catalogueRefresh, setCatalogueRefresh] = useState(0)
   const lastCatalogueCheck = useRef(0)
@@ -145,7 +197,7 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
     const update = (catalog: BatchImageModel[]) => {
       if (!active) return
       setModels(previous => JSON.stringify(previous) === JSON.stringify(catalog) ? previous : catalog)
-      setModel(previous => catalog.some(item => modelIdentity(item) === previous) ? previous : catalog[0] ? modelIdentity(catalog[0]) : '')
+      setModel(previous => manuallySelectedModel.current && catalog.some(item => modelIdentity(item) === previous) ? previous : defaultStudioModel(catalog))
     }
     void api.client.models(update).then(catalog => {
       update(catalog)
@@ -236,21 +288,24 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
     setItemContinuations(current => current.map(item => item.job.id === job.id ? { ...item, job } : item))
     setTasks(current => current.map(item => item.job.id === job.id ? { ...item, job } : item))
   }
-  async function edit(task: StudioTask, index = 0) {
+  async function edit(task: StudioTask, index = 0, archiveImage?: Blob) {
+    const display = taskDisplay(task)
+    if (!display.canViewOutput && !(display.canOpenArchive && archiveImage)) return
     const selection = continuation.beginSelection()
     try {
-      const data = await readImage(await api.client.image(task, index))
+      const data = await readImage(archiveImage ?? await api.client.image(task, index))
       const sourceModel = models.find(item => item.id === task.job.model && item.provider === task.job.provider)
       const linked = sourceModel ? await api.client.canContinue(task, sourceModel) : false
       if (!continuation.isCurrent(selection)) return
       setRefs([data]); setParent(linked ? task : null); setPrompt(''); setBatchMode(false); setDetail(null); setFilter('all'); setSearch('')
-      if (sourceModel) setModel(modelIdentity(sourceModel))
+      if (sourceModel) { manuallySelectedModel.current = true; setModel(modelIdentity(sourceModel)) }
       setNotice(linked ? '' : '原模型暂不可用，已保留参考图，可选择模型创建新作品。')
       if (window.matchMedia?.('(max-width: 760px)').matches) composer.current?.showModal()
-    } catch (error) { setError(errorMessage(error)) }
+    } catch (error) { setError(outputErrorMessage(error)) }
   }
   async function changeModel(value: string) {
     const selection = continuation.beginSelection()
+    manuallySelectedModel.current = true
     setModel(value)
     const selected = models.find(item => modelIdentity(item) === value)
     if (parent && selected && !await api.client.canContinue(parent, selected) && continuation.isCurrent(selection)) {
@@ -286,7 +341,11 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
     finally { if (!api.controller.signal.aborted) setBusy(false) }
   }
   const selectedDetail = detail ? tasks.find(task => task.id === detail.id) || detail : null
-  const visible = tasks.filter(task => (!parent || taskRoot(task) === taskRoot(parent)) && (filter === 'all' || filter === 'pending' && taskPending(task) || filter === 'completed' && task.item.image_count > 0 || filter === 'failed' && taskDisplay(task).status === 'failed') && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase()))
+  const visible = tasks.filter(task => {
+    if (parent && taskRoot(task) !== taskRoot(parent)) return false
+    const display = taskDisplay(task)
+    return (filter === 'all' || filter === 'pending' && taskPending(task) || filter === 'completed' && (display.canViewOutput || display.canOpenArchive) || filter === 'failed' && display.status === 'failed') && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase())
+  })
   return <div className="studio-workspace">
     <dialog ref={composer} open={!mobile} className="studio-composer" aria-label="创作设置" onClick={event => { if (mobile && event.target === event.currentTarget) composer.current?.close() }}>
       <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
@@ -295,8 +354,8 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
       <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} modelLoading={modelsUpdating} model={model} setModel={value => void changeModel(value)} busy={busy} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
     </dialog>
     <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-gallery-count" aria-label={`已加载 ${tasks.length} 个图片任务`}>{tasks.length}</span></div>
-      <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{[['all', '全部'], ['pending', '生成中'], ['completed', '已完成'], ['failed', '失败']].map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>
-      <select className="studio-gallery-status" aria-label="筛选作品" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部作品</option><option value="pending">生成中</option><option value="completed">已完成</option><option value="failed">失败</option></select>
+      <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{galleryFilters.map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>
+      <select className="studio-gallery-status" aria-label="筛选作品" value={filter} onChange={event => { const next = galleryFilters.find(([value]) => value === event.target.value); if (next) setFilter(next[0]) }}>{galleryFilters.map(([value, label]) => <option key={value} value={value}>{value === 'all' ? '全部作品' : label}</option>)}</select>
       <div className="studio-toolbar-actions">{parent && <button onClick={() => { continuation.beginSelection(); setParent(null) }}>返回画廊</button>}
         <button className="studio-search-toggle" aria-label="搜索作品" aria-expanded={searchOpen} aria-pressed={searchOpen || Boolean(search)} onClick={() => setSearchOpen(value => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg></button>
         <button className="studio-refresh" aria-label="刷新作品" disabled={loading} onClick={() => setRefresh(value => value + 1)}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17" /></svg></button>
@@ -305,12 +364,12 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
     </div>
     {notice && <p className="studio-notice" role="status">{notice}</p>}
     {error && <div className="studio-error" role="alert">{error}</div>}
-    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length && error ? <div className="studio-empty"><h2>作品暂时无法显示</h2><p>请刷新作品后重试。</p></div> : !visible.length ? <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2><p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p></div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} hasMore={Boolean((nextCursor || itemContinuations.length) && !error)} loadingMore={loading} onLoadMore={() => { if (itemContinuations[0]) void loadItems(itemContinuations[0]); else if (nextCursor) void loadMore() }} />}
+    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length && error ? <div className="studio-empty"><h2>作品暂时无法显示</h2><p>请刷新作品后重试。</p></div> : !visible.length ? <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2>{filter === 'completed' ? <p>目前没有匹配的可查看作品。过期记录仍可在「全部」中查看。</p> : (search || filter !== 'all') ? <p>试试其他筛选条件。</p> : <p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p>}</div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} hasMore={Boolean((nextCursor || itemContinuations.length) && !error)} loadingMore={loading} onLoadMore={() => { if (itemContinuations[0]) void loadItems(itemContinuations[0]); else if (nextCursor) void loadMore() }} />}
 
     {itemContinuations.map(continuation => <button key={continuation.job.id} disabled={loading} onClick={() => void loadItems(continuation)}>加载批次 {continuation.job.id} 的更多图片任务</button>)}
     {nextCursor && <button disabled={loading} onClick={() => void loadMore()}>加载更早的批次</button>}
     </section>
     <button className="studio-mobile-create" onClick={() => { composer.current?.showModal(); composer.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus() }}><span>{parent ? '继续修改这张图' : '描述想要的画面…'}</span><strong>展开 ↑</strong></button>
-    {selectedDetail && <DetailModal task={selectedDetail} api={api.client} cancel={cancel} close={() => setDetail(null)} edit={index => void edit(selectedDetail, index)} />}
+    {selectedDetail && <DetailModal key={selectedDetail.id} task={selectedDetail} api={api.client} cancel={cancel} close={() => setDetail(null)} edit={(index, image) => void edit(selectedDetail, index, image)} />}
   </div>
 }

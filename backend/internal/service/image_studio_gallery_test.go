@@ -4,7 +4,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,9 +26,10 @@ func (r *studioGalleryTestRepo) ListBatchImageGalleryForOwner(_ context.Context,
 
 func TestImageStudioGalleryPageOwnsCursorAndPublicProjection(t *testing.T) {
 	r := &studioGalleryTestRepo{}
+	expires := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 	for id := int64(1); id <= 3; id++ {
 		r.rows = append(r.rows, BatchImageGalleryRecord{
-			Job:  &BatchImageJob{ID: 8, BatchID: "owned", Status: BatchImageJobStatusCompleted},
+			Job:  &BatchImageJob{ID: 8, BatchID: "owned", Status: BatchImageJobStatusCompleted, OutputExpiresAt: &expires},
 			Item: &BatchImageItem{ID: id, CustomID: "item", Status: BatchImageItemStatusSuccess, ImageCount: 1},
 		})
 	}
@@ -38,6 +42,9 @@ func TestImageStudioGalleryPageOwnsCursorAndPublicProjection(t *testing.T) {
 	require.Equal(t, "8:2", got.NextCursor)
 	require.Equal(t, "succeeded", got.Data[0].Item.Status)
 	require.Equal(t, "owned", got.Data[0].Job.ID)
+	body, err := json.Marshal(got.Data[0].Job)
+	require.NoError(t, err)
+	require.Contains(t, string(body), fmt.Sprintf(`"output_expires_at":%d`, expires.Unix()))
 }
 
 func TestImageStudioGalleryRejectsMalformedCursor(t *testing.T) {
@@ -117,5 +124,43 @@ func TestImageStudioCatalogueUsesConfiguredOpenAIImagePrice(t *testing.T) {
 			require.Equal(t, "gpt-image-2.5-flare", got.Data[0].ID)
 			require.Equal(t, BatchImageModelPriceRange{Min: unit, Max: unit}, got.Data[0].Prices["1K"])
 		})
+	}
+}
+
+func TestImageStudioCatalogueAndSubmissionSupportConfiguredImage26(t *testing.T) {
+	for _, mapping := range []map[string]any{
+		{"gpt-image-2.6-flare": "gpt-image-2.6-flare", "gpt-image-2.6-sunburst": "gpt-image-2.6-sunburst"},
+		{"gpt-image-2.6-*": "gpt-image-2.6-flare"},
+	} {
+		s, _, _, _, _ := newTestBatchImagePublicService(true)
+		id, unit := int64(7), 0.402
+		s.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{id: {
+			ID: id, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard,
+			AllowImageGeneration: true, AllowBatchImageGeneration: true, ImagePrice1K: &unit,
+			RateMultiplier: 1, BatchImageDiscountMultiplier: 1, BatchImageHoldMultiplier: 1,
+		}}}
+		account := testBatchImageMappedAccount(303, AccountTypeAPIKey, mapping)
+		account.Platform = PlatformOpenAI
+		s.AccountRepo = &publicBatchImageAccountRepo{accounts: []Account{account}}
+		provider := &publicBatchImageProvider{name: BatchImageProviderOpenAI}
+		s.ProviderRegistry = NewBatchImageProviderRegistry(provider)
+		owner := testBatchImageOwner()
+		owner.GroupID = &id
+		catalogue, err := s.ListModels(t.Context(), owner)
+		require.NoError(t, err)
+		require.Len(t, catalogue.Data, 2)
+		for i, model := range []string{"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
+			require.Equal(t, model, catalogue.Data[i].ID)
+			require.Equal(t, BatchImageProviderOpenAI, catalogue.Data[i].Provider)
+			require.Equal(t, BatchImageModelPriceRange{Min: unit, Max: unit}, catalogue.Data[i].Prices["1K"])
+			created, err := s.Submit(t.Context(), owner, BatchImageSubmitRequest{
+				Model: model, ImageSize: "1K", Items: []BatchImageSubmitItem{{CustomID: "pic", Prompt: "red cup"}},
+			}, "")
+			require.NoError(t, err)
+			require.Equal(t, model, created.Model)
+			require.Len(t, provider.submits, i+1)
+			require.Equal(t, model, provider.submits[i].Model)
+		}
+		require.ErrorIs(t, s.ValidateSubmitRequest(BatchImageSubmitRequest{Model: "gpt-image-2.6-unknown"}), ErrBatchImageInvalidModel)
 	}
 }

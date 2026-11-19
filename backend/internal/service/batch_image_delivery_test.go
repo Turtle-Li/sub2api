@@ -40,6 +40,7 @@ type fakeBatchImageDeliveryStore struct {
 	presignErr   error
 	putKeys      []string
 	getKeys      []string
+	getTTLs      []time.Duration
 	headKeys     []string
 	deletedKeys  []string
 }
@@ -49,8 +50,9 @@ func (s *fakeBatchImageDeliveryStore) PresignPut(_ context.Context, key string, 
 	return "https://image-1309919944.cos.ap-shanghai.myqcloud.com/" + key + "?q-signature=secret", nil
 }
 
-func (s *fakeBatchImageDeliveryStore) PresignGet(_ context.Context, key, _ string, _ time.Duration) (string, error) {
+func (s *fakeBatchImageDeliveryStore) PresignGet(_ context.Context, key, _ string, ttl time.Duration) (string, error) {
 	s.getKeys = append(s.getKeys, key)
+	s.getTTLs = append(s.getTTLs, ttl)
 	if s.presignErr != nil {
 		return "", s.presignErr
 	}
@@ -123,6 +125,31 @@ func TestGCSV4SignedURLHasVerifiableExactObjectSignature(t *testing.T) {
 	}, "\n")
 	digest := sha256.Sum256([]byte(stringToSign))
 	require.NoError(t, rsa.VerifyPKCS1v15(&privateKey.PublicKey, crypto.SHA256, digest[:], signature))
+}
+
+func TestBatchImagePumpControlErrorsRetainOnlyContractCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, body, detail string
+		status                     int
+	}{
+		{"source policy", http.MethodPost, `{"code":"SOURCE_PATH_NOT_ALLOWED","detail":"private-capability"}`, "SOURCE_PATH_NOT_ALLOWED", http.StatusForbidden},
+		{"unknown code", http.MethodPost, `{"code":"private-capability"}`, "HTTP 403", http.StatusForbidden},
+		{"edge not found", http.MethodGet, `<html>private-capability</html>`, "HTTP 404", http.StatusNotFound},
+		{"create not found", http.MethodPost, `{"code":"NOT_FOUND","detail":"private-capability"}`, "HTTP 404", http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+			delivery := &BatchImageDeliveryService{Config: &config.Config{BatchImage: config.BatchImageConfig{DeliveryWorkerURL: server.URL}}, HTTPClient: server.Client()}
+			_, _, err := delivery.pumpRequest(context.Background(), tc.method, "/v1/jobs", nil)
+			require.ErrorIs(t, err, ErrBatchImageDeliveryFailed)
+			require.ErrorContains(t, err, tc.detail)
+			require.NotContains(t, err.Error(), "private-capability")
+		})
+	}
 }
 
 func TestBatchImageDeliveryArchivesRawJSONLAndUsesVertexCompletionStats(t *testing.T) {
@@ -233,15 +260,17 @@ func TestArchivedResultReturnsShortLivedFileCapabilitiesAndRequiresClientDecode(
 	const batchID = "imgbatch_0123456789abcdef0123456789abcdef"
 	apiKeyID := int64(2)
 	marker := batchImageCOSArchiveMarker(1)
+	deadline := time.Now().Add(2 * time.Minute)
 	repo := newFakeBatchImageRepository()
 	repo.jobs[batchID] = &BatchImageJob{
-		BatchID:      batchID,
-		UserID:       1,
-		APIKeyID:     &apiKeyID,
-		Provider:     BatchImageProviderVertex,
-		Status:       BatchImageJobStatusCompleted,
-		SuccessCount: 1,
-		ItemCount:    1,
+		BatchID:         batchID,
+		UserID:          1,
+		APIKeyID:        &apiKeyID,
+		Provider:        BatchImageProviderVertex,
+		Status:          BatchImageJobStatusCompleted,
+		SuccessCount:    1,
+		ItemCount:       1,
+		OutputExpiresAt: &deadline,
 	}
 	repo.items[batchID] = []CreateBatchImageItemParams{{
 		JobID:                batchID,
@@ -268,12 +297,22 @@ func TestArchivedResultReturnsShortLivedFileCapabilitiesAndRequiresClientDecode(
 	require.Len(t, files.Data, 1)
 	require.Contains(t, files.Data[0].URL, "q-signature=short-lived")
 	require.Equal(t, int64(128), files.Data[0].Size)
+	require.Equal(t, deadline.Unix(), files.ExpiresAt)
+	require.Len(t, store.getTTLs, 1)
+	require.LessOrEqual(t, store.getTTLs[0], 2*time.Minute)
 
 	_, err = service.OpenItemContent(context.Background(), owner, batchID, "cover", 0)
 	require.ErrorIs(t, err, ErrBatchImageArchiveClientRequired)
 
 	_, err = service.StreamZip(context.Background(), owner, batchID, BatchImageZipOptions{}, io.Discard)
 	require.ErrorIs(t, err, ErrBatchImageArchiveClientRequired)
+
+	deadline = time.Now().Add(-time.Second)
+	_, err = service.ResultFiles(t.Context(), owner, batchID)
+	require.ErrorIs(t, err, ErrBatchImageOutputDeleted)
+	_, err = service.StreamZip(t.Context(), owner, batchID, BatchImageZipOptions{}, io.Discard)
+	require.ErrorIs(t, err, ErrBatchImageOutputDeleted)
+	require.Len(t, store.getTTLs, 1, "expired jobs must not create another capability")
 }
 
 func TestResultFilesReturnsArchiveUnavailableForLegacyCompletedJob(t *testing.T) {
