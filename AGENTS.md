@@ -140,9 +140,10 @@
 
 ## Channel model pricing
 
-- For manual GPT display sync and the separate GPT image price section, read
-  `docs/features/OPENAI_CHANNEL_CATALOG.md`. Only an admin preview may discover
-  account models. Saving updates group-scoped display entries, not mappings or prices.
+- For manual GPT/Claude display sync and the separate GPT image price section,
+  read `docs/features/OPENAI_CHANNEL_CATALOG.md`. Only an admin preview may
+  discover account models. Claude reconciles manual rows too; a saved empty
+  group hides them without deleting mappings or prices.
 - For authored-currency defaults, native Kimi CNY quotes and group-rate previews,
   read `docs/features/CHANNEL_PRICING_AUTOFILL_20261025.md`. Preserve strict model
   identification, in-flight manual edits and group-card priority. Live K3.1 Pass

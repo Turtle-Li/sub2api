@@ -331,37 +331,37 @@
               </div>
             </div>
 
-            <div v-if="section.platform === 'openai'" class="space-y-2 border-t border-gray-200 pt-3 dark:border-dark-600">
+            <div v-if="section.platform === activeTab && displayPreview" class="space-y-2 border-t border-gray-200 pt-3 dark:border-dark-600">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0 flex-1 basis-56">
-                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ t('admin.channels.form.gptDisplayModels') }}</p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ t(displayPreview.label('Models')) }}</p>
                   <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-                    {{ t(form.restrict_models ? 'admin.channels.form.gptDisplayRestricted' : 'admin.channels.form.gptDisplayHint') }}
+                    {{ t(form.restrict_models ? displayPreview.label('Restricted') : displayPreview.label('Hint')) }}
                   </p>
                 </div>
                 <button
                   type="button"
                   class="btn btn-secondary px-3 py-1.5 text-xs"
-                  :disabled="submitting || gptPreviewLoading || form.restrict_models || !section.group_ids.length"
-                  :aria-busy="gptPreviewLoading"
-                  @click="previewGPTDisplayModels"
+                  :disabled="submitting || displayPreview.loading || form.restrict_models || !section.group_ids.length"
+                  :aria-busy="displayPreview.loading"
+                  @click="displayPreview.load"
                 >
-                  {{ t(gptPreviewLoading ? 'admin.channels.form.gptDisplaySyncing' : 'admin.channels.form.gptDisplaySync') }}
+                  {{ t(displayPreview.loading ? 'admin.channels.form.gptDisplaySyncing' : displayPreview.label('Sync')) }}
                 </button>
               </div>
-              <p v-if="gptPreviewError" role="alert" class="text-xs text-red-700 dark:text-red-300">{{ gptPreviewError }}</p>
-              <p v-else-if="gptPreviewStale" role="status" class="text-xs text-amber-800 dark:text-amber-200">
+              <p v-if="displayPreview.error" role="alert" class="text-xs text-red-700 dark:text-red-300">{{ displayPreview.error }}</p>
+              <p v-else-if="displayPreview.stale" role="status" class="text-xs text-amber-800 dark:text-amber-200">
                 {{ t('admin.channels.form.gptDisplayStale') }}
               </p>
-              <p v-else-if="gptPreview && !gptPreviewChanges.length" role="status" class="text-xs text-gray-600 dark:text-gray-300">
-                {{ t('admin.channels.form.gptDisplayUnchanged') }}
+              <p v-else-if="displayPreview.ready && !displayPreview.changes.length" role="status" class="text-xs text-gray-600 dark:text-gray-300">
+                {{ t(displayPreview.label('Unchanged')) }}
               </p>
-              <details v-else-if="gptPreviewChanges.length" open class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-dark-800">
+              <details v-else-if="displayPreview.changes.length" open class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-dark-800">
                 <summary class="cursor-pointer font-medium text-gray-900 dark:text-gray-100">
-                  <span role="status">{{ t('admin.channels.form.gptDisplaySummary', gptPreviewTotals) }}</span>
+                  <span role="status">{{ t('admin.channels.form.gptDisplaySummary', displayPreview.totals) }}</span>
                 </summary>
                 <ul class="mt-2 max-h-36 space-y-2 overflow-y-auto">
-                  <li v-for="change in gptPreviewChanges" :key="change.id" class="break-words text-gray-700 dark:text-gray-200">
+                  <li v-for="change in displayPreview.changes" :key="change.id" class="break-words text-gray-700 dark:text-gray-200">
                     <p class="font-medium">{{ change.group }}</p>
                     <p v-if="change.added.length">{{ t('admin.channels.form.gptDisplayAdded', { models: change.added.join(', ') }) }}</p>
                     <p v-if="change.removed.length">{{ t('admin.channels.form.gptDisplayRemoved', { models: change.removed.join(', ') }) }}</p>
@@ -646,7 +646,7 @@
           <button
             type="submit"
             form="channel-form"
-            :disabled="submitting || gptPreviewLoading"
+            :disabled="submitting || displayPreviewLoading"
             class="btn btn-primary"
           >
             {{ submitting
@@ -680,7 +680,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
-import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule, GPTDisplayModelsByGroup, GPTDisplayPreviewRequest } from '@/api/admin/channels'
+import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule, DisplayModelsByGroup, DisplayPreviewRequest, DisplayPreviewResponse } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
 import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formReasoningEffortMultipliersToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, normalizePricingCurrency, perTokenToMTok, validateIntervals, validateReasoningEffortMultipliers, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
@@ -825,27 +825,17 @@ const form = reactive({
 })
 
 const gptDisplayFeature = 'gpt_display_models_by_group'
-const gptPreview = ref<{ signature: string; models: GPTDisplayModelsByGroup } | null>(null)
-const gptPreviewRequest = shallowRef<AbortController | null>(null)
-const gptPreviewLoading = computed(() => gptPreviewRequest.value !== null)
-const gptPreviewError = ref('')
+const claudeDisplayFeature = 'claude_display_models_by_group'
 const plazaHiddenModels = computed(() => [...new Set(form.plaza_hidden_models.split(/[\s,，]+/).filter(Boolean))])
 
-const gptPreviewInput = computed((): GPTDisplayPreviewRequest => {
-  const openai = form.platforms.find(section => section.enabled && section.platform === 'openai')
-  const { model_mapping, model_pricing } = formToAPI()
-  return {
-    group_ids: [...(openai?.group_ids ?? [])].sort((a, b) => a - b),
-    model_mapping: { openai: model_mapping.openai ?? {} },
-    model_pricing: model_pricing.filter(price => price.platform === 'openai'),
-    restrict_models: form.restrict_models,
-    hidden_models: plazaHiddenModels.value
-  }
-})
-const gptPreviewSignature = computed(() => JSON.stringify(gptPreviewInput.value))
-const gptPreviewStale = computed(() => gptPreview.value !== null && gptPreview.value.signature !== gptPreviewSignature.value)
+type DisplayPreviewOptions = {
+  platform: 'openai' | 'anthropic'
+  feature: string
+  prefix: 'gptDisplay' | 'claudeDisplay'
+  request: (input: DisplayPreviewRequest, signal: AbortSignal) => Promise<DisplayPreviewResponse>
+}
 
-function readSavedGPTDisplayModels(value: unknown): GPTDisplayModelsByGroup {
+function readSavedDisplayModels(value: unknown): DisplayModelsByGroup {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   return Object.fromEntries(Object.entries(value).flatMap(([id, names]) =>
     /^\d+$/.test(id) && Array.isArray(names)
@@ -854,48 +844,95 @@ function readSavedGPTDisplayModels(value: unknown): GPTDisplayModelsByGroup {
   ))
 }
 
-const gptPreviewChanges = computed(() => {
-  if (!gptPreview.value || gptPreviewStale.value) return []
-  const prior = readSavedGPTDisplayModels(editingChannel.value?.features_config?.[gptDisplayFeature])
-  const next = gptPreview.value.models
-  return [...new Set([...Object.keys(prior), ...Object.keys(next)])].flatMap(id => {
-    const before = new Set(prior[id] ?? [])
-    const after = new Set(next[id] ?? [])
-    const added = [...after].filter(model => !before.has(model))
-    const removed = [...before].filter(model => !after.has(model))
-    if (!added.length && !removed.length) return []
-    const group = allGroups.value.find(item => item.id === Number(id))?.name ?? `#${id}`
-    return [{ id, group, added, removed }]
+function createDisplayPreview({ platform, feature, prefix, request }: DisplayPreviewOptions) {
+  const preview = shallowRef<{ signature: string; models: DisplayModelsByGroup; previous: DisplayModelsByGroup } | null>(null)
+  const inFlight = shallowRef<AbortController | null>(null)
+  const loading = computed(() => inFlight.value !== null)
+  const error = ref('')
+  const input = computed((): DisplayPreviewRequest => {
+    const section = form.platforms.find(item => item.enabled && item.platform === platform)
+    const { model_mapping, model_pricing } = formToAPI()
+    return {
+      group_ids: [...(section?.group_ids ?? [])].sort((a, b) => a - b),
+      model_mapping: { [platform]: model_mapping[platform] ?? {} },
+      model_pricing: model_pricing.filter(price => price.platform === platform),
+      restrict_models: form.restrict_models,
+      hidden_models: plazaHiddenModels.value
+    }
   })
-})
-const gptPreviewTotals = computed(() => gptPreviewChanges.value.reduce(
-  (totals, change) => ({ added: totals.added + change.added.length, removed: totals.removed + change.removed.length }),
-  { added: 0, removed: 0 }
-))
+  const signature = computed(() => JSON.stringify(input.value))
+  const stale = computed(() => preview.value !== null && preview.value.signature !== signature.value)
+  const ready = computed(() => preview.value !== null && !stale.value)
+  const label = (suffix: string) => `admin.channels.form.${prefix}${suffix}`
 
-function clearGPTPreview() {
-  gptPreviewRequest.value?.abort()
-  gptPreviewRequest.value = null
-  gptPreview.value = null
-  gptPreviewError.value = ''
+  const changes = computed(() => {
+    if (!preview.value || stale.value) return []
+    const { previous, models } = preview.value
+    return [...new Set([...Object.keys(previous), ...Object.keys(models)])].flatMap(id => {
+      const before = new Set(previous[id] ?? [])
+      const after = new Set(models[id] ?? [])
+      const added = [...after].filter(model => !before.has(model))
+      const removed = [...before].filter(model => !after.has(model))
+      if (!added.length && !removed.length) return []
+      const group = allGroups.value.find(item => item.id === Number(id))?.name ?? `#${id}`
+      return [{ id, group, added, removed }]
+    })
+  })
+  const totals = computed(() => changes.value.reduce(
+    (total, change) => ({ added: total.added + change.added.length, removed: total.removed + change.removed.length }),
+    { added: 0, removed: 0 }
+  ))
+
+  function clear() {
+    inFlight.value?.abort()
+    inFlight.value = null
+    preview.value = null
+    error.value = ''
+  }
+
+  async function load() {
+    if (loading.value || submitting.value || form.restrict_models || !input.value.group_ids.length) return
+    clear()
+    const controller = new AbortController()
+    const requestedSignature = signature.value
+    inFlight.value = controller
+    try {
+      const result = await request(input.value, controller.signal)
+      if (!controller.signal.aborted) {
+        preview.value = {
+          signature: requestedSignature,
+          models: result.models_by_group,
+          previous: result.previous_models_by_group ?? readSavedDisplayModels(editingChannel.value?.features_config?.[feature])
+        }
+      }
+    } catch (cause: unknown) {
+      if (!controller.signal.aborted) error.value = extractApiErrorMessage(cause, t(label('Error')))
+    } finally {
+      if (inFlight.value === controller) inFlight.value = null
+    }
+  }
+
+  return reactive({ feature, label, loading, ready, stale, error, changes, totals, models: computed(() => ready.value ? preview.value?.models : undefined), load, clear })
 }
 
-async function previewGPTDisplayModels() {
-  if (gptPreviewLoading.value || submitting.value || form.restrict_models || !gptPreviewInput.value.group_ids.length) return
-  clearGPTPreview()
-  const controller = new AbortController()
-  const signature = gptPreviewSignature.value
-  gptPreviewRequest.value = controller
-  try {
-    const { models_by_group } = await adminAPI.channels.previewGPTDisplayModels(gptPreviewInput.value, controller.signal)
-    if (!controller.signal.aborted) gptPreview.value = { signature, models: models_by_group }
-  } catch (error: unknown) {
-    if (!controller.signal.aborted) {
-      gptPreviewError.value = extractApiErrorMessage(error, t('admin.channels.form.gptDisplayError'))
-    }
-  } finally {
-    if (gptPreviewRequest.value === controller) gptPreviewRequest.value = null
-  }
+const displayPreviews = {
+  openai: createDisplayPreview({
+    platform: 'openai', feature: gptDisplayFeature, prefix: 'gptDisplay',
+    request: (input, signal) => adminAPI.channels.previewGPTDisplayModels(input, signal)
+  }),
+  anthropic: createDisplayPreview({
+    platform: 'anthropic', feature: claudeDisplayFeature, prefix: 'claudeDisplay',
+    request: (input, signal) => adminAPI.channels.previewClaudeDisplayModels({ ...input, channel_id: editingChannel.value?.id }, signal)
+  })
+}
+const displayPreview = computed(() => {
+  const platform = activeTab.value
+  return platform === 'openai' || platform === 'anthropic' ? displayPreviews[platform] : null
+})
+const displayPreviewLoading = computed(() => Object.values(displayPreviews).some(preview => preview.loading))
+
+function clearDisplayPreviews() {
+  for (const preview of Object.values(displayPreviews)) preview.clear()
 }
 
 let abortController: AbortController | null = null
@@ -1262,6 +1299,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     ? { ...editingChannel.value.features_config }
     : {}
   delete featuresConfig[gptDisplayFeature]
+  delete featuresConfig[claudeDisplayFeature]
 
   for (const section of form.platforms) {
     if (!section.enabled) continue
@@ -1504,7 +1542,7 @@ function handleSort(key: string, order: 'asc' | 'desc') {
 
 // ── Dialog ──
 function resetForm() {
-  clearGPTPreview()
+  clearDisplayPreviews()
   form.name = ''
   form.description = ''
   form.status = 'active'
@@ -1527,7 +1565,7 @@ async function openCreateDialog() {
 }
 
 async function openEditDialog(channel: Channel) {
-  clearGPTPreview()
+  clearDisplayPreviews()
   editingChannel.value = channel
   form.name = channel.name
   form.description = channel.description || ''
@@ -1635,7 +1673,7 @@ function closeDialog() {
 }
 
 async function handleSubmit() {
-  if (submitting.value || gptPreviewLoading.value) return
+  if (submitting.value || displayPreviewLoading.value) return
   if (!form.name.trim()) {
     appStore.showError(t('admin.channels.nameRequired', 'Please enter a channel name'))
     return
@@ -1759,8 +1797,8 @@ async function handleSubmit() {
   }
 
   const { group_ids, model_pricing, model_mapping, features_config } = formToAPI()
-  if (gptPreview.value && !gptPreviewStale.value) {
-    features_config[gptDisplayFeature] = gptPreview.value.models
+  for (const preview of Object.values(displayPreviews)) {
+    if (preview.models) features_config[preview.feature] = preview.models
   }
 
   submitting.value = true
@@ -1854,7 +1892,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  clearGPTPreview()
+  clearDisplayPreviews()
   clearTimeout(searchTimeout)
   abortController?.abort()
   document.removeEventListener('click', handleRuleAccountClickOutside)

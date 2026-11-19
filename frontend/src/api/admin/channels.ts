@@ -211,9 +211,9 @@ export async function syncPricingModels(platform: string): Promise<SyncPricingMo
   return data
 }
 
-export type GPTDisplayModelsByGroup = Record<string, string[]>
+export type DisplayModelsByGroup = Record<string, string[]>
 
-export interface GPTDisplayPreviewRequest {
+export interface DisplayPreviewRequest {
   group_ids: number[]
   model_pricing: ChannelModelPricing[]
   model_mapping: Record<string, Record<string, string>>
@@ -221,15 +221,30 @@ export interface GPTDisplayPreviewRequest {
   hidden_models: string[]
 }
 
+export interface DisplayPreviewResponse {
+  models_by_group: DisplayModelsByGroup
+  previous_models_by_group?: DisplayModelsByGroup
+}
+
 export async function previewGPTDisplayModels(
-  req: GPTDisplayPreviewRequest,
+  req: DisplayPreviewRequest,
   signal?: AbortSignal
-): Promise<{ models_by_group: GPTDisplayModelsByGroup }> {
-  const { data } = await apiClient.post<{ models_by_group: GPTDisplayModelsByGroup }>(
+): Promise<DisplayPreviewResponse> {
+  const { data } = await apiClient.post<DisplayPreviewResponse>(
     '/admin/channels/gpt-display-models/preview', req, { signal }
   )
   return data
 }
 
-const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, syncPricingModels, previewGPTDisplayModels }
+export async function previewClaudeDisplayModels(
+  req: DisplayPreviewRequest & { channel_id?: number },
+  signal?: AbortSignal
+): Promise<DisplayPreviewResponse> {
+  const { data } = await apiClient.post<DisplayPreviewResponse>(
+    '/admin/channels/claude-display-models/preview', req, { signal }
+  )
+  return data
+}
+
+const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, syncPricingModels, previewGPTDisplayModels, previewClaudeDisplayModels }
 export default channelsAPI

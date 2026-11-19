@@ -15,8 +15,8 @@ const featureKeyGPTDisplayModels = "gpt_display_models_by_group"
 
 type GPTDisplayModelsByGroup map[int64][]string
 
-// ChannelModelCatalog supplements the display lists only. Routing, billing
-// configuration and manual channel entries are not written by discovery.
+// ChannelModelCatalog reconciles display lists only. It never writes routing,
+// pricing or the manual entries used to configure the channel.
 type ChannelModelCatalog struct {
 	accounts AccountRepository
 	billing  *BillingService
@@ -27,7 +27,11 @@ func NewChannelModelCatalog(accounts AccountRepository, billing *BillingService)
 }
 
 func (ch *Channel) gptDisplayModelsByGroup() GPTDisplayModelsByGroup {
-	value := ch.FeaturesConfig[featureKeyGPTDisplayModels]
+	return ch.displayModelsByGroup(featureKeyGPTDisplayModels)
+}
+
+func (ch *Channel) displayModelsByGroup(key string) map[int64][]string {
+	value := ch.FeaturesConfig[key]
 	if value == nil {
 		return nil
 	}
@@ -35,7 +39,7 @@ func (ch *Channel) gptDisplayModelsByGroup() GPTDisplayModelsByGroup {
 	if err != nil {
 		return nil
 	}
-	var models GPTDisplayModelsByGroup
+	var models map[int64][]string
 	if err := json.Unmarshal(data, &models); err != nil {
 		return nil
 	}
@@ -90,8 +94,7 @@ func (s *ChannelModelCatalog) previewGroup(ctx context.Context, ch *Channel, gro
 	now := time.Now()
 	for i := range accounts {
 		account := &accounts[i]
-		if !account.IsActive() || !account.Schedulable || account.Platform != PlatformOpenAI || account.IsPaidFallback() ||
-			(account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt)) {
+		if account.Platform != PlatformOpenAI || !eligibleDisplayAccount(account, now) {
 			continue
 		}
 		for name, target := range account.GetModelMapping() {
@@ -105,6 +108,11 @@ func (s *ChannelModelCatalog) previewGroup(ctx context.Context, ch *Channel, gro
 	}
 	slices.Sort(names)
 	return names, nil
+}
+
+func eligibleDisplayAccount(account *Account, now time.Time) bool {
+	return account.IsActive() && account.Schedulable && !account.IsPaidFallback() &&
+		(!account.AutoPauseOnExpired || account.ExpiresAt == nil || now.Before(*account.ExpiresAt))
 }
 
 // savedModels reads only the approved names; viewer requests never inspect accounts.
@@ -143,12 +151,16 @@ func (s *ChannelModelCatalog) displayModel(ch *Channel, group *Group, seen map[s
 		// Per-image prices are group-specific; only the plaza quotes them.
 		return model, group.AllowImageGeneration
 	}
-	model.Pricing = s.textDisplayPrice(ch, name)
+	model.Pricing = s.textDisplayPrice(ch, PlatformOpenAI, name)
 	return model, model.Pricing != nil
 }
 
 func isConcreteGPTCatalogID(name string) bool {
-	if !strings.HasPrefix(name, "gpt-") || len(name) <= len("gpt-") {
+	return isConcreteCatalogID(name, "gpt-") && (IsGPTImageGenerationModel(name) || !obviousNonTextProbeModel(name))
+}
+
+func isConcreteCatalogID(name, prefix string) bool {
+	if !strings.HasPrefix(name, prefix) || len(name) <= len(prefix) {
 		return false
 	}
 	for _, c := range name {
@@ -156,7 +168,7 @@ func isConcreteGPTCatalogID(name string) bool {
 			return false
 		}
 	}
-	return IsGPTImageGenerationModel(name) || !obviousNonTextProbeModel(name)
+	return true
 }
 
 func channelRewritesCatalogModel(ch *Channel, name string) bool {
@@ -168,12 +180,12 @@ func channelRewritesCatalogModel(ch *Channel, name string) bool {
 	return false
 }
 
-func (s *ChannelModelCatalog) textDisplayPrice(ch *Channel, name string) *ChannelModelPricing {
+func (s *ChannelModelCatalog) textDisplayPrice(ch *Channel, platform, name string) *ChannelModelPricing {
 	// The channel view shows the configured base card, not a user's effective
 	// group rate. Exact cards were already covered by SupportedModels.
 	for i := range ch.ModelPricing {
 		card := &ch.ModelPricing[i]
-		if card.Platform != PlatformOpenAI {
+		if card.Platform != platform {
 			continue
 		}
 		for _, pattern := range card.Models {

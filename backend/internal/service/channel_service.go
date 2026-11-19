@@ -984,10 +984,12 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 	}
 	if input.FeaturesConfig != nil {
 		features := mergeWebSearchEmulationDimensions(channel.FeaturesConfig, input.FeaturesConfig)
-		if _, replace := features[featureKeyGPTDisplayModels]; !replace {
-			if saved, ok := channel.FeaturesConfig[featureKeyGPTDisplayModels]; ok {
-				features = maps.Clone(features)
-				features[featureKeyGPTDisplayModels] = saved
+		for _, key := range []string{featureKeyGPTDisplayModels, featureKeyClaudeDisplayModels} {
+			if _, replace := features[key]; !replace {
+				if saved, ok := channel.FeaturesConfig[key]; ok {
+					features = maps.Clone(features)
+					features[key] = saved
+				}
 			}
 		}
 		channel.FeaturesConfig = features

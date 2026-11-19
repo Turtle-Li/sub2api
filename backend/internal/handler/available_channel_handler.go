@@ -250,32 +250,47 @@ func buildPlatformSections(
 
 	sections := make([]userChannelPlatformSection, 0, len(platforms))
 	for _, platform := range platforms {
-		platformSet := map[string]struct{}{platform: {}}
 		groups := groupsByPlatform[platform]
-		models := toUserSupportedModels(ch.SupportedModels, platformSet)
-		if len(ch.AdditionalModelsByGroup) > 0 {
-			seen := make(map[string]bool, len(models))
-			for _, m := range models {
-				seen[strings.ToLower(m.Name)] = true
-			}
-			for _, g := range groups {
-				for _, m := range toUserSupportedModels(ch.AdditionalModelsByGroup[g.ID], platformSet) {
-					key := strings.ToLower(m.Name)
-					if !seen[key] {
-						models = append(models, m)
-						seen[key] = true
-					}
-				}
-			}
-			sort.SliceStable(models, func(i, j int) bool { return models[i].Name < models[j].Name })
-		}
 		sections = append(sections, userChannelPlatformSection{
 			Platform:        platform,
 			Groups:          groups,
-			SupportedModels: models,
+			SupportedModels: visiblePlatformModels(ch, platform, groups),
 		})
 	}
 	return sections
+}
+
+// Merge models only after group authorization. A manual row hidden in one
+// group may still be shown if another visible group includes it.
+func visiblePlatformModels(ch service.AvailableChannel, platform string, groups []userAvailableGroup) []userSupportedModel {
+	platformSet := map[string]struct{}{platform: {}}
+	if len(ch.DisplayModelsByGroup) == 0 && len(ch.AdditionalModelsByGroup) == 0 {
+		return toUserSupportedModels(ch.SupportedModels, platformSet)
+	}
+
+	models := make([]userSupportedModel, 0)
+	seen := make(map[string]bool)
+	add := func(src []service.SupportedModel) {
+		for _, m := range toUserSupportedModels(src, platformSet) {
+			key := strings.ToLower(m.Name)
+			if !seen[key] {
+				models = append(models, m)
+				seen[key] = true
+			}
+		}
+	}
+	for _, g := range groups {
+		if _, synced := ch.DisplayModelsByGroup[g.ID]; !synced {
+			add(ch.SupportedModels)
+			break
+		}
+	}
+	for _, g := range groups {
+		add(ch.DisplayModelsByGroup[g.ID])
+		add(ch.AdditionalModelsByGroup[g.ID])
+	}
+	sort.SliceStable(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+	return models
 }
 
 // filterUserVisibleGroups 仅保留用户可访问的分组。

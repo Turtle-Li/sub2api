@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Channel, CreateChannelRequest, UpdateChannelRequest } from '@/api/admin/channels'
 import ChannelsView from '@/views/admin/ChannelsView.vue'
 
-const { listChannels, createChannel, updateChannel, previewGPTDisplayModels, getGroups, showSuccess, showError } = vi.hoisted(() => ({
+const { listChannels, createChannel, updateChannel, previewGPTDisplayModels, previewClaudeDisplayModels, getGroups, showSuccess, showError } = vi.hoisted(() => ({
   listChannels: vi.fn(),
   createChannel: vi.fn(),
   updateChannel: vi.fn(),
   previewGPTDisplayModels: vi.fn(),
+  previewClaudeDisplayModels: vi.fn(),
   getGroups: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
@@ -16,7 +17,7 @@ const { listChannels, createChannel, updateChannel, previewGPTDisplayModels, get
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
-    channels: { list: listChannels, create: createChannel, update: updateChannel, previewGPTDisplayModels },
+    channels: { list: listChannels, create: createChannel, update: updateChannel, previewGPTDisplayModels, previewClaudeDisplayModels },
     groups: { getAll: getGroups },
     settings: { getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false }) }
   }
@@ -94,6 +95,7 @@ describe('ChannelsView channel feature configuration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     previewGPTDisplayModels.mockReset()
+    previewClaudeDisplayModels.mockReset()
     localStorage.clear()
     stored = []
     listChannels.mockImplementation(async () => ({ items: stored, total: stored.length }))
@@ -240,4 +242,82 @@ describe('ChannelsView channel feature configuration', () => {
     expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('gpt_display_models_by_group')
     wrapper.unmount()
   })
+
+  it('previews removal of a manual Claude model and saves an explicit empty group', async () => {
+    const channel = makeChannel({ gpt_display_models_by_group: { '22': ['gpt-6.2-sol'] } })
+    channel.model_mapping = { anthropic: { 'my-old-alias': 'claude-3-7-sonnet-20250219' } }
+    stored = [channel]
+    previewClaudeDisplayModels.mockResolvedValue({
+      previous_models_by_group: { '11': ['my-old-alias'] }, models_by_group: { '11': [] }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await clickButton(wrapper, 'admin.groups.platforms.anthropic')
+    expect(previewClaudeDisplayModels).not.toHaveBeenCalled()
+    await clickButton(wrapper, 'admin.channels.form.claudeDisplaySync')
+    expect(previewClaudeDisplayModels).toHaveBeenCalledOnce()
+    expect(previewClaudeDisplayModels.mock.calls[0][0]).toMatchObject({
+      channel_id: 1, group_ids: [11], model_mapping: channel.model_mapping
+    })
+    expect(wrapper.get('details').text()).toContain('Anthropic group')
+    expect(wrapper.get('details').text()).toContain('gptDisplayRemoved my-old-alias')
+    expect(updateChannel).not.toHaveBeenCalled()
+
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    const payload = updateChannel.mock.calls[0][1]
+    expect(payload.features_config.claude_display_models_by_group).toEqual({ '11': [] })
+    expect(payload.features_config).not.toHaveProperty('gpt_display_models_by_group')
+    expect(payload.group_ids).toEqual(channel.group_ids)
+    expect(payload.model_mapping).toEqual(channel.model_mapping)
+    expect(payload.model_pricing).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('does not save a Claude preview after a display setting changes', async () => {
+    stored = [makeChannel({ claude_display_models_by_group: { '11': ['claude-sonnet-4-6'] } })]
+    previewClaudeDisplayModels.mockResolvedValue({
+      previous_models_by_group: { '11': ['claude-sonnet-4-6'] }, models_by_group: { '11': [] }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await clickButton(wrapper, 'admin.groups.platforms.anthropic')
+    await clickButton(wrapper, 'admin.channels.form.claudeDisplaySync')
+    await clickButton(wrapper, 'admin.channels.form.basicSettings')
+    await wrapper.get('textarea[placeholder="admin.channels.form.plazaHiddenModelsPlaceholder"]').setValue('claude-sonnet-4-6')
+    await clickButton(wrapper, 'admin.groups.platforms.anthropic')
+    expect(wrapper.get('[role="status"]').text()).toBe('admin.channels.form.gptDisplayStale')
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('claude_display_models_by_group')
+    wrapper.unmount()
+  })
+
+  it('aborts Claude discovery when the dialog closes and does not reuse a late response', async () => {
+    stored = [makeChannel({})]
+    let complete: (value: { models_by_group: Record<string, string[]> }) => void = () => {
+      throw new Error('Preview request was not started')
+    }
+    previewClaudeDisplayModels.mockReturnValue(new Promise(resolve => { complete = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await clickButton(wrapper, 'admin.groups.platforms.anthropic')
+    await clickButton(wrapper, 'admin.channels.form.claudeDisplaySync')
+    const signal: AbortSignal = previewClaudeDisplayModels.mock.calls[0][1]
+    expect(signal.aborted).toBe(false)
+    expect(wrapper.get('button[form="channel-form"]').attributes('disabled')).toBeDefined()
+    await clickButton(wrapper, 'common.cancel')
+    expect(signal.aborted).toBe(true)
+    complete({ models_by_group: { '11': [] } })
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('claude_display_models_by_group')
+    wrapper.unmount()
+  })
+
 })

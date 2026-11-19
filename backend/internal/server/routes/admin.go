@@ -954,6 +954,7 @@ func registerChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		channels.GET("/model-pricing", h.Admin.Channel.GetModelDefaultPricing)
 		channels.GET("/pricing/sync-models", h.Admin.Channel.SyncPricingModels)
 		channels.POST("/gpt-display-models/preview", h.Admin.Channel.PreviewGPTDisplayModels)
+		channels.POST("/claude-display-models/preview", h.Admin.Channel.PreviewClaudeDisplayModels)
 		channels.GET("/:id", h.Admin.Channel.GetByID)
 		channels.POST("", h.Admin.Channel.Create)
 		channels.PUT("/:id", h.Admin.Channel.Update)

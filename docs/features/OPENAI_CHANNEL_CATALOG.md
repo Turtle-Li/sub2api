@@ -1,4 +1,4 @@
-# Manual GPT display model sync
+# Manual GPT and Claude display model sync
 
 ## Pinned upstream and local contract
 
@@ -44,9 +44,37 @@ group account model names for display only. Neither replaces billing.
   accept image input stay in the text table. Keep the site's `$` wallet-unit
   display symbol even when settlement is CNY.
 
-Scope of the pilot: OpenAI only. Discovery performs one local account lookup
-per eligible group per admin preview. No account lookup is added to public
-catalog reads. The earlier unpublished automatic option has no effect.
+Discovery performs one local account lookup per eligible group per admin
+preview. No account lookup is added to public catalog reads. The earlier
+unpublished automatic option has no effect.
+
+## Claude group reconciliation
+
+**Channel pricing → Edit → Anthropic → Sync Claude display models** previews both
+additions and removals for the currently selected, active Anthropic groups.
+Saving applies the preview; closing it or changing the draft groups, mappings,
+pricing, or restrictions does not save it. Nothing is scheduled. Like GPT,
+the button is unavailable when channel model restrictions are enabled.
+
+Claude sync reconciles the whole group's display, including hand-entered
+aliases, identity mappings, and pricing-only rows. A row stays only when the
+group allows the public name and an eligible account supports the effective
+channel-mapped name. Exact `claude-*` entries from eligible account mappings
+can add new names; unrestricted or wildcard configurations can retain known
+names but do not create new ones. This is local configuration, not a provider
+health probe; transient overload and rate limits are not removals. A lookup
+error aborts the preview, including any partially processed groups.
+
+`features_config.claude_display_models_by_group` is independent of the GPT
+supplement. A missing group entry leaves manual rows unchanged; a saved empty
+array hides the whole Claude list for that group. No upstream request, account
+write, price change, group attachment change, or migration is involved. Model
+Plaza applies the saved list per group; Available Channels merges it only from
+groups accessible to the viewer. Newly synced rows use existing display prices
+when available; sync does not create a price. Ordinary channel edits preserve
+both snapshots; run Claude sync again to include newly configured manual rows
+in a synced group. To undo a Claude sync, restore the previous snapshot, or save
+an empty **object** (not an empty group array) to revert to the manual list.
 
 ## Initial production observation and bounded change
 

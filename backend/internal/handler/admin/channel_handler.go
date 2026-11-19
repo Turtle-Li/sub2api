@@ -59,7 +59,7 @@ type updateChannelRequest struct {
 	AccountStatsPricingRules   *[]accountStatsPricingRuleRequest `json:"account_stats_pricing_rules"`
 }
 
-type gptDisplayPreviewRequest struct {
+type displayPreviewRequest struct {
 	GroupIDs       []int64                      `json:"group_ids" binding:"dive,gt=0"`
 	ModelPricing   []channelModelPricingRequest `json:"model_pricing"`
 	ModelMapping   map[string]map[string]string `json:"model_mapping"`
@@ -708,21 +708,42 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 }
 
 func (h *ChannelHandler) PreviewGPTDisplayModels(c *gin.Context) {
-	var req gptDisplayPreviewRequest
+	var req displayPreviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ErrorFrom(c, infraerrors.BadRequest("VALIDATION_ERROR", err.Error()))
 		return
 	}
-	models, err := h.channelService.PreviewGPTDisplayModels(c.Request.Context(), &service.Channel{
-		GroupIDs:       req.GroupIDs,
-		ModelPricing:   pricingRequestToService(req.ModelPricing, true),
-		ModelMapping:   req.ModelMapping,
-		RestrictModels: req.RestrictModels,
-		FeaturesConfig: map[string]any{"model_plaza_hidden_models": req.HiddenModels},
-	})
+	models, err := h.channelService.PreviewGPTDisplayModels(c.Request.Context(), req.channelDraft())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, gin.H{"models_by_group": models})
+}
+
+func (h *ChannelHandler) PreviewClaudeDisplayModels(c *gin.Context) {
+	var req struct {
+		displayPreviewRequest
+		ChannelID int64 `json:"channel_id" binding:"omitempty,gt=0"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("VALIDATION_ERROR", err.Error()))
+		return
+	}
+	preview, err := h.channelService.PreviewClaudeDisplayModels(c.Request.Context(), req.channelDraft(), req.ChannelID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, preview)
+}
+
+func (req displayPreviewRequest) channelDraft() *service.Channel {
+	return &service.Channel{
+		GroupIDs:       req.GroupIDs,
+		ModelPricing:   pricingRequestToService(req.ModelPricing, true),
+		ModelMapping:   req.ModelMapping,
+		RestrictModels: req.RestrictModels,
+		FeaturesConfig: map[string]any{"model_plaza_hidden_models": req.HiddenModels},
+	}
 }

@@ -42,6 +42,8 @@ type AvailableChannel struct {
 	SupportedModels    []SupportedModel
 	// Publish saved supplements only to viewers who can access their source group.
 	AdditionalModelsByGroup map[int64][]SupportedModel
+	// A present entry replaces the manual list for this group, even if empty.
+	DisplayModelsByGroup map[int64][]SupportedModel
 }
 
 // ListAvailable 返回所有渠道的可用视图：每个渠道附带关联分组信息与支持模型列表。
@@ -78,9 +80,10 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 		fillGlobalPricingFallback(s.pricingService, supported)
 		s.populateMinimalProbeMetadata(supported, time.Now())
 		snapshot := ch.gptDisplayModelsByGroup()
+		claudeSnapshot := ch.displayModelsByGroup(featureKeyClaudeDisplayModels)
 
 		groups := make([]AvailableGroupRef, 0, len(ch.GroupIDs))
-		var additional map[int64][]SupportedModel
+		var additional, display map[int64][]SupportedModel
 		for _, gid := range ch.GroupIDs {
 			g := groupByID[gid]
 			if g == nil {
@@ -99,7 +102,12 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 				PeakRateMultiplier: g.PeakRateMultiplier,
 				IsExclusive:        g.IsExclusive,
 			})
-			if models := s.modelCatalog.savedModels(ch, g, supported, snapshot[gid]); len(models) > 0 {
+			if models := s.modelCatalog.projectClaudeDisplay(ch, g, supported, claudeSnapshot[gid]); models != nil {
+				if display == nil {
+					display = make(map[int64][]SupportedModel)
+				}
+				display[gid] = models
+			} else if models := s.modelCatalog.savedModels(ch, g, supported, snapshot[gid]); len(models) > 0 {
 				if additional == nil {
 					additional = make(map[int64][]SupportedModel)
 				}
@@ -118,6 +126,7 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 			Groups:                  groups,
 			SupportedModels:         supported,
 			AdditionalModelsByGroup: additional,
+			DisplayModelsByGroup:    display,
 		})
 	}
 

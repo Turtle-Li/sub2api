@@ -221,6 +221,37 @@ func TestBuildPlatformSections_FollowedModelsRequireVisibleSourceGroup(t *testin
 	}
 }
 
+func TestBuildPlatformSections_ClaudeSnapshotReplacesManualModelsForVisibleGroup(t *testing.T) {
+	const platform = service.PlatformAnthropic
+	manual := service.SupportedModel{Name: "manual-claude", Platform: platform}
+	ch := service.AvailableChannel{
+		SupportedModels: []service.SupportedModel{manual},
+		DisplayModelsByGroup: map[int64][]service.SupportedModel{
+			11: {},
+			12: {manual, {Name: "private-claude", Platform: platform}},
+		},
+	}
+	public := userAvailableGroup{ID: 11, Platform: platform}
+	private := userAvailableGroup{ID: 12, Platform: platform, IsExclusive: true}
+	unsynced := userAvailableGroup{ID: 13, Platform: platform}
+	for _, tc := range []struct {
+		groups []userAvailableGroup
+		want   []string
+	}{
+		{[]userAvailableGroup{public}, []string{}},
+		{[]userAvailableGroup{public, private}, []string{"manual-claude", "private-claude"}},
+		{[]userAvailableGroup{public, unsynced}, []string{"manual-claude"}},
+	} {
+		sections := buildPlatformSections(ch, tc.groups)
+		require.Len(t, sections, 1)
+		names := make([]string, 0, len(sections[0].SupportedModels))
+		for _, model := range sections[0].SupportedModels {
+			names = append(names, model.Name)
+		}
+		require.Equal(t, tc.want, names)
+	}
+}
+
 func TestBuildPlatformSections_CompositeGroupExpandsAcrossConfiguredModelPlatforms(t *testing.T) {
 	anthropicPrice := 3e-6
 	openAIPrice := 2.5e-6
