@@ -37,7 +37,7 @@
         >
           <th
             rowspan="2"
-            class="border-r border-gray-100 py-2.5 pl-5 pr-4 text-left align-middle dark:border-dark-700/60"
+            class="min-w-[10rem] border-r border-gray-100 py-2.5 pl-5 pr-4 text-left align-middle dark:border-dark-700/60"
           >
             {{ t('modelPlaza.table.model') }}
           </th>
@@ -66,14 +66,14 @@
         <tr
           class="border-b border-gray-200 text-left text-[11px] font-medium uppercase leading-4 tracking-wide text-gray-400 dark:border-dark-700 dark:text-dark-500"
         >
-          <th class="pz-bg px-3 py-2 font-medium">{{ t('modelPlaza.table.input') }}</th>
-          <th class="pz-bg px-3 py-2 font-medium">{{ t('modelPlaza.table.output') }}</th>
-          <th class="pz-bg px-3 py-2 font-medium">{{ t('modelPlaza.table.cache') }}</th>
-          <th class="border-l border-gray-100 px-3 py-2 font-medium dark:border-dark-700/60">
+          <th class="pz-bg px-2 py-2 font-medium">{{ t('modelPlaza.table.input') }}</th>
+          <th class="pz-bg px-2 py-2 font-medium">{{ t('modelPlaza.table.output') }}</th>
+          <th class="pz-bg px-2 py-2 font-medium">{{ t('modelPlaza.table.cache') }}</th>
+          <th class="border-l border-gray-100 px-2 py-2 font-medium dark:border-dark-700/60">
             {{ t('modelPlaza.table.input') }}
           </th>
-          <th class="px-3 py-2 font-medium">{{ t('modelPlaza.table.output') }}</th>
-          <th class="px-3 py-2 font-medium">{{ t('modelPlaza.table.cache') }}</th>
+          <th class="px-2 py-2 font-medium">{{ t('modelPlaza.table.output') }}</th>
+          <th class="px-2 py-2 font-medium">{{ t('modelPlaza.table.cache') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -85,7 +85,7 @@
           <!-- 模型名 + 非 token 计费模式徽章;分时时段行额外标注时段 -->
           <td class="border-r border-gray-100 py-2.5 pl-5 pr-4 align-middle dark:border-dark-700/60">
             <div class="flex flex-wrap items-center gap-1.5">
-              <span class="font-medium text-gray-900 dark:text-white">{{ m.name }}</span>
+              <span class="whitespace-nowrap font-medium text-gray-900 dark:text-white">{{ m.name }}</span>
               <!-- 时段徽章紧跟模型名,其余徽章排在后面,空间不足时先换行的是它们 -->
               <span
                 v-if="period"
@@ -133,7 +133,7 @@
 
           <!-- token 计费:输入 / 输出 / 缓存(写/读),有阶梯时每档一行;档位标签只放输入列,其余列按行对齐 -->
           <template v-if="billingMode(m) === BILLING_MODE_TOKEN">
-            <td class="pz-cell px-3 py-2.5 align-middle font-mono font-semibold text-gray-900 dark:text-gray-50">
+            <td class="pz-cell px-2 py-2.5 align-middle font-mono font-semibold text-gray-900 dark:text-gray-50">
               <template v-if="tokenIntervals(m).length">
                 <div
                   v-for="(iv, idx) in tokenIntervals(m)"
@@ -146,7 +146,7 @@
               </template>
               <template v-else>{{ paidPerMillion(m.pricing?.input_price, period) }}</template>
             </td>
-            <td class="pz-cell px-3 py-2.5 align-middle font-mono font-semibold text-gray-900 dark:text-gray-50">
+            <td class="pz-cell px-2 py-2.5 align-middle font-mono font-semibold text-gray-900 dark:text-gray-50">
               <template v-if="tokenIntervals(m).length">
                 <div
                   v-for="(iv, idx) in tokenIntervals(m)"
@@ -159,7 +159,7 @@
               </template>
               <template v-else>{{ paidPerMillion(m.pricing?.output_price, period) }}</template>
             </td>
-            <td class="pz-cell px-3 py-2.5 align-middle">
+            <td class="pz-cell px-2 py-2.5 align-middle">
               <template v-if="hasTierCachePricing(tokenIntervals(m))">
                 <div
                   v-for="(iv, idx) in tokenIntervals(m)"
@@ -209,7 +209,7 @@
 
           <!-- 按次 / 按图片计费:实付区整体合并,阶梯芯片或单一按次价 -->
           <template v-else>
-            <td colspan="3" class="pz-cell px-3 py-2.5 align-middle">
+            <td colspan="3" class="pz-cell px-2 py-2.5 align-middle">
               <div
                 v-if="requestIntervals(m).length"
                 class="flex flex-wrap items-center gap-1.5"
@@ -236,7 +236,7 @@
 
           <!-- 官方价格(参考价,不乘倍率;官方有阶梯时每档一行) -->
           <td
-            class="border-l border-gray-100 px-3 py-2.5 align-middle font-mono text-xs text-gray-500 dark:border-dark-700/60 dark:text-dark-400"
+            class="border-l border-gray-100 px-2 py-2.5 align-middle font-mono text-xs text-gray-500 dark:border-dark-700/60 dark:text-dark-400"
           >
             <template v-if="officialIntervals(m).length">
               <div
@@ -250,7 +250,7 @@
             </template>
             <template v-else>{{ official(m, m.official_pricing?.input_price) }}</template>
           </td>
-          <td class="px-3 py-2.5 align-middle font-mono text-xs text-gray-500 dark:text-dark-400">
+          <td class="px-2 py-2.5 align-middle font-mono text-xs text-gray-500 dark:text-dark-400">
             <template v-if="officialIntervals(m).length">
               <div
                 v-for="(iv, idx) in officialIntervals(m)"
@@ -263,7 +263,7 @@
             </template>
             <template v-else>{{ official(m, m.official_pricing?.output_price) }}</template>
           </td>
-          <td class="px-3 py-2.5 align-middle">
+          <td class="px-2 py-2.5 align-middle">
             <template v-if="hasTierCachePricing(officialIntervals(m))">
               <div
                 v-for="(iv, idx) in officialIntervals(m)"
