@@ -21,6 +21,17 @@ type PlazaOfficialPricing struct {
 	Intervals []PricingInterval
 }
 
+type PlazaUnitQuote struct {
+	Label string
+	Price float64
+}
+
+// PlazaUnitPricing quotes native media in the group's display units before its effective rate.
+type PlazaUnitPricing struct {
+	Unit   string // image or second
+	Quotes []PlazaUnitQuote
+}
+
 // PlazaModel 模型广场中单个模型条目：按实收口径合成的展示定价 + 官方参考价。
 type PlazaModel struct {
 	Name            string
@@ -28,6 +39,7 @@ type PlazaModel struct {
 	Pricing         *ChannelModelPricing
 	OfficialPricing *PlazaOfficialPricing
 	GPTImage        bool
+	UnitPricing     *PlazaUnitPricing
 	// LongContextBasis 多档时的计价基准（整单 / 仅超出部分），单档为空。
 	LongContextBasis ContextPricingBasis
 	// TimePricing 计费会生效的分时倍率时段；无分时为 nil。
@@ -45,6 +57,7 @@ type PlazaGroup struct {
 	Description        string
 	I18n               GroupI18n
 	Platform           string
+	CatalogProvider    string // Display only; never changes the API platform.
 	SubscriptionType   string
 	RateMultiplier     float64
 	PeakRateEnabled    bool
@@ -238,6 +251,9 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		if policy != nil {
 			pg.DisplayCurrency, pg.DisplayUSDRate = plazaDisplayCurrency(*policy, g)
 		}
+		if isMusePlazaGroup(pg) {
+			pg.CatalogProvider = "muse"
+		}
 		for j := range pg.Models {
 			card := pg.Models[j].Pricing
 			if groupPricing := matchGroupModelPricing(g, pg.Models[j].Name); groupPricing != nil {
@@ -247,6 +263,9 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 			pg.Models[j].OfficialPricing = s.lookupOfficialPricing(ctx, pg.Models[j].Name, officialMemo)
 			if official := s.officialPricingFromCNYCard(card); official != nil {
 				pg.Models[j].OfficialPricing = official
+			}
+			if pg.CatalogProvider == "muse" {
+				pg.Models[j].UnitPricing = s.musePlazaUnitPricing(ctx, g, pg, pg.Models[j].Name)
 			}
 		}
 		out = append(out, *pg)

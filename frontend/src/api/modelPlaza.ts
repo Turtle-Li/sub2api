@@ -44,10 +44,19 @@ export interface PlazaTimePricing {
   periods: PlazaTimePricingPeriod[]
 }
 
+export interface PlazaUnitPricing {
+  unit: 'image' | 'second'
+  /** Already in display units, before the effective media rate. */
+  quotes: Array<{ label: string; price: number }>
+}
+
+export type PlazaCompactUnit = 'request' | PlazaUnitPricing['unit']
+
 export interface PlazaModel {
   name: string
   platform: string
   gpt_image?: boolean
+  unit_pricing?: PlazaUnitPricing
   /** 实收口径的展示定价：档位可提供绝对单价或相对基础价倍率；均为标准时段价。 */
   pricing: UserSupportedModelPricing | null
   official_pricing: PlazaOfficialPricing | null
@@ -63,6 +72,7 @@ export interface ModelPlazaGroup {
   name: string
   description: string
   platform: string
+  catalog_provider?: 'muse'
   /** 'standard' | 'subscription' */
   subscription_type: string
   rate_multiplier: number

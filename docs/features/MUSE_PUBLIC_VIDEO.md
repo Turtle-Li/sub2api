@@ -109,6 +109,24 @@ directly to the numeric reference price and settles the actual debit in CNY.
 The video price is model-specific at 720p. Existing image and video multiplier
 rules apply. No historic charges are recomputed.
 
+### Model Plaza presentation
+
+Link an active channel to the existing Muse group and list the exact identities
+`muse-spark`, `muse-image`, and `muse-video` (identity mappings suffice; no channel
+price overrides are needed). An OpenAI group listing only these Muse models in
+Model Plaza appears under **MUSE**, independently of the **openai** filter. Its
+gateway platform and grants are unchanged; an exclusive Muse group is still
+visible only to eligible users. Mixed and prefix-matching groups are not
+reclassified. The plaza does not discover or auto-publish account models.
+
+Spark displays the configured text quote, per request for the zero-token Muse
+Spark card. Image quotes use the same per-output wallet price and tier fallback
+as native image admission. Video displays the effective per-second quote at the
+720p billing tier, including group model-card precedence; it does not invent a
+quote from a channel's per-request card when no usable per-second price exists.
+Display applies the existing group/personal or independent media rate; no price
+or runtime policy is changed by viewing the plaza.
+
 ## Initial text to video production acceptance — 2026-11-13
 
 Exact app revision `651dd4d6c732743d58e338041442c4b92eecfb62` is healthy on blue.

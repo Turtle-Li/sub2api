@@ -1,24 +1,26 @@
 <template>
-  <table v-if="imageOnly" class="w-full border-collapse text-left text-sm tabular-nums">
-    <thead class="border-y border-gray-100 text-xs font-medium text-gray-600 dark:border-dark-700/60 dark:text-dark-300">
-      <tr>
-        <th scope="col" class="w-1/2 px-5 py-2 font-medium">{{ t('modelPlaza.table.model') }}</th>
-        <th scope="col" class="px-5 py-2 text-right font-medium">{{ t('modelPlaza.table.imagePrice') }}</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr v-for="{ model, quotes } in imageRows" :key="`${model.platform}:${model.name}`" class="border-b border-gray-100 last:border-0 dark:border-dark-700/60">
-        <th scope="row" class="break-all px-5 py-3 align-top font-medium text-gray-900 dark:text-white">{{ model.name }}</th>
-        <td class="px-5 py-3 text-right align-top text-gray-900 dark:text-white">
-          <div v-for="(quote, index) in quotes" :key="index" class="flex flex-wrap items-baseline justify-end gap-x-2">
-            <span v-if="quote.label" class="text-xs text-gray-600 dark:text-dark-300">{{ quote.label }}</span>
-            <span class="whitespace-nowrap font-semibold">{{ paidRequestPrice(model, quote.price) }} <span class="text-xs font-normal text-gray-600 dark:text-dark-300">{{ t('modelPlaza.table.perUnitImage') }}</span></span>
-          </div>
-          <span v-if="!quotes.length" class="text-xs text-gray-600 dark:text-dark-300">{{ t('modelPlaza.detail.noPricing') }}</span>
-        </td>
-      </tr>
-    </tbody>
-  </table>
+  <div v-if="unit" class="overflow-x-auto">
+    <table class="w-full border-collapse text-left text-sm tabular-nums">
+      <thead class="border-y border-gray-100 text-xs font-medium text-gray-600 dark:border-dark-700/60 dark:text-dark-300">
+        <tr>
+          <th scope="col" class="px-3 py-2 font-medium sm:w-1/2 sm:px-5">{{ t('modelPlaza.table.model') }}</th>
+          <th scope="col" class="px-3 py-2 text-right font-medium sm:px-5">{{ t(compactPriceLabels[unit].heading) }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="{ model, quotes } in compactRows" :key="`${model.platform}:${model.name}`" class="border-b border-gray-100 last:border-0 dark:border-dark-700/60">
+          <th scope="row" class="whitespace-nowrap px-3 py-3 align-top font-medium text-gray-900 dark:text-white sm:px-5">{{ model.name }}</th>
+          <td class="px-3 py-3 text-right align-top text-gray-900 dark:text-white sm:px-5">
+            <div v-for="(quote, index) in quotes" :key="index" class="flex flex-wrap items-baseline justify-end gap-x-2">
+              <span v-if="quote.label" class="text-xs text-gray-600 dark:text-dark-300">{{ quote.label }}</span>
+              <span class="whitespace-nowrap font-semibold">{{ paidRequestPrice(model, quote.price) }} <span class="text-xs font-normal text-gray-600 dark:text-dark-300">{{ t(compactPriceLabels[unit].suffix) }}</span></span>
+            </div>
+            <span v-if="!quotes.length" class="text-xs text-gray-600 dark:text-dark-300">{{ t('modelPlaza.detail.noPricing') }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
   <div v-else class="plaza-pricing-table overflow-x-auto" :style="accentStyle">
     <table class="w-full min-w-[1000px] table-auto border-collapse text-sm tabular-nums">
       <colgroup>
@@ -356,7 +358,7 @@ import {
   REASONING_EFFORT_LEVELS,
   type BillingMode
 } from '@/constants/channel'
-import type { PlazaModel, PlazaTimePricingPeriod } from '@/api/modelPlaza'
+import type { PlazaCompactUnit, PlazaModel, PlazaTimePricingPeriod } from '@/api/modelPlaza'
 import type { UserPricingInterval } from '@/api/channels'
 import { useAppStore } from '@/stores/app'
 
@@ -372,7 +374,7 @@ function reasoningEffortMultipliers(model: PlazaModel): [string, number][] {
 
 const props = defineProps<{
   models: PlazaModel[]
-  imageOnly?: boolean
+  unit?: PlazaCompactUnit
   /** 分组平台;实付分区底色随平台着色,未知平台回退品牌青。 */
   platform?: string
   /** 分组默认倍率。 */
@@ -434,7 +436,13 @@ const sortedModels = computed(() => {
   })
 })
 
-const imageRows = computed(() => sortedModels.value.map(model => ({ model, quotes: imageQuotes(model) })))
+const compactPriceLabels: Record<PlazaCompactUnit, { heading: string; suffix: string }> = {
+  request: { heading: 'modelPlaza.table.requestPrice', suffix: 'modelPlaza.table.perUnitRequest' },
+  image: { heading: 'modelPlaza.table.imagePrice', suffix: 'modelPlaza.table.perUnitImage' },
+  second: { heading: 'modelPlaza.table.videoPrice', suffix: 'modelPlaza.table.perUnitSecond' },
+}
+
+const compactRows = computed(() => sortedModels.value.map(model => ({ model, quotes: compactQuotes(model) })))
 
 const effectiveRate = computed(() => props.userRateMultiplier ?? props.rateMultiplier)
 const hasCustomRate = computed(
@@ -521,10 +529,11 @@ function usesIndependentMediaRate(m: PlazaModel): boolean {
 
 /** 非 token 行的生效倍率，图片和视频可分别覆盖通用倍率。 */
 function requestRate(m: PlazaModel): number {
-  if (billingMode(m) === BILLING_MODE_VIDEO && props.videoRateIndependent === true) {
+  const unit = props.unit ?? billingMode(m)
+  if ((unit === 'second' || unit === BILLING_MODE_VIDEO) && props.videoRateIndependent === true) {
     return Math.max(0, props.videoRateMultiplier ?? 1)
   }
-  return (props.imageOnly || billingMode(m) === BILLING_MODE_IMAGE) && props.imageRateIndependent === true
+  return unit === BILLING_MODE_IMAGE && props.imageRateIndependent === true
     ? Math.max(0, props.imageRateMultiplier ?? 1)
     : effectiveRate.value
 }
@@ -532,6 +541,7 @@ function requestRate(m: PlazaModel): number {
 /** 非 token 单价乘该行生效倍率，不换算为每百万 token。 */
 function paidRequestPrice(m: PlazaModel, value: number | null | undefined): string {
   if (value == null) return '-'
+  if (m.unit_pricing) return formatScaled(value * requestRate(m), 1, MIN_DECIMALS)
   return displayCatalogUSDPrice(value * requestRate(m), 1, MIN_DECIMALS)
 }
 
@@ -624,16 +634,16 @@ function requestIntervals(m: PlazaModel): UserPricingInterval[] {
   return (m.pricing?.intervals ?? []).filter((iv) => iv.per_request_price != null)
 }
 
-function imageQuotes(model: PlazaModel): { label: string; price: number }[] {
-  const tiers = requestIntervals(model).flatMap(tier => tier.per_request_price == null
+function compactQuotes(model: PlazaModel): { label: string; price: number }[] {
+  const tiers = model.unit_pricing?.quotes ?? requestIntervals(model).flatMap(tier => tier.per_request_price == null
     ? []
     : [{ label: tierLabel(tier), price: tier.per_request_price }])
   if (tiers.length === 0) {
-    const price = model.pricing?.per_request_price
+    const price = model.unit_pricing ? null : model.pricing?.per_request_price
     return price == null ? [] : [{ label: '', price }]
   }
   const labels = ['1K', '2K', '4K']
-  if (tiers.length === labels.length && labels.every(label => tiers.some(tier => tier.label === label && tier.price === tiers[0].price))) {
+  if (props.unit === 'image' && tiers.length === labels.length && labels.every(label => tiers.some(tier => tier.label === label && tier.price === tiers[0].price))) {
     return [{ label: labels.join(' / '), price: tiers[0].price }]
   }
   return tiers

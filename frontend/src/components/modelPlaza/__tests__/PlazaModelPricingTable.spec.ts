@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import PlazaModelPricingTable from '../PlazaModelPricingTable.vue'
-import type { PlazaModel } from '@/api/modelPlaza'
+import type { PlazaCompactUnit, PlazaModel } from '@/api/modelPlaza'
 import { useAppStore } from '@/stores/app'
 import type { PublicSettings } from '@/types'
 
@@ -47,7 +47,7 @@ function mountTable(
   rateMultiplier: number,
   userRateMultiplier?: number | null,
   extraProps?: {
-    imageOnly?: boolean
+    unit?: PlazaCompactUnit
     imageRateIndependent?: boolean
     imageRateMultiplier?: number | null
     videoRateIndependent?: boolean
@@ -73,6 +73,33 @@ function mountTable(
 }
 
 describe('PlazaModelPricingTable', () => {
+  it.each([
+    { unit: 'image', price: .10, expected: '$0.20', suffix: 'perUnitImage' },
+    { unit: 'second', price: .06, expected: '$0.18', suffix: 'perUnitSecond' },
+  ] as const)('quotes a native $unit at the independent rate with no second currency conversion', ({ unit, price, expected, suffix }) => {
+    const model = tokenModel({ name: `muse-${unit === 'image' ? 'image' : 'video'}`, platform: 'openai', pricing: null,
+      unit_pricing: { unit, quotes: [{ label: unit === 'image' ? '1K' : '720p', price }] }
+    })
+    const wrapper = mountTable([model], .9, .5, {
+      unit, imageRateIndependent: true, imageRateMultiplier: 2,
+      videoRateIndependent: true, videoRateMultiplier: 3,
+      displayCurrency: 'CNY', displayUsdRate: 6.75,
+    })
+    const body = wrapper.get('tbody').text()
+    expect(body).toContain(expected)
+    expect(body).toContain(`modelPlaza.table.${suffix}`)
+    wrapper.unmount()
+  })
+
+  it('does not fall back to per-request pricing when native video has no seconds quote', () => {
+    const video = tokenModel({ name: 'muse-video', platform: 'openai', unit_pricing: { unit: 'second', quotes: [] } })
+    video.pricing = video.pricing && { ...video.pricing, billing_mode: 'per_request', per_request_price: 0.42 }
+    const wrapper = mountTable([video], 1, null, { unit: 'second' })
+    expect(wrapper.get('tbody').text()).toContain('modelPlaza.detail.noPricing')
+    expect(wrapper.get('tbody').text()).not.toContain('$0.42')
+    wrapper.unmount()
+  })
+
   it('quotes a fixed image price once across identical resolution tiers, ignoring the personal text rate', () => {
     const model = tokenModel({ name: 'gpt-image-2.5-sunburst', platform: 'openai' })
     model.pricing!.billing_mode = 'image'
@@ -81,7 +108,7 @@ describe('PlazaModelPricingTable', () => {
       cache_write_price: null, cache_read_price: null, per_request_price: .2
     }))
     const wrapper = mountTable([model], .3, .1, {
-      imageOnly: true, imageRateIndependent: true, imageRateMultiplier: 1,
+      unit: 'image', imageRateIndependent: true, imageRateMultiplier: 1,
       displayCurrency: 'CNY', displayUsdRate: 1
     })
     const body = wrapper.get('tbody').text()
@@ -99,7 +126,7 @@ describe('PlazaModelPricingTable', () => {
       tier_label: ['1K', '2K', '4K'][i], min_tokens: 0, max_tokens: null, input_price: null, output_price: null,
       cache_write_price: null, cache_read_price: null, per_request_price
     }))
-    const wrapper = mountTable([model], .5, null, { imageOnly: true, displayCurrency: 'CNY', displayUsdRate: 1 })
+    const wrapper = mountTable([model], .5, null, { unit: 'image', displayCurrency: 'CNY', displayUsdRate: 1 })
     for (const price of ['$0.00', '$0.10', '$0.25']) expect(wrapper.get('tbody').text()).toContain(price)
     wrapper.unmount()
   })

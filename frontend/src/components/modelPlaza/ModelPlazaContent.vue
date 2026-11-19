@@ -104,18 +104,20 @@ function effectiveRate(g: ModelPlazaGroup): number {
   return g.user_rate_multiplier ?? g.rate_multiplier
 }
 
-const platforms = computed(() =>
-  [...new Set((props.response?.groups ?? []).map((g) => g.platform).filter(Boolean))].sort()
-)
+function catalogPlatform(g: ModelPlazaGroup): string {
+  return g.catalog_provider ?? g.platform
+}
 
 const groupOptions = computed(() =>
   (props.response?.groups ?? []).map((g) => ({
     id: g.id,
     name: g.name,
-    platform: g.platform,
+    platform: catalogPlatform(g),
     rate: effectiveRate(g)
   }))
 )
+
+const platforms = computed(() => [...new Set(groupOptions.value.map(g => g.platform).filter(Boolean))].sort())
 
 /** 全量生效倍率;当前组合下不可用的项由 FilterBar 置灰而非隐藏。 */
 const rates = computed(() =>
@@ -132,7 +134,7 @@ watch(rates, (list) => {
 const filteredGroups = computed(() => {
   let groups = props.response?.groups ?? []
   if (selectedPlatform.value !== 'all') {
-    groups = groups.filter((g) => g.platform === selectedPlatform.value)
+    groups = groups.filter((g) => catalogPlatform(g) === selectedPlatform.value)
   }
   if (selectedGroupId.value !== 'all') {
     groups = groups.filter((g) => g.id === selectedGroupId.value)

@@ -105,7 +105,7 @@ describe('PlazaGroupSection 长上下文说明', () => {
     expect(tables.map(table => table.props('models').map(model => model.name))).toEqual([
       ['gpt-6.2-sol'], ['gpt-image-2.5-flare'], ['gpt-image-2']
     ])
-    expect(tables.map(table => table.props('imageOnly'))).toEqual([false, true, false])
+    expect(tables.map(table => table.props('unit'))).toEqual([undefined, 'image', undefined])
     expect(wrapper.text()).toContain('modelPlaza.detail.fixedImageRate')
     wrapper.unmount()
   })
@@ -118,6 +118,28 @@ describe('PlazaGroupSection 长上下文说明', () => {
     })
     wrapper.unmount()
   })
+
+  it('renders dedicated Muse text, image and video sections with their own units', () => {
+    const spark = ladderModel(0)
+    const wrapper = mountSection(group({
+      catalog_provider: 'muse',
+      models: [
+        { name: 'muse-video', platform: 'openai', official_pricing: null, pricing: null, unit_pricing: { unit: 'second', quotes: [] } },
+        { ...spark, name: 'muse-spark', pricing: spark.pricing && { ...spark.pricing, billing_mode: 'per_request', per_request_price: .005 } },
+        { name: 'muse-image', platform: 'openai', official_pricing: null, pricing: null, unit_pricing: { unit: 'image', quotes: [] } },
+      ]
+    }))
+    const tables = wrapper.findAllComponents(PlazaModelPricingTable)
+    expect(tables.map(table => table.props('models').map(model => model.name))).toEqual([
+      ['muse-spark'], ['muse-image'], ['muse-video']
+    ])
+    expect(tables.map(table => table.props('unit'))).toEqual(['request', 'image', 'second'])
+    expect(wrapper.findAll('h3').map(title => title.text())).toEqual([
+      'modelPlaza.detail.museTextPrices', 'modelPlaza.detail.museImagePrices', 'modelPlaza.detail.museVideoPrices'
+    ])
+    wrapper.unmount()
+  })
+
   it('分组关闭阶梯且组内有官方阶梯模型时显示说明', () => {
     const wrapper = mountSection(group({ long_context_pricing_enabled: false }))
     expect(wrapper.text()).toContain(NOTE)

@@ -13,11 +13,12 @@
           class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 disabled:grayscale"
           :class="p === 'all' ? chipClass(platform === 'all') : platform === p ? 'chip-tinted-active' : 'chip-tinted'"
           :style="p === 'all' ? undefined : { '--chip-accent': platformAccentColor(p) }"
+          :aria-pressed="platform === p"
           :disabled="p !== 'all' && !platformEnabled(p)"
           @click="$emit('update:platform', p)"
         >
-          <PlatformIcon v-if="p !== 'all'" :platform="p as GroupPlatform" size="xs" />
-          {{ p === 'all' ? t('modelPlaza.filters.all') : p }}
+          <PlatformIcon v-if="p !== 'all' && p !== 'muse'" :platform="p as GroupPlatform" size="xs" />
+          {{ p === 'all' ? t('modelPlaza.filters.all') : p === 'muse' ? 'MUSE' : p }}
         </button>
       </div>
     </div>

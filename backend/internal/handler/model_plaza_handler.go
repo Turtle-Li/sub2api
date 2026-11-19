@@ -66,6 +66,16 @@ type modelPlazaTimePricing struct {
 	Periods      []modelPlazaTimePricingPeriod `json:"periods"`
 }
 
+type modelPlazaUnitQuote struct {
+	Label string  `json:"label"`
+	Price float64 `json:"price"`
+}
+
+type modelPlazaUnitPricing struct {
+	Unit   string                `json:"unit"`
+	Quotes []modelPlazaUnitQuote `json:"quotes"`
+}
+
 // modelPlazaModel 广场模型条目：实收口径展示定价（白名单形态）+ 官方参考价。
 type modelPlazaModel struct {
 	Name            string                     `json:"name"`
@@ -73,6 +83,7 @@ type modelPlazaModel struct {
 	Pricing         *userSupportedModelPricing `json:"pricing"`
 	OfficialPricing *modelPlazaOfficialPricing `json:"official_pricing"`
 	GPTImage        bool                       `json:"gpt_image,omitempty"`
+	UnitPricing     *modelPlazaUnitPricing     `json:"unit_pricing,omitempty"`
 	// LongContextBasis 多档时的计价基准："whole_request"（整单按档）| "marginal"（仅超出部分）。
 	LongContextBasis string `json:"long_context_basis,omitempty"`
 	// TimePricing 分时倍率时段，落在时段内的请求整单乘倍率；无分时省略。
@@ -86,6 +97,7 @@ type modelPlazaGroup struct {
 	Name               string                               `json:"name"`
 	Description        string                               `json:"description"`
 	Platform           string                               `json:"platform"`
+	CatalogProvider    string                               `json:"catalog_provider,omitempty"`
 	SubscriptionType   string                               `json:"subscription_type"`
 	RateMultiplier     float64                              `json:"rate_multiplier"`
 	UserRateMultiplier *float64                             `json:"user_rate_multiplier,omitempty"`
@@ -217,6 +229,7 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 			Pricing:          toUserPricing(m.Pricing),
 			OfficialPricing:  toModelPlazaOfficialPricing(m.OfficialPricing),
 			GPTImage:         m.GPTImage,
+			UnitPricing:      toModelPlazaUnitPricing(m.UnitPricing),
 			LongContextBasis: string(m.LongContextBasis),
 			TimePricing:      toModelPlazaTimePricing(m.TimePricing),
 		})
@@ -226,6 +239,7 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 		Name:                      g.Name,
 		Description:               g.Description,
 		Platform:                  g.Platform,
+		CatalogProvider:           g.CatalogProvider,
 		SubscriptionType:          g.SubscriptionType,
 		RateMultiplier:            g.RateMultiplier,
 		PeakRateEnabled:           g.PeakRateEnabled,
@@ -246,6 +260,17 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 		dto.UserRateMultiplier = &rate
 	}
 	return dto
+}
+
+func toModelPlazaUnitPricing(p *service.PlazaUnitPricing) *modelPlazaUnitPricing {
+	if p == nil {
+		return nil
+	}
+	quotes := make([]modelPlazaUnitQuote, 0, len(p.Quotes))
+	for _, q := range p.Quotes {
+		quotes = append(quotes, modelPlazaUnitQuote{Label: q.Label, Price: q.Price})
+	}
+	return &modelPlazaUnitPricing{Unit: p.Unit, Quotes: quotes}
 }
 
 // toModelPlazaTimePricing 转换分时倍率；nil 透传（JSON 省略）。

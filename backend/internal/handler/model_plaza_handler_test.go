@@ -34,6 +34,26 @@ func TestFilterPlazaVisibleGroups_AnonymousSeesOnlyNonExclusive(t *testing.T) {
 	require.ElementsMatch(t, []int64{1, 3}, ids)
 }
 
+func TestModelPlaza_MusePricingIsScopedToVisibleGroups(t *testing.T) {
+	groups := []service.PlazaGroup{{
+		ID: 27, Platform: service.PlatformOpenAI, CatalogProvider: "muse", IsExclusive: true,
+		Models: []service.PlazaModel{{
+			Name: service.MuseVideoModel, Platform: service.PlatformOpenAI,
+			UnitPricing: &service.PlazaUnitPricing{Unit: "second", Quotes: []service.PlazaUnitQuote{{Label: "720p", Price: 0.06}}},
+		}},
+	}}
+	require.Empty(t, filterPlazaVisibleGroups(groups, nil, false))
+	require.Empty(t, filterPlazaVisibleGroups(groups, map[int64]struct{}{}, false))
+	visible := filterPlazaVisibleGroups(groups, map[int64]struct{}{27: {}}, false)
+	require.Len(t, visible, 1)
+	got := toModelPlazaGroupDTO(&visible[0], nil)
+	require.Equal(t, "openai", got.Platform)
+	require.Equal(t, "muse", got.CatalogProvider)
+	quote, err := json.Marshal(got.Models[0].UnitPricing)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"unit":"second","quotes":[{"label":"720p","price":0.06}]}`, string(quote))
+}
+
 func TestFilterPlazaVisibleGroups_AuthedSeesGrantedExclusive(t *testing.T) {
 	// 登录:非专属 + 授权的专属;未授权的专属仍不可见。
 	allowed := map[int64]struct{}{2: {}}

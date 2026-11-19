@@ -8,7 +8,7 @@
       <div class="flex flex-wrap items-center gap-2">
         <GroupBadge
           :name="group.name"
-          :platform="group.platform as GroupPlatform"
+          :platform="isMuse ? undefined : group.platform as GroupPlatform"
           :subscription-type="(group.subscription_type || 'standard') as SubscriptionType"
           :rate-multiplier="group.rate_multiplier"
           :user-rate-multiplier="group.user_rate_multiplier ?? null"
@@ -60,13 +60,16 @@
       >
         <div v-if="section.title" class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-3">
           <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ section.title }}</h3>
-          <p v-if="section.kind === 'image'" class="text-xs text-gray-600 dark:text-dark-300">
+          <p v-if="section.unit === 'image'" class="text-xs text-gray-600 dark:text-dark-300">
             {{ t(group.image_rate_independent ? 'modelPlaza.detail.fixedImageRate' : 'modelPlaza.detail.groupImageRate') }}
+          </p>
+          <p v-else-if="section.unit === 'second'" class="text-xs text-gray-600 dark:text-dark-300">
+            {{ t('modelPlaza.detail.videoDurationRate') }}
           </p>
         </div>
         <PlazaModelPricingTable
           :models="section.models"
-          :image-only="section.kind === 'image'"
+          :unit="section.unit"
           :platform="group.platform"
           :rate-multiplier="group.rate_multiplier"
           :user-rate-multiplier="group.user_rate_multiplier ?? null"
@@ -94,7 +97,7 @@ import Icon from '@/components/icons/Icon.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import { BILLING_MODE_IMAGE, BILLING_MODE_PER_REQUEST } from '@/constants/channel'
 import PlazaModelPricingTable from './PlazaModelPricingTable.vue'
-import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
+import type { ModelPlazaGroup, PlazaCompactUnit, PlazaModel } from '@/api/modelPlaza'
 import type { GroupPlatform, SubscriptionType } from '@/types'
 import { platformBorderStrongClass } from '@/utils/platformColors'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
@@ -106,8 +109,28 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const isMuse = computed(() => props.group.catalog_provider === 'muse')
 
-const priceSections = computed(() => {
+interface PriceSection {
+  kind: string
+  models: PlazaModel[]
+  title: string
+  unit?: PlazaCompactUnit
+}
+
+const priceSections = computed<PriceSection[]>(() => {
+  if (isMuse.value) {
+    const text = props.group.models.filter(model => !model.unit_pricing)
+    const perRequest = (model: PlazaModel) => !model.pricing || model.pricing.billing_mode === BILLING_MODE_PER_REQUEST
+    const textTitle = t('modelPlaza.detail.museTextPrices')
+    const sections: PriceSection[] = [
+      { kind: 'text', models: text.filter(model => !perRequest(model)), title: textTitle },
+      { kind: 'request', models: text.filter(perRequest), title: textTitle, unit: 'request' },
+      { kind: 'image', models: props.group.models.filter(model => model.unit_pricing?.unit === 'image'), title: t('modelPlaza.detail.museImagePrices'), unit: 'image' },
+      { kind: 'video', models: props.group.models.filter(model => model.unit_pricing?.unit === 'second'), title: t('modelPlaza.detail.museVideoPrices'), unit: 'second' },
+    ]
+    return sections.filter(section => section.models.length > 0)
+  }
   const other: PlazaModel[] = []
   const perImage: PlazaModel[] = []
   const otherImage: PlazaModel[] = []
@@ -124,11 +147,12 @@ const priceSections = computed(() => {
       otherImage.push(model)
     }
   }
-  return [
+  const sections: PriceSection[] = [
     { kind: 'text', models: other, title: perImage.length || otherImage.length ? t('modelPlaza.detail.gptTextModels') : '' },
-    { kind: 'image', models: perImage, title: t('modelPlaza.detail.gptImagePrices') },
+    { kind: 'image', models: perImage, title: t('modelPlaza.detail.gptImagePrices'), unit: 'image' },
     { kind: 'otherImage', models: otherImage, title: t('modelPlaza.detail.gptImageOtherPricing') }
-  ].filter(section => section.models.length > 0)
+  ]
+  return sections.filter(section => section.models.length > 0)
 })
 
 /** 高峰窗口描述(含倍率与服务器时区标注);分组未启用高峰为空串。 */

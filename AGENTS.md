@@ -54,6 +54,8 @@
   `docs/features/MUSE_PUBLIC_VIDEO.md` for the pinned native contract, task
   ownership, media URL boundary and settlement policy. A Muse key must not
   inherit another provider's models through the Image Studio catalogue.
+  Its Model Plaza display provider is independent of the OpenAI API platform;
+  retain group visibility and distinguish per-request, per-image and per-second prices.
 
 - Before changing `muse_images` / `muse-image`, read
   `docs/features/MUSE_BATCH_PROVIDER_20261107.md` for the pinned native Muse task

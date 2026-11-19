@@ -61,12 +61,16 @@ func (s *OpenAIGatewayService) museImageWalletPrice(ctx context.Context, key *AP
 		return "", 0
 	}
 	key = s.apiKeyWithFreshGroupMediaPricing(ctx, key)
-	card := nativeWalletImagePriceCard(key.Group, MuseImageModel)
+	return museImageWalletPriceForGroup(key.Group, requested)
+}
+
+func museImageWalletPriceForGroup(group *Group, requested string) (string, float64) {
+	card := nativeWalletImagePriceCard(group, MuseImageModel)
 	for _, tier := range []string{NormalizeImageBillingTierOrDefault(requested), ImageBillingSize1K, ImageBillingSize2K, ImageBillingSize4K} {
 		if price := nativeWalletImageTierPrice(card, tier); positiveNativeImagePrice(price) {
 			return tier, *price
 		}
-		if price := key.Group.GetImagePrice(tier); positiveNativeImagePrice(price) {
+		if price := group.GetImagePrice(tier); positiveNativeImagePrice(price) {
 			return tier, *price
 		}
 	}
