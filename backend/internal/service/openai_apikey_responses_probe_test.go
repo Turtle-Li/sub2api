@@ -49,6 +49,30 @@ func TestProbeOpenAIAPIKeyResponsesSupportUsesCodexProbeHeaders(t *testing.T) {
 	require.Equal(t, true, updates[openai_compat.ExtraKeyResponsesSupported])
 }
 
+func TestProbeOpenAIAPIKeyResponsesSupportSkipsMuse(t *testing.T) {
+	account := Account{ID: 97, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"api_key":       "test-key",
+		"base_url":      "https://muse.example/v1",
+		"model_mapping": map[string]any{MuseImageModel: MuseImageModel, "muse-spark": "muse-spark"},
+	}}
+	updates := make(chan map[string]any, 1)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","name":"probe_ping"}]}`)),
+	}}
+	svc := &AccountTestService{
+		accountRepo: &snapshotUpdateAccountRepo{
+			stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}}, updateExtraCalls: updates,
+		},
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+	svc.ProbeOpenAIAPIKeyResponsesSupport(t.Context(), account.ID)
+	require.Nil(t, upstream.lastReq)
+	require.Empty(t, updates)
+}
+
 func TestProbeOpenAIAPIKeyResponsesSupportCNProviders(t *testing.T) {
 	tests := []struct {
 		name        string

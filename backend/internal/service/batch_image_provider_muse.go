@@ -22,6 +22,8 @@ import (
 
 const museImageMaxBytes = 20 * 1024 * 1024
 
+type museBatchMediaRequestKey struct{}
+
 type museImageTask struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
@@ -161,6 +163,7 @@ func (e *museImageBatchExecutor) call(ctx context.Context, account *Account, met
 		endpoint.Path += "/" + taskID
 	}
 	endpoint.RawPath = ""
+	ctx = context.WithValue(ctx, museBatchMediaRequestKey{}, true)
 	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1179,7 +1180,8 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		platform = forcedPlatform
 	}
 
-	if platform == service.PlatformOpenAI && apiKey != nil && apiKey.Group != nil &&
+	museMediaOnly := platform == service.PlatformOpenAI && apiKey != nil && apiKey.Group.IsMuseMediaOnly()
+	if !museMediaOnly && platform == service.PlatformOpenAI && apiKey != nil && apiKey.Group != nil &&
 		apiKey.Group.Platform == service.PlatformOpenAI && apiKey.Group.CodexModelsManifestConfig.Enabled {
 		h.pinnedOpenAIModels(c, apiKey.Group)
 		return
@@ -1219,6 +1221,9 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
 		availableModels = apiKey.Group.ModelAllowlist.FilterForListing(source)
+		if museMediaOnly {
+			availableModels = slices.DeleteFunc(availableModels, func(model string) bool { return !service.IsMuseMediaModel(model) })
+		}
 		if h.writeVerifiedProbeModelsIfRequested(c, platform, groupID, availableModels, true) {
 			return
 		}

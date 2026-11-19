@@ -127,7 +127,7 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 		logger.LegacyPrintf("service.openai_probe", "probe_load_account_failed: account_id=%d err=%v", accountID, err)
 		return
 	}
-	if account.Type != AccountTypeAPIKey {
+	if account.Type != AccountTypeAPIKey || account.IsMuseMediaOnly() {
 		return
 	}
 	if account.RoutesProtocolByInbound() {

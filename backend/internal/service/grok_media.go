@@ -348,11 +348,12 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 func (s *OpenAIGatewayService) SelectGrokMediaVideoRequestAccount(
 	ctx context.Context, groupID *int64, sessionHash string, accountID int64, requestedModel string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	return s.SelectMediaVideoRequestAccount(ctx, groupID, sessionHash, accountID, requestedModel, PlatformGrok)
+	return s.SelectMediaVideoRequestAccount(ctx, groupID, sessionHash, accountID, requestedModel, PlatformGrok, "")
 }
 
 func (s *OpenAIGatewayService) SelectMediaVideoRequestAccount(
 	ctx context.Context, groupID *int64, sessionHash string, accountID int64, requestedModel, platform string,
+	requiredCapability OpenAIEndpointCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	decision := OpenAIAccountScheduleDecision{Layer: openAIAccountScheduleLayerSessionSticky}
 	if accountID <= 0 || strings.TrimSpace(sessionHash) == "" {
@@ -364,7 +365,8 @@ func (s *OpenAIGatewayService) SelectMediaVideoRequestAccount(
 		GroupID: groupID, Platform: platform, SessionHash: sessionHash,
 		StickyAccountID: accountID, PreserveStickyBinding: true, DisableStickyEscape: true,
 		RequestedModel: requestedModel, RequiredTransport: OpenAIUpstreamTransportHTTPSSE,
-		RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
+		RequiredCapability: requiredCapability,
+		RequirePrivacySet:  s.openAIGroupRequiresPrivacySet(ctx, groupID),
 	})
 	if err != nil {
 		return nil, decision, err

@@ -3,7 +3,19 @@ package service
 import (
 	"context"
 	"math"
+	"slices"
 )
+
+func scopeMusePlazaGroup(group *Group, pg *PlazaGroup) {
+	dedicated := group.IsMuseMediaOnly()
+	if !dedicated && !isMusePlazaGroup(pg) {
+		return
+	}
+	pg.CatalogProvider = "muse"
+	pg.Models = slices.DeleteFunc(pg.Models, func(model PlazaModel) bool {
+		return !IsMuseMediaModel(model.Name) || (dedicated && !group.ModelAllowlist.Allows(model.Name))
+	})
+}
 
 func isMusePlazaGroup(g *PlazaGroup) bool {
 	if g.Platform != PlatformOpenAI || len(g.Models) == 0 {
@@ -11,7 +23,7 @@ func isMusePlazaGroup(g *PlazaGroup) bool {
 	}
 	for _, m := range g.Models {
 		switch m.Name {
-		case "muse-spark", MuseImageModel, MuseVideoModel:
+		case legacyMuseTextModel, MuseImageModel, MuseVideoModel:
 		default:
 			return false
 		}

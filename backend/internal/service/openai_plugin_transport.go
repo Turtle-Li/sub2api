@@ -7,6 +7,8 @@ import (
 	"net/http"
 )
 
+var errMuseMediaOnlyUpstream = errors.New("Muse account only supports native image and video forwarding")
+
 func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 	s.pluginManager = manager
 }
@@ -34,6 +36,13 @@ func (s *OpenAIGatewayService) doOpenAIModelUpstream(request *http.Request, prox
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, _ string, account *Account) (*http.Response, error) {
+	// Native public media uses doMuseRequest; only the native batch provider
+	// may use this shared transport for a Muse account.
+	if account.IsMuseMediaOnly() {
+		if batchMedia, _ := request.Context().Value(museBatchMediaRequestKey{}).(bool); !batchMedia {
+			return nil, errMuseMediaOnlyUpstream
+		}
+	}
 	if permit, _ := request.Context().Value(paidFallbackPermitKey{}).(*paidFallbackPermit); permit != nil {
 		if account.ID != permit.accountID || !permit.settings.paidFallbackAllowed(WithPaidFallbackAPIKey(request.Context(), permit.apiKeyID), &permit.groupID) {
 			return nil, errors.New("paid fallback admission revoked")

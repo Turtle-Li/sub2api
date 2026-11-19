@@ -41,6 +41,7 @@ func GroupModelAllowlist() gin.HandlerFunc {
 			return
 		}
 
+		museMediaOnly := apiKey.Group.IsMuseMediaOnly()
 		if isResponsesWebSocketRoute(c) {
 			// Responses WS 长连接由 ResponsesWebSocket 校验首帧与每个 response.create。
 			c.Next()
@@ -71,7 +72,7 @@ func GroupModelAllowlist() gin.HandlerFunc {
 
 		blocked := ""
 		for _, candidate := range models {
-			if !allowlist.Allows(candidate) {
+			if !allowlist.Allows(candidate) || (museMediaOnly && !service.IsMuseMediaModel(candidate)) {
 				blocked = candidate
 				break
 			}

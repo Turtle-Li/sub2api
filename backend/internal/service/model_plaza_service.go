@@ -241,6 +241,8 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 	out := make([]PlazaGroup, 0, len(order))
 	for _, gid := range order {
 		pg := byGroup[gid]
+		g := groupEnt[gid]
+		scopeMusePlazaGroup(g, pg)
 		if len(pg.Models) == 0 {
 			continue
 		}
@@ -250,12 +252,8 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 			}
 			return pg.Models[i].Platform < pg.Models[j].Platform
 		})
-		g := groupEnt[gid]
 		if policy != nil {
 			pg.DisplayCurrency, pg.DisplayUSDRate = plazaDisplayCurrency(*policy, g)
-		}
-		if isMusePlazaGroup(pg) {
-			pg.CatalogProvider = "muse"
 		}
 		for j := range pg.Models {
 			card := pg.Models[j].Pricing

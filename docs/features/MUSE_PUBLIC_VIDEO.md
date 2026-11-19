@@ -25,7 +25,8 @@ Video supports `duration` (default 6), `size`, `aspect_ratio`, `resolution`,
 `timeout` and `extra`. Duration and dimensions are requests to Muse; the
 generated file may differ. Upstream accepts ordered reference images as
 guidance, including an ending composition in the prompt, and has no
-structured `first_frame` / `last_frame` constraint. `/v1/responses` is for text.
+structured `first_frame` / `last_frame` constraint. Image and video endpoints
+still accept text prompts; the Muse group does not serve text conversations.
 
 Both media APIs accept `images` (which can mix types), `videos`, `audios` and
 `files`, in that order. Items may be public HTTP(S) URLs, data URLs, raw Base64,
@@ -67,16 +68,49 @@ produce a debit under this policy. POST is not automatically replayed.
 
 ## Configuration and verification
 
-Keep the exclusive Muse group and existing keys. Its exact allowlist is
-`muse-spark`, `muse-image`, and `muse-video`. Move unrelated image models to
-one exclusive group per model; an account supporting multiple variants may
-serve multiple such groups, each with its own one-model allowlist and price
-card. Image Studio aggregates only the user's eligible owned keys, so these
-groups do not require a common umbrella group.
+Keep the exclusive Muse group and existing keys. Configure the exact allowlist
+and native account identity mappings for `muse-image` and `muse-video` only.
+After deploying the media-only gateway, remove `muse-spark` from the allowlist,
+account mappings, and the linked channel's model entries and active price cards.
+Preserve existing key grants, media prices, bindings and historical usage.
 
-For the production configuration cutover, stage these four exclusive groups,
-preserving each existing price card and attaching only the matching provider
-account. Leave them ungranted until the owner authorizes access separately.
+### Media-only gateway policy
+
+The gateway identifies the dedicated OpenAI group from an enabled allowlist
+containing only the exact Muse identities. It also recognizes the legacy
+`muse-spark` entry during rollout. A request cannot use a media model name on a
+text endpoint: Chat, Messages, Responses (including subpaths and WebSocket),
+Codex, and all other non-media execution routes return a local 404. Model-list
+and usage reads, native images and edits, image batches, video generation, and
+owned task status and content still work. The public model list filters out
+the retired text model before returning results, even with stale configuration.
+
+Any OpenAI API-key account configured for native Muse identity media is also
+ineligible for generic OpenAI dispatch, even if it is attached to a mixed
+group. Only the native public media and the existing native image batch
+transports can send on that account through the OpenAI gateway. Already-created
+tasks retain binding, authorization, idempotency, and settlement behavior.
+These checks neither change private Muse2API access nor sandbox the browser
+agent that receives media prompts. Use a separate Muse account/runtime if the
+public media account would otherwise have access to a personal computer.
+
+For an authorized release, verify the two-model list and native task reads,
+and check local text rejections before doing any paid smoke. Do not send a
+real text prompt to test upstream acceptance. Older gateway binaries do not
+understand the route restriction: removing `muse-spark` alone is insufficient
+to roll back safely. Pause public Muse access before returning traffic to such
+a binary. No historical charges are recomputed.
+
+### Historical production model split — 2026-11-13
+
+Unrelated image models were moved to one exclusive group per model; an account
+can serve several such groups, each with a one-model allowlist and its own
+prices. Image Studio aggregates the user's eligible owned keys, so there is no
+need for a common umbrella group.
+
+That cutover staged four exclusive groups, preserving each price card and
+attaching only the matching provider account. It left them ungranted pending
+separate owner authorization.
 
 | Exact model allowlist | Existing image prices (CNY at 1×) |
 | --- | --- |
@@ -85,13 +119,10 @@ account. Leave them ungranted until the owner authorizes access separately.
 | `doubao-seedream-5-0-lite-260128` | 2K/4K ¥0.32 |
 | `doubao-seedream-5-0-pro-260628` | 1K ¥0.40; 2K ¥0.70 |
 
-Apply the three-model Muse allowlist before removing the two foreign account
-bindings. Preserve the current Muse keys, unrelated memberships and historical
-tasks. Verify both the public model list and cross-model submission admission;
-an old Muse Key must get a model denial on a foreign request. In a partial
-failure, keep the restrictive Muse allowlist and finish or disable ungranted
-destination groups; restoring foreign access to Muse is a separate permission
-decision.
+The then-current three-model Muse allowlist was applied before the two foreign
+account bindings were removed. Existing Muse keys, unrelated memberships and
+historical tasks were retained. Restoring foreign access to Muse is a separate
+permission decision.
 
 Production configuration verified on 2026-11-13: Muse group 27 retains its two
 keys and two user grants, with only account 227. Wan groups 41–42 share account
@@ -101,26 +132,25 @@ three allowed models; requests for all four foreign models received the local
 group-policy 404. The protected pre-change snapshot is under
 `/opt/sub2api/backups/muse-model-split-20261113T144751Z/`.
 
-Wallet trial rates at 1×: Spark ¥0.005/successful request, Muse Image ¥0.10/output
-(existing), Muse Video ¥0.06/second (¥0.30 for 5 seconds). Spark's adapter
-reports zero tokens on both text endpoints, so the group uses a per-request
-reference card. The standard OpenAI wallet policy applies the multiplier
+Wallet trial rates at 1×: Muse Image ¥0.10/output and Muse Video ¥0.06/second
+(¥0.30 for 5 seconds). The now-retired Spark trial charged ¥0.005 per successful
+request because its adapter reported zero tokens on both text endpoints.
+The standard OpenAI wallet policy applies the multiplier
 directly to the numeric reference price and settles the actual debit in CNY.
-The video price is model-specific at 720p. Existing image and video multiplier
-rules apply. No historic charges are recomputed.
+The video price is model-specific at 720p. Existing image and video multiplier rules apply.
 
 ### Model Plaza presentation
 
 Link an active channel to the existing Muse group and list the exact identities
-`muse-spark`, `muse-image`, and `muse-video` (identity mappings suffice; no channel
-price overrides are needed). An OpenAI group listing only these Muse models in
-Model Plaza appears under **MUSE**, independently of the **openai** filter. Its
-gateway platform and grants are unchanged; an exclusive Muse group is still
-visible only to eligible users. Mixed and prefix-matching groups are not
-reclassified. The plaza does not discover or auto-publish account models.
+`muse-image` and `muse-video` (identity mappings suffice; no channel price
+overrides are needed). The dedicated group appears under **MUSE**, independently
+of the **openai** filter. Model Plaza suppresses stale text entries even when
+an old channel mapping or price card is still present. The group's gateway
+platform and grants are unchanged; an exclusive Muse group is still visible
+only to eligible users. Mixed and prefix-matching groups are not reclassified.
+The plaza does not discover or auto-publish account models.
 
-Spark displays the configured text quote, per request for the zero-token Muse
-Spark card. Image quotes use the same per-output wallet price and tier fallback
+Image quotes use the same per-output wallet price and tier fallback
 as native image admission. Video displays the effective per-second quote at the
 720p billing tier, including group model-card precedence; it does not invent a
 quote from a channel's per-request card when no usable per-second price exists.
@@ -205,6 +235,10 @@ MIT. Inspect `app.py` (`ImageRequest`, `VideoRequest`, `_reference_list`,
 filenames), and `tests/test_muse_video_delivery.py`,
 `tests/test_ref_image_safety.py` and `tests/test_video_late_attachment.py`.
 The old one-reference contract was pinned to `8a3dab9db13b23ac694d21af29e65504bc7e69b1`.
-Sub2 integrates the HTTP contract and does not copy the browser engine.
+The pinned `chat_completions` and `responses_api` handlers route by endpoint,
+not the request's model name, and report zero token usage. Sub2 integrates
+only the native media HTTP contract; it does not copy the browser engine.
 Ownership, pricing and adapter tests are in `grok_media_slots_test.go`,
 `muse_media_request_test.go`, `muse_image_test.go` and `muse_video_test.go`.
+Media-only admission and catalogue tests are in `gateway_muse_media_only_test.go`,
+`muse_media_policy_test.go` and `model_plaza_muse_test.go`.

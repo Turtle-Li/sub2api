@@ -133,6 +133,18 @@ func TestImageStudioRoutesReuseBatchServiceAndSafeDirectory(t *testing.T) {
 		require.Equal(t, 1, groups.calls)
 		require.EqualValues(t, 9, groups.id)
 	})
+	t.Run("Muse keeps studio media routes", func(t *testing.T) {
+		original := *group
+		t.Cleanup(func() { *group = original })
+		group.Platform = service.PlatformOpenAI
+		group.ModelAllowlist = service.GroupModelAllowlist{Enabled: true, Models: []string{service.MuseImageModel, service.MuseVideoModel}}
+		w := request("GET", "/batches/batch-test", "", true)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.Contains(t, w.Body.String(), "batch-test")
+		w = request("POST", "/batches", `{"model":"muse-image","items":[{"custom_id":"one","prompt":"cat"}]}`, true)
+		require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+		require.Contains(t, w.Body.String(), "BATCH_IMAGE_GROUP_DISABLED")
+	})
 	t.Run("GET retains batch billing admission", func(t *testing.T) {
 		repo.key.User.Balance = 0
 		w := request("GET", "/batches/batch-test", "", true)

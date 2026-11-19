@@ -63,6 +63,28 @@ func TestGatewayModels_ModelAllowlistWildcardExpandsAgainstSource(t *testing.T) 
 	require.Equal(t, []string{"gpt-5.5-codex", "gpt-5.5-mini", "gpt-5.4"}, modelIDsForTest(got.Data))
 }
 
+func TestGatewayModels_MuseListsOnlyMediaDespiteLegacyConfig(t *testing.T) {
+	group := &service.Group{
+		ID: 99, Platform: service.PlatformOpenAI,
+		ModelAllowlist:            service.GroupModelAllowlist{Enabled: true, Models: []string{"muse-spark", service.MuseImageModel, service.MuseVideoModel}},
+		CodexModelsManifestConfig: service.GroupCodexModelsManifestConfig{Enabled: true, AccountIDs: []int64{1}},
+	}
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{
+		group.ID: {{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Credentials: map[string]any{
+			"model_mapping": map[string]any{"muse-spark": "muse-spark", service.MuseImageModel: service.MuseImageModel, service.MuseVideoModel: service.MuseVideoModel},
+		}}},
+	}})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{Group: group})
+	h.Models(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.ElementsMatch(t, []string{service.MuseImageModel, service.MuseVideoModel}, modelIDsForTest(got.Data))
+}
+
 // geminiAllowlistAccountRepoStub 在 gatewayModelsAccountRepoStub 之上补充
 // Gemini 兼容层用到的按平台过滤查询（分组内无任何账号，触发 fallback 列表）。
 type geminiAllowlistAccountRepoStub struct {
