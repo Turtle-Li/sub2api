@@ -31,8 +31,9 @@ must not be confused with the COS bucket's independent safety lifecycle.
 1. Deploy the default-off source via the [AWS release runbook](../../deploy/README.md)
    without replacing Caddy. Keep the original keys, group output defaults,
    entitlements, account bindings, prices, objects and persisted deadlines.
-2. Reuse existing standard exclusive group #45 (`生图`) for workbench admission
-   and pricing. Preserve its existing user and account #251. Ordinary API
+2. Reuse existing standard exclusive group #45 (`生图`) for workbench routing
+   and pricing, not as a panel user entitlement. Preserve its existing user
+   grant and account #251. Ordinary API
    account bindings must stay unchanged: #249 can serve text, #227 can serve
    text and video, and #3 can serve Gemini text. Select #249, #3, #227, #252
    and #253 only in the new Studio-specific account list after checking current
@@ -50,9 +51,10 @@ must not be confused with the COS bucket's independent safety lifecycle.
    in-flight submits, and verify no unsettled wallet job or reservation. Keep
    compatible recovery for continued access to new history. Do not delete the
    migration, jobs, ledger or objects to return to the older generation.
-5. Use the CAS in **生图管理** to select the group and Studio accounts. Require an
-   owner-authorized test login admitted to the existing exclusive group; do
-   not impersonate its existing customer or create a Sub2API Key as a workaround.
+5. Use the CAS in **生图管理** to select the group and Studio accounts. Use an
+   owner-authorized test login without a grant to #45. It must not need a
+   Sub2API key to submit. Do not add a group grant, create a key, or impersonate
+   an existing customer to make the smoke pass.
    Test one request per chosen model from the page. Read back the task, exact
    debit or refund, preview/original and 360-hour deadline. A missing response
    is not permission to submit the same generation again.

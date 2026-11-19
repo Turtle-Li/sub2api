@@ -60,12 +60,12 @@ onBeforeUnmount(() => controller.abort())
 <template>
   <form class="card space-y-3 p-5" @submit.prevent="save">
     <label for="image-studio-wallet-group" class="block text-sm font-semibold">工作台余额计费分组</label>
-    <p id="image-studio-wallet-description" class="text-sm text-gray-600 dark:text-gray-400">工作台沿用该组的用户授权及逐模型价格。用户登录后直接扣余额，不需要创建 API Key。下方的账号只绑定到工作台，不改变外部 API 的账号池。</p>
+    <p id="image-studio-wallet-description" class="text-sm text-gray-600 dark:text-gray-400">开启后，登录用户可按该组的模型和分辨率价格使用余额生图，无需创建 API Key 或加入分组。下方的账号仅供工作台使用，不改变外部 API 的账号池和权限。</p>
     <div class="flex flex-wrap items-center gap-3">
       <select id="image-studio-wallet-group" v-model="draftGroup" class="input w-full max-w-sm" aria-describedby="image-studio-wallet-description" :disabled="current === null || saving" @change="saved = false">
         <option :value="0">未启用余额计费入口</option>
         <option v-if="current?.group_id && !candidates.some(group => group.id === current?.group_id)" :value="current.group_id" disabled>当前分组 #{{ current.group_id }} 不可用</option>
-        <option v-for="group in candidates" :key="group.id" :value="group.id">{{ group.name }}{{ group.is_exclusive ? ' · 仅已授权用户' : '' }}</option>
+        <option v-for="group in candidates" :key="group.id" :value="group.id">{{ group.name }}</option>
       </select>
     </div>
     <label v-if="draftGroup > 0" class="block max-w-sm space-y-1 text-sm">

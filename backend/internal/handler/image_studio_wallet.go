@@ -42,8 +42,8 @@ func (h *BatchImageHandler) ImageStudioWalletDirectory(settings imageStudioWalle
 		}
 		mode := "off"
 		subject, ok := middleware.GetAuthSubjectFromContext(c)
-		if ok && config.GroupID > 0 {
-			group, err := h.walletGroupForSubject(c.Request.Context(), subject, config.GroupID)
+		if ok && subject.UserID > 0 {
+			group, err := h.configuredWalletGroup(c.Request.Context(), config.GroupID)
 			if response.ErrorFrom(c, err) {
 				c.Abort()
 				return
@@ -57,7 +57,9 @@ func (h *BatchImageHandler) ImageStudioWalletDirectory(settings imageStudioWalle
 	}
 }
 
-func (h *BatchImageHandler) walletGroupForSubject(ctx context.Context, subject middleware.AuthSubject, id int64) (*service.Group, error) {
+// The Studio group supplies routing and pricing. Its API-key binding policy
+// does not grant or restrict access to the session-authenticated wallet.
+func (h *BatchImageHandler) configuredWalletGroup(ctx context.Context, id int64) (*service.Group, error) {
 	if id <= 0 {
 		return nil, nil
 	}
@@ -65,14 +67,7 @@ func (h *BatchImageHandler) walletGroupForSubject(ctx context.Context, subject m
 	if errors.Is(err, service.ErrGroupNotFound) || errors.Is(err, service.ErrImageStudioWalletGroup) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	user := service.User{AllowedGroups: subject.AllowedGroups, RestrictPublicGroups: subject.RestrictPublicGroups}
-	if !user.CanBindGroup(group.ID, group.IsExclusive) {
-		return nil, nil
-	}
-	return group, nil
+	return group, err
 }
 
 // Only mounted below the standard panel JWT middleware. Reading/cancelling
@@ -95,7 +90,7 @@ func (h *BatchImageHandler) ImageStudioWalletSession(settings imageStudioWalletS
 				c.Abort()
 				return
 			}
-			group, err := h.walletGroupForSubject(ctx, subject, config.GroupID)
+			group, err := h.configuredWalletGroup(ctx, config.GroupID)
 			if err != nil {
 				batchImageError(c, err)
 				c.Abort()

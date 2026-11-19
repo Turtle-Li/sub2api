@@ -29,6 +29,10 @@ func TestImageStudioWalletBillingWithoutAnyAPIKey(t *testing.T) {
 	hold := service.BatchImageBalanceHoldCommand{
 		RequestID: service.BatchImageHoldRequestID(id), APIKeyID: service.ImageStudioWalletOwnerSlot, BatchID: id, UserID: user.ID, HoldAmount: .7,
 	}
+	insufficient := hold
+	insufficient.HoldAmount = 11
+	_, err = repo.ReserveBatchImageBalance(ctx, &insufficient)
+	require.ErrorIs(t, err, service.ErrBatchImageInsufficientBalance)
 	result, err := repo.ReserveBatchImageBalance(ctx, &hold)
 	require.NoError(t, err)
 	require.True(t, result.Applied)
@@ -45,6 +49,28 @@ func TestImageStudioWalletBillingWithoutAnyAPIKey(t *testing.T) {
 	result, err = repo.CaptureBatchImageBalance(ctx, &capture)
 	require.NoError(t, err)
 	require.False(t, result.Applied)
+
+	failedID, err := service.NewBatchImageID()
+	require.NoError(t, err)
+	failedHold := hold
+	failedHold.BatchID = failedID
+	failedHold.RequestID = service.BatchImageHoldRequestID(failedID)
+	result, err = repo.ReserveBatchImageBalance(ctx, &failedHold)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.InDelta(t, 8.9, *result.NewBalance, 1e-9)
+	require.InDelta(t, .7, *result.FrozenBalance, 1e-9)
+	release := failedHold
+	release.RequestID = service.BatchImageReleaseRequestID(failedID)
+	result, err = repo.ReleaseBatchImageBalance(ctx, &release)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.InDelta(t, 9.6, *result.NewBalance, 1e-9)
+	require.Zero(t, *result.FrozenBalance)
+	result, err = repo.ReleaseBatchImageBalance(ctx, &release)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+
 	var keys int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT count(*) FROM api_keys WHERE user_id = $1", user.ID).Scan(&keys))
 	require.Zero(t, keys)

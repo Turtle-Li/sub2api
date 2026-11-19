@@ -18,10 +18,11 @@ continue to use separate image groups. No default account, rate, allowlist or
 provider is changed when this page is shipped.
 
 The [session wallet configuration](IMAGE_STUDIO_SESSION_API_20261107.md#session-only-wallet-generation)
-is separate from these ordinary bindings. Select one pricing/admission group
-and explicit upstream account IDs for Studio only. Configure tariffs as exact
-group model cards; the resolution defaults below are not a fallback for that
-entry. Do not move a multi-purpose Image, Gemini or Muse account into an
+is separate from these ordinary bindings. Select one routing and pricing group
+and explicit upstream account IDs for Studio only. Signed-in users can pay from
+their own balances without an API key or a group grant. Configure tariffs as
+exact group model cards; the resolution defaults below are not a fallback for
+that entry. Do not move a multi-purpose Image, Gemini or Muse account into an
 existing customer's public API pool when only its image models are needed.
 
 ## Configuration ownership
