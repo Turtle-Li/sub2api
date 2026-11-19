@@ -6437,6 +6437,31 @@
                 </p>
               </div>
 
+              <div>
+                <label
+                  for="ccswitch-codex-model"
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.site.ccswitchCodexModel") }}
+                </label>
+                <input
+                  id="ccswitch-codex-model"
+                  v-model="form.ccswitch_codex_model"
+                  type="text"
+                  class="input font-mono text-sm"
+                  maxlength="100"
+                  :spellcheck="false"
+                  :placeholder="OPENAI_CC_SWITCH_CODEX_MODEL"
+                  aria-describedby="ccswitch-codex-model-hint"
+                />
+                <p
+                  id="ccswitch-codex-model-hint"
+                  class="mt-1.5 text-xs text-gray-500 dark:text-gray-400"
+                >
+                  {{ t("admin.settings.site.ccswitchCodexModelHint", { model: OPENAI_CC_SWITCH_CODEX_MODEL }) }}
+                </p>
+              </div>
+
               <!-- Global Table Preferences -->
               <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                 <h3 class="text-sm font-medium text-gray-900 dark:text-white">
@@ -9026,6 +9051,7 @@
 </template>
 
 <script setup lang="ts">
+import { OPENAI_CC_SWITCH_CODEX_MODEL } from "@/utils/ccswitchImport";
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { listPlatformIds } from "@/constants/platformCatalog";
 import { useI18n } from "vue-i18n";
@@ -9881,6 +9907,7 @@ const form = reactive<SettingsForm>({
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
   api_base_url: "",
+  ccswitch_codex_model: OPENAI_CC_SWITCH_CODEX_MODEL,
   contact_info: "",
   doc_url: "",
   home_content: "",
@@ -11645,6 +11672,7 @@ async function saveSettings() {
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,
       api_base_url: form.api_base_url,
+      ccswitch_codex_model: form.ccswitch_codex_model,
       contact_info: form.contact_info,
       doc_url: form.doc_url,
       home_content: form.home_content,

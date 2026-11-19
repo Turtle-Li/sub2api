@@ -157,6 +157,7 @@ type UpdateSettingsRequest struct {
 	SiteLogo                    string                `json:"site_logo"`
 	SiteSubtitle                string                `json:"site_subtitle"`
 	APIBaseURL                  string                `json:"api_base_url"`
+	CCSwitchCodexModel          *string               `json:"ccswitch_codex_model"`
 	ContactInfo                 string                `json:"contact_info"`
 	DocURL                      string                `json:"doc_url"`
 	HomeContent                 string                `json:"home_content"`
@@ -506,6 +507,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	auditReq := settingsAuditRequest(req)
 	omitted := omittedSettingKeys(sentFields)
+	ccswitchCodexModel := ""
+	if req.CCSwitchCodexModel == nil {
+		omitted[service.SettingKeyCCSwitchCodexModel] = struct{}{}
+	} else {
+		ccswitchCodexModel = *req.CCSwitchCodexModel
+	}
 
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -1646,6 +1653,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                               req.SiteLogo,
 		SiteSubtitle:                           req.SiteSubtitle,
 		APIBaseURL:                             req.APIBaseURL,
+		CCSwitchCodexModel:                     ccswitchCodexModel,
 		ContactInfo:                            req.ContactInfo,
 		DocURL:                                 req.DocURL,
 		HomeContent:                            req.HomeContent,
@@ -2314,6 +2322,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                                               updatedSettings.SiteLogo,
 		SiteSubtitle:                                           updatedSettings.SiteSubtitle,
 		APIBaseURL:                                             updatedSettings.APIBaseURL,
+		CCSwitchCodexModel:                                     updatedSettings.CCSwitchCodexModel,
 		ContactInfo:                                            updatedSettings.ContactInfo,
 		DocURL:                                                 updatedSettings.DocURL,
 		HomeContent:                                            updatedSettings.HomeContent,

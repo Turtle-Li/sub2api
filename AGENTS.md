@@ -498,8 +498,9 @@
   CNY settlement contracts, fixed egress and Grok relay policy, exact-N
   image behavior, OpenCode union, and manual release controls. Risk-control
   allowlisted requests are log-only but still retain `FullPrompt` audit
-  evidence; CC Switch keeps WebSocket settings and the local
-  `gpt-5.6-terra` default while adopting upstream URL normalization.
+  evidence; preserve CC Switch's WebSocket settings and URL normalization.
+  The editable OpenAI/Codex import default and its upstream references are in
+  `docs/features/CC_SWITCH_CODEX_IMPORT_DEFAULT.md`.
 
 - Read `docs/operations/OPENAI_PROXY_TIMEZONE_REWRITE_20260916.md` before
   changing proxy exit geolocation, OpenAI/Codex developer context rewriting,

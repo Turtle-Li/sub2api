@@ -750,6 +750,8 @@ export default {
           'The desktop account control plane must be an HTTPS origin without a path, credentials, query, or fragment.',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',
+        ccswitchCodexModel: 'Default Codex model for CC Switch',
+        ccswitchCodexModelHint: 'Applies to new CC Switch imports for OpenAI groups. Leave blank to use {model}. Enter a model ID supported by the group.',
         apiBaseUrlHint:
           'Used for "Use Key", "Import to CC Switch", and callback URL suggestions. Leave empty to use current site URL.',
         tablePreferencesTitle: 'Global Table Preferences',
