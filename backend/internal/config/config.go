@@ -27,6 +27,8 @@ const (
 	RunModeSimple   = "simple"
 )
 
+const DefaultBatchImageOutputRetentionHours = 15 * 24
+
 // 使用量记录队列溢出策略
 const (
 	UsageRecordOverflowPolicyDrop   = "drop"
@@ -2599,7 +2601,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.max_download_duration_seconds", 600)
 	viper.SetDefault("batch_image.max_download_concurrency_per_user", 1)
 	viper.SetDefault("batch_image.input_retention_after_terminal_hours", 24)
-	viper.SetDefault("batch_image.output_retention_after_terminal_hours", 72)
+	viper.SetDefault("batch_image.output_retention_after_terminal_hours", DefaultBatchImageOutputRetentionHours)
 	viper.SetDefault("batch_image.output_retention_max_days", 7)
 	viper.SetDefault("batch_image.cleanup_interval_minutes", 30)
 	viper.SetDefault("batch_image.cleanup_batch_size", 100)

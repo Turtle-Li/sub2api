@@ -39,6 +39,8 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	require.Equal(t, 0.75, *repo.jobs[job.BatchID].ActualCost)
 	require.NotEmpty(t, batchImageDerefString(repo.jobs[job.BatchID].ManifestHash))
 	require.NotNil(t, repo.jobs[job.BatchID].SettledAt)
+	require.NotNil(t, repo.jobs[job.BatchID].OutputExpiresAt)
+	require.Equal(t, 360*time.Hour, repo.jobs[job.BatchID].OutputExpiresAt.Sub(*repo.jobs[job.BatchID].SettledAt))
 	require.Equal(t, "batch-settlement-session", batchImageDerefString(usageLogs.lastLog.SessionID))
 	require.Equal(t, "2K", batchImageDerefString(usageLogs.lastLog.ImageSize))
 	require.Equal(t, "gemini:v1beta/models:batchGenerateContent", batchImageDerefString(usageLogs.lastLog.UpstreamEndpoint))
@@ -102,6 +104,8 @@ func TestBatchImageSettlementService_CompletedJobReturnsAlreadySettledWithoutBil
 	job.Status = BatchImageJobStatusCompleted
 	cost := 0.5
 	job.ActualCost = &cost
+	oldDeadline := time.Now().Add(72 * time.Hour)
+	job.OutputExpiresAt = &oldDeadline
 	repo.jobs[job.BatchID] = job
 	billing := &fakeBatchImageBillingRepo{}
 	svc := &BatchImageSettlementService{Repo: repo, BillingRepo: billing, Pricing: &fakeBatchImagePricingResolver{unitPrice: 0.25}}
@@ -110,6 +114,7 @@ func TestBatchImageSettlementService_CompletedJobReturnsAlreadySettledWithoutBil
 	require.NoError(t, err)
 	require.True(t, result.AlreadySettled)
 	require.Equal(t, 0.5, result.ActualCost)
+	require.Equal(t, oldDeadline, *repo.jobs[job.BatchID].OutputExpiresAt)
 	require.Empty(t, billing.captures)
 }
 

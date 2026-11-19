@@ -342,7 +342,7 @@ func (s *BatchImageSettlementService) outputRetentionAfterTerminal() time.Durati
 	if s != nil && s.Config != nil && s.Config.BatchImage.OutputRetentionAfterTerminalHours > 0 {
 		return time.Duration(s.Config.BatchImage.OutputRetentionAfterTerminalHours) * time.Hour
 	}
-	return 72 * time.Hour
+	return config.DefaultBatchImageOutputRetentionHours * time.Hour
 }
 
 func BatchImageSettlementRequestID(batchID string) string {

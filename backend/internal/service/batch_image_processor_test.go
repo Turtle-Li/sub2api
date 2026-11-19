@@ -874,6 +874,9 @@ func (r *fakeBatchImageRepository) MarkBatchImageJobSettled(_ context.Context, p
 	}
 	now := time.Now()
 	job.Status = BatchImageJobStatusCompleted
+	if params.Now != nil {
+		now = *params.Now
+	}
 	job.ActualCost = &params.ActualCost
 	job.ManifestHash = &params.ManifestHash
 	job.SettledAt = &now
