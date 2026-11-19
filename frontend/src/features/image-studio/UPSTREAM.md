@@ -35,6 +35,11 @@ stable ambiguous-submit identity. Subsequent edits use the selected output image
 and persisted root batch ID. Prompt previews are never replayed as complete prompts.
 The viewer's mouse image click stays open so double-click zoom is reachable.
 
+The [session wallet path](../../../../docs/features/IMAGE_STUDIO_SESSION_API_20261107.md#session-only-wallet-generation)
+uses the same composer, owned task polling, previews and archive controls. Key
+IDs only select legacy history when the wallet catalogue is active. An old
+key's image can be carried forward as a reference, not a cross-owner root.
+
 Removed rather than stubbed: favorites, deletion, local retry/config replay,
 rectangle/swipe selection without batch actions, sketch/mask/comments,
 stream previews, LLM Agent, Tauri configuration, provider credential editors,

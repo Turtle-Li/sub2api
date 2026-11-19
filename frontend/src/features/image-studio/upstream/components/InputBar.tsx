@@ -9,14 +9,14 @@ interface Props {
  readonly setImageSize: (size: string) => void; readonly setAspectRatio: (ratio: string) => void; readonly referenceError: string;
  refs: string[]; removeRef: (index: number) => void; prompt: string; setPrompt: (text: string) => void;
  editing: boolean; upload: (files: FileList | null) => void; models: BatchImageModel[];
- model: string; modelLoading?: boolean; setModel: (model: string) => void; busy: boolean; submit: () => void;
+ model: string; modelLoading?: boolean; setModel: (model: string) => void; busy: boolean; submitDisabled?: boolean; submit: () => void;
  batchMode: boolean; setBatchMode: (batch: boolean) => void;
 }
 // Model-dependent controls keep fixed slots so switching models never shifts the rail.
 function FixedField({ label, text }: { readonly label: string; readonly text: string }) {
  return <div className="studio-field"><span>{label}</span><div className="studio-field-static" aria-disabled="true">{text}</div></div>
 }
-export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, modelLoading, model, setModel, busy, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError, batchMode, setBatchMode }: Props) {
+export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, upload, models, modelLoading, model, setModel, busy, submitDisabled, submit, capabilities, imageSize, aspectRatio, setImageSize, setAspectRatio, referenceError, batchMode, setBatchMode }: Props) {
  const count = batchMode && !editing ? prompt.split(/\n\s*---\s*\n/).filter(text => text.trim()).length : prompt.trim() ? 1 : 0
  const selected = models.find(item => modelIdentity(item) === model)
  const estimate = modelPrice(selected, imageSize, Math.max(1, count))
@@ -46,7 +46,7 @@ export default function InputBar({ refs, removeRef, prompt, setPrompt, editing, 
   <div className="studio-submit-area">
    <div className="studio-estimate"><span>预计消耗{count > 1 ? ` · ${count} 张` : ''}</span><strong>{estimate}{estimate !== '价格待配置' && ' 额度'}</strong></div>
    <p className="studio-muted">按模型价格预估，以任务结算为准</p>
-   <button className="studio-submit" aria-label={editing ? '生成修改图' : '开始生成'} disabled={busy || !model || !prompt.trim() || Boolean(referenceError) || count === 0} onClick={submit}>{busy ? '正在提交…' : editing ? '生成修改图' : `开始生成${count > 1 ? ` · ${count} 张` : ''}`}<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></button>
+   <button className="studio-submit" aria-label={editing ? '生成修改图' : '开始生成'} disabled={busy || submitDisabled || !model || !prompt.trim() || Boolean(referenceError) || count === 0} onClick={submit}>{busy ? '正在提交…' : editing ? '生成修改图' : `开始生成${count > 1 ? ` · ${count} 张` : ''}`}<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></button>
    </div>
  </section>
 }

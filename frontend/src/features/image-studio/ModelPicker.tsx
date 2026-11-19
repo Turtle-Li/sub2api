@@ -158,7 +158,7 @@ export function ModelPicker({ models, value, size, disabled, loading = false, on
             <svg className="studio-model-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
           </button>})}
         </div> : <div className="studio-model-empty">
-          {active ? <><strong>{active} 暂无可用模型</strong><p>如果你有该平台的分组权限，请绑定对应的 API 密钥；否则请联系管理员。</p><a className="studio-key-link" href="/keys">管理 API 密钥</a></> : <p>{loading ? '正在读取可用模型…' : '没有匹配的模型，试试其他名称。'}</p>}
+          {active ? <><strong>{active} 暂无可用模型</strong><p>请联系管理员确认工作台的模型和生图权限。</p></> : <p>{loading ? '正在读取可用模型…' : '没有匹配的模型，试试其他名称。'}</p>}
         </div>}
       </div>
       <p className="studio-model-footnote">价格随分辨率更新，消耗以任务结算为准。</p>

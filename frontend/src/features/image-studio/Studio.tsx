@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
-import { isImageOutputGone, listKeys, readImage, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type ItemContinuation } from './api'
+import { isImageOutputGone, listKeys, readImage, studioWalletRoute, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type StudioWalletMode, type ItemContinuation } from './api'
 import { modelIdentity, workspaceAPI } from './workspaceAPI'
-import { cachedStudioKeys, cacheStudioKeys } from './cache'
+import { cachedStudioKeys, cachedStudioWalletMode, cacheStudioKeys } from './cache'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from './upstream/hooks/usePreventBackgroundScroll'
 import TaskCard from './upstream/components/TaskCard'
@@ -117,24 +117,36 @@ export function Studio({ userId }: { readonly userId: number }) {
 
 function StudioSession({ userId }: { readonly userId: number }) {
   useGlobalClickSuppression()
-  const [keys, setKeys] = useState<StudioKey[] | null>(() => cachedStudioKeys(userId) || null)
+  const [directory, setDirectory] = useState<{ keys: StudioKey[] | null; wallet: StudioWalletMode; current: boolean }>(() => ({ keys: cachedStudioKeys(userId) ?? null, wallet: cachedStudioWalletMode(userId), current: false }))
   const [error, setError] = useState('')
   useEffect(() => {
     const controller = new AbortController()
-    listKeys(controller.signal).then(items => {
+    let wallet: StudioWalletMode = 'legacy'
+    listKeys(controller.signal, mode => { wallet = mode }).then(items => {
       if (controller.signal.aborted) return
       const eligible = items.filter(item => item.status === 'active' && !item.expired && !item.quota_exhausted && (item.can_generate !== false || item.has_history !== false))
-      cacheStudioKeys(userId, eligible); setKeys(eligible)
+      cacheStudioKeys(userId, eligible, wallet); setDirectory({ keys: eligible, wallet, current: true })
     }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)) })
     return () => controller.abort()
   }, [userId])
+  const { keys, wallet, current } = directory
   return <div className="image-studio">
-    {error && <p className="studio-error" role="alert">{error}</p>}{keys?.length ? <Workspace key={`${userId}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} userId={userId} /> : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : <><p>暂无可用的生图权限，请绑定有权限的生图分组或联系管理员。</p><a className="studio-key-link" href="/keys">管理 API 密钥</a></>}</div>}
+    {error && <p className="studio-error" role="alert">{error}</p>}
+    {keys && (keys.length || wallet !== 'legacy')
+      ? <Workspace key={`${userId}:${wallet}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} wallet={wallet} directoryCurrent={current} userId={userId} />
+      : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : <p>暂无可用的生图权限，请联系管理员。</p>}</div>}
   </div>
 }
 
-function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; readonly userId: number }) {
-  const [api] = useState(() => { const controller = new AbortController(); return { client: workspaceAPI(keys.map(key => key.id), controller.signal, { modelKeys: keys.filter(key => key.can_generate !== false).map(key => key.id), historyKeys: keys.filter(key => key.has_history !== false).map(key => key.id), userId }), controller } })
+function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: readonly StudioKey[]; readonly wallet: StudioWalletMode; readonly directoryCurrent: boolean; readonly userId: number }) {
+  const [api] = useState(() => {
+    const controller = new AbortController()
+    const walletRoutes = wallet === 'legacy' ? [] : [studioWalletRoute]
+    const routes = [...walletRoutes, ...keys.map(key => key.id)]
+    const modelKeys = wallet === 'on' ? walletRoutes : keys.filter(key => key.can_generate !== false).map(key => key.id)
+    const historyKeys = [...walletRoutes, ...keys.filter(key => key.has_history !== false).map(key => key.id)]
+    return { client: workspaceAPI(routes, controller.signal, { modelKeys, historyKeys, userId }), controller }
+  })
   const composer = useRef<HTMLDialogElement>(null)
   const [mobile, setMobile] = useState(() => Boolean(window.matchMedia?.('(max-width: 760px)').matches))
   const [batchMode, setBatchMode] = useState(false)
@@ -320,7 +332,7 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
   }
   async function submit() {
     const selected = models.find(item => modelIdentity(item) === model)
-    if (!selected || !prompt.trim() || busy || referenceError) return
+    if (!directoryCurrent || !selected || !prompt.trim() || busy || referenceError) return
     const prompts = parent || !batchMode ? [prompt.trim()] : prompt.split(/\n\s*---\s*\n/).map(value => value.trim()).filter(Boolean)
     const body: BatchImageSubmitRequest = { model: selected.id, ...(selectedSize ? { image_size: selectedSize } : {}), ...(selectedAspect ? { aspect_ratio: selectedAspect } : {}), ...(capabilities?.response_mime_types[0] ? { response_mime_type: capabilities.response_mime_types[0] } : {}), provider: selected.provider, parent_batch_id: parent ? taskRoot(parent) : undefined, items: prompts.map((text, i) => ({ custom_id: `image-${i + 1}`, prompt: text, output_count: 1, reference_images: refs.map(data => ({ mime_type: data.slice(5, data.indexOf(';')), data: data.slice(data.indexOf(',') + 1) })) })), metadata: parent ? { source_batch_id: parent.job.id, source_item_id: parent.item.custom_id } : {} }
     const serialized = JSON.stringify(body)
@@ -351,7 +363,7 @@ function Workspace({ keys, userId }: { readonly keys: readonly StudioKey[]; read
       <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
       {parent && <p className="studio-edit-source studio-muted">基于当前参考图续改 · {parent.job.model}</p>}
       {mobile && error && <p className="studio-error" role="alert">{error}</p>}
-      <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} modelLoading={modelsUpdating} model={model} setModel={value => void changeModel(value)} busy={busy} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
+      <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} modelLoading={modelsUpdating} model={model} setModel={value => void changeModel(value)} busy={busy} submitDisabled={!directoryCurrent} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
     </dialog>
     <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-gallery-count" aria-label={`已加载 ${tasks.length} 个图片任务`}>{tasks.length}</span></div>
       <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{galleryFilters.map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>

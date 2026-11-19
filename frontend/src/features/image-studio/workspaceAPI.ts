@@ -5,8 +5,8 @@ import { cachedStudioModels, cacheStudioModels, forgetStudioModels } from './cac
 export const modelIdentity = (model: Pick<BatchImageModel, 'provider' | 'id'>) => `${model.provider}:${model.id}`
 type Client = ReturnType<typeof studioAPI>
 
-// Discovery is read-only. All mutations and assets still pass through the original
-// key-scoped session API; a model choice never grants access to another key's task.
+// Discovery is read-only. Each mutation and asset stays in its server-owned
+// wallet or legacy-key scope; a model choice never grants access to another task.
 export function workspaceAPI(keys: readonly number[], signal: AbortSignal, access?: { readonly modelKeys: readonly number[]; readonly historyKeys: readonly number[]; readonly userId?: number }) {
   const clients = new Map([...new Set(keys)].sort((a, b) => a - b).map(key => [key, studioAPI(key, signal)]))
   const modelKeys = new Set(access?.modelKeys ?? keys)

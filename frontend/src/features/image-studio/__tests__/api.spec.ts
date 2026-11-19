@@ -1,10 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import apiClient from '@/api/client'
-import { listKeys, studioAPI, taskRoot, type StudioTask } from '../api'
+import { listKeys, studioAPI, studioWalletRoute, taskRoot, type StudioTask } from '../api'
 
 vi.mock('@/api/client', () => ({ default: { get: vi.fn(), post: vi.fn() } }))
 describe('Image Studio session adapter', () => {
   beforeEach(() => vi.clearAllMocks())
+  it('uses the wallet route and no API key header for a keyless user', async () => {
+    const signal = new AbortController().signal
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { items: [], pages: 1 }, headers: { 'x-image-studio-wallet': 'on' } })
+    const configured = vi.fn()
+    await expect(listKeys(signal, configured)).resolves.toEqual([])
+    expect(configured).toHaveBeenCalledWith('on')
+    const body = { model: 'wan2.7-image-pro', items: [{ custom_id: 'one', prompt: 'test' }] }
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { id: 'wallet-job' } })
+    await studioAPI(studioWalletRoute, signal).submit(body, 'once')
+    expect(apiClient.post).toHaveBeenCalledOnce()
+    expect(apiClient.post).toHaveBeenCalledWith('/image-studio/wallet/batches', body, expect.objectContaining({ signal, headers: { 'Idempotency-Key': 'once' } }))
+  })
   it('does not enumerate further history until explicitly requested', async () => {
     // Given the first job page has additional history.
     vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { data: [], next_cursor: '12:3' } })

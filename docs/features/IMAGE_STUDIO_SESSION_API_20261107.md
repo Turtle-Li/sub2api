@@ -1,5 +1,8 @@
 # Image Studio session API
 
+The default-off [wallet path](#session-only-wallet-generation) supplements the
+legacy key-backed path below. Old jobs keep their original owner/key boundary.
+
 The Studio uses the existing panel JWT in `Authorization: Bearer <session token>`.
 The host adapter automatically selects an eligible owned API key by ID for the
 chosen provider/model and sends `X-API-Key-ID: <positive integer>`. The user-facing
@@ -74,6 +77,43 @@ Tests use local repositories/fakes, with no external provider calls. Route tests
 owned reads and reach the original Submit service's batch group gate; existing service
 unit tests separately exercise successful provider enqueue and single reserve behavior.
 This is not a claim of real-provider or browser acceptance.
+
+## Session-only wallet generation
+
+`GET /api/v1/image-studio/keys` exposes `X-Image-Studio-Wallet: on|off` for
+discovery. On means the logged-in user is admitted to the configured Studio
+pricing group. The legacy directory is used for previous works. For new work
+in wallet mode the client sends its panel JWT and `Idempotency-Key`, not
+`X-API-Key-ID`, to `POST /api/v1/image-studio/wallet/batches`. Models are
+available at `GET /wallet/batches/models` (relative to `/api/v1/image-studio`).
+Wallet history, item reads and cancellation use the same `/wallet` prefix and
+remain subject to ownership even when wallet submission is disabled. Original
+key-based and `/v1` routes remain unchanged. Old images can be referenced from
+the wallet path, but a new job cannot claim the old key's edit root.
+
+Full administrators set a single `group_id` and list of `account_ids` via
+`/api/v1/admin/image-studio/wallet-group`. `PUT` takes `{config, expected}`, each
+with those fields, and saves them together with compare-and-set. The off value
+is `{ "group_id": 0, "account_ids": [] }`; no setting also means off. A group
+must be active, standard OpenAI and image-enabled. Existing exclusive and
+restricted-user group rules apply. These account IDs are **Studio-only**:
+loading them does not write `account_groups`, enable external batch access, or
+involve unselected accounts, a global pool or paid reserve. Provider/model
+compatibility, the group's model allowlist and shared account admission remain
+in force. The selected group's exact per-model CNY-authored image price cards
+must cover the requested tier. Missing prices never inherit the group default.
+Apply the normal effective group and account rates once, with no extra FX or
+second batch discount on an already authored wallet-unit tariff.
+
+Migration 277 adds `studio_group_id` to the existing jobs. The reserved owner
+slot `api_key_id=0` is scoped by the panel user and is only a namespace in the
+existing job/idempotency/billing ledger, not an `api_keys` row. A paid item uses
+the same reserve/capture/release path as legacy batches. Wallet settlement is
+visible in the Studio task and ledger; it does not introduce a synthetic row
+in the API-key-backed `usage_logs`. New successful outputs use the normal
+private COS result path and 360-hour deadline. Pause new jobs before any
+rollback decision and use only verified slot-compatible recovery images while
+any wallet task may still have work or a reservation. Keep schema and history.
 
 The current frontend model directory/history adapter and its scoped browser
 acceptance are documented separately in `IMAGE_STUDIO_REDESIGN_20261108.md`.

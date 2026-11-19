@@ -3,6 +3,8 @@ import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageResultFi
 import { loadBatchImageArchivePreview } from '@/utils/batchImageArchive'
 
 export interface StudioKey { readonly id: number; readonly name: string; readonly group_id?: number | null; readonly group_name: string; readonly status: string; readonly expired: boolean; readonly quota_exhausted: boolean; readonly can_generate?: boolean; readonly has_history?: boolean }
+export type StudioWalletMode = 'on' | 'off' | 'legacy'
+export const studioWalletRoute = 0
 export interface ItemContinuation { readonly job: BatchImageJob; readonly cursor: number }
 export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem }
 export interface GalleryFilters { readonly status: string; readonly search: string; readonly root?: string }
@@ -45,20 +47,26 @@ export function taskDisplay(task: StudioTask) {
 export function isImageOutputGone(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === 410
 }
-const base = '/image-studio'
+const studioBase = '/image-studio'
 export const taskRoot = (task: StudioTask) => task.job.parent_batch_id || task.job.id
 export const taskPending = (task: StudioTask) => !['completed', 'failed', 'cancelled', 'output_deleted'].includes(task.job.status)
 export const taskId = (job: BatchImageJob, item: BatchImageItem) => `${job.id}/${item.custom_id}`
-export async function listKeys(signal: AbortSignal): Promise<StudioKey[]> {
+export async function listKeys(signal: AbortSignal, walletMode?: (mode: StudioWalletMode) => void): Promise<StudioKey[]> {
   const result: StudioKey[] = []
   for (let page = 1; ; page++) {
-    const { data } = await apiClient.get<{ items: StudioKey[]; pages: number }>(`${base}/keys`, { params: { page, page_size: 100 }, signal })
+    const { data, headers } = await apiClient.get<{ items: StudioKey[]; pages: number }>(`${studioBase}/keys`, { params: { page, page_size: 100 }, signal })
+    if (page === 1) {
+      const mode: unknown = headers?.['x-image-studio-wallet']
+      walletMode?.(mode === 'on' || mode === 'off' ? mode : 'legacy')
+    }
     result.push(...data.items)
     if (page >= data.pages) return result
   }
 }
-export function studioAPI(key: number, signal: AbortSignal) {
-  const config = { headers: { 'X-API-Key-ID': String(key) }, signal }
+export function studioAPI(route: number, signal: AbortSignal) {
+  const wallet = route === studioWalletRoute
+  const base = wallet ? `${studioBase}/wallet` : studioBase
+  const config = { headers: wallet ? {} : { 'X-API-Key-ID': String(route) }, signal }
   const items = async (job: BatchImageJob, cursor = 0) => {
     const { data } = await apiClient.get<{ data: BatchImageItem[]; has_more: boolean }>(`${base}/batches/${encodeURIComponent(job.id)}/items`, { ...config, params: { limit: 100, cursor: String(cursor) } })
     return { tasks: data.data.map(item => ({ id: taskId(job, item), job, item })), next: data.has_more && data.data.length ? { job, cursor: cursor + data.data.length } : null }

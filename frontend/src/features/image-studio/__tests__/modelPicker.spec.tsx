@@ -127,7 +127,8 @@ describe('image model selection', () => {
     const platforms = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模型平台"] button'))
     expect(platforms.map(button => button.textContent)).toEqual(expect.arrayContaining(['通义万相0', '豆包 Seedream0']))
     await act(async () => platforms.find(button => button.textContent?.includes('Seedream'))?.click())
-    expect(host.querySelector('a[href="/keys"]')?.textContent).toBe('管理 API 密钥')
+    expect(host.textContent).toContain('确认工作台的模型和生图权限')
+    expect(host.querySelector('a[href="/keys"]')).toBeNull()
     expect(host.querySelector('[role="option"]')).toBeNull()
     expect(change).not.toHaveBeenCalled()
 
