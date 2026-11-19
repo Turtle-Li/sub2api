@@ -67,6 +67,14 @@ request, no retries. A 4xx valid error object is rejected. Malformed provider
 objects are conservatively unknown. Go must persist its attempt marker BEFORE
 invocation and retain unknown outcomes for reconciliation.
 
+For an explicit provider-specific transient 429 at submit, the bounded session
+reports `state: rejected`, `category: temporary_submit_rejection` and an optional
+wait expressed as `retry_after_seconds` (zero when absent). It only does so for
+recognized provider codes and no result or task receipt. No response details
+are emitted. The bridge still performs one HTTP action; the Go item worker
+owns the backoff and bounded retry. This is additive: an older worker treats
+the response as an ordinary failure, and an older bridge does not opt into retry.
+
 ## Bounds and intentionally preserved constraints
 
 - stdin ceiling 48 MiB; upstream JSON/stdout ceiling 34 MiB; each downloaded or

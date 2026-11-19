@@ -872,7 +872,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	if resp.StatusCode >= 400 {
-		respBody := s.readUpstreamErrorBody(resp)
+		readLimit := openAIUpstreamErrorBodyReadLimitForConfig(s.cfg)
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, readLimit))
+		completeErrorBody := readErr == nil && int64(len(respBody)) < readLimit
 		_ = resp.Body.Close()
 		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -908,6 +910,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				Message:            upstreamMsg,
 			})
 			shouldDisable := s.handleFailoverSideEffects(upstreamCtx, resp, account, respBody, upstreamModel)
+			hardStop := account.IsCustomErrorCodesEnabled() && account.ShouldHandleErrorCode(resp.StatusCode)
+			if !shouldDisable && !hardStop && completeErrorBody && !parsed.Stream && isOpenAIImageBatchExecution(upstreamCtx) {
+				if rejected := openAIImageSubmitRejection(resp.StatusCode, resp.Header, respBody); rejected != nil {
+					return nil, rejected
+				}
+			}
 			retryableOnSameAccount := !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
 			if account.IsOpenAIOAuthLike() && resp.StatusCode == http.StatusTooManyRequests {
 				return nil, s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, respBody, upstreamMsg, shouldDisable, retryableOnSameAccount)
