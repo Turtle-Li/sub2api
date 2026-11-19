@@ -27,11 +27,21 @@ func BatchImageReleaseRequestID(batchID string) string {
 	return batchImageReleaseRequestPrefix + strings.TrimSpace(batchID)
 }
 
+func validBatchImageBillingIdentity(job *BatchImageJob) bool {
+	if job.APIKeyID == nil {
+		return false
+	}
+	if job.StudioGroupID != nil {
+		return *job.StudioGroupID > 0 && *job.APIKeyID == ImageStudioWalletOwnerSlot
+	}
+	return *job.APIKeyID > 0
+}
+
 func buildBatchImageHoldCommand(job *BatchImageJob, requestID string, actualAmount float64, payloadHash string) (*BatchImageBalanceHoldCommand, error) {
 	if job == nil {
 		return nil, ErrBatchImageBillingHoldFailed
 	}
-	if job.APIKeyID == nil || *job.APIKeyID <= 0 {
+	if !validBatchImageBillingIdentity(job) {
 		return nil, ErrBatchImageSettlementMissingAPIKeyID
 	}
 	holdAmount := job.EstimatedCost

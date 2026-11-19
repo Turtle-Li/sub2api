@@ -107,7 +107,7 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	if job.Status != BatchImageJobStatusSettling {
 		return nil, ErrBatchImageSettlementInvalidStatus
 	}
-	if job.APIKeyID == nil || *job.APIKeyID <= 0 {
+	if !validBatchImageBillingIdentity(job) {
 		return nil, ErrBatchImageSettlementMissingAPIKeyID
 	}
 	if job.AccountID == nil || *job.AccountID <= 0 {
@@ -257,7 +257,9 @@ func (s *BatchImageSettlementService) failExhaustedSettlement(ctx context.Contex
 }
 
 func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost float64, requestID string, createdAt time.Time) {
-	if s == nil || s.UsageLogRepo == nil || job == nil || job.APIKeyID == nil || job.AccountID == nil {
+	// Usage logs require a real API key foreign key. Session-wallet jobs are
+	// accounted for by their existing job and balance hold/capture ledger.
+	if s == nil || s.UsageLogRepo == nil || job == nil || job.APIKeyID == nil || *job.APIKeyID <= 0 || job.AccountID == nil {
 		return
 	}
 	billingMode := string(BillingModeImage)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2001,6 +2002,16 @@ func (r *publicBatchImageAccountRepo) GetByID(_ context.Context, id int64) (*Acc
 		}
 	}
 	return nil, errors.New("account not found")
+}
+
+func (r *publicBatchImageAccountRepo) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
+	var out []*Account
+	for i := range r.accounts {
+		if slices.Contains(ids, r.accounts[i].ID) {
+			out = append(out, &r.accounts[i])
+		}
+	}
+	return out, nil
 }
 
 func (r *publicBatchImageAccountRepo) ListSchedulableByPlatform(_ context.Context, platform string) ([]Account, error) {

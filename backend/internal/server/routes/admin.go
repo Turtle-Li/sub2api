@@ -53,6 +53,8 @@ func RegisterAdminRoutes(
 
 		// 分组管理
 		registerGroupRoutes(admin, h)
+		admin.GET("/image-studio/wallet-group", h.BatchImage.AdminImageStudioWalletGroup(settingService))
+		admin.PUT("/image-studio/wallet-group", h.BatchImage.AdminImageStudioWalletGroup(settingService))
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)

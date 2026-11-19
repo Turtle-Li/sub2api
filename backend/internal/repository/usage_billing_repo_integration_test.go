@@ -17,6 +17,39 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+func TestImageStudioWalletBillingWithoutAnyAPIKey(t *testing.T) {
+	ctx := t.Context()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+	user := mustCreateUser(t, client, &service.User{
+		Email: "image-studio-wallet-" + uuid.NewString() + "@example.com", PasswordHash: "hash", Balance: 10,
+	})
+	id, err := service.NewBatchImageID()
+	require.NoError(t, err)
+	hold := service.BatchImageBalanceHoldCommand{
+		RequestID: service.BatchImageHoldRequestID(id), APIKeyID: service.ImageStudioWalletOwnerSlot, BatchID: id, UserID: user.ID, HoldAmount: .7,
+	}
+	result, err := repo.ReserveBatchImageBalance(ctx, &hold)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.InDelta(t, 9.3, *result.NewBalance, 1e-9)
+	require.InDelta(t, .7, *result.FrozenBalance, 1e-9)
+	capture := service.BatchImageBalanceHoldCommand{
+		RequestID: service.BatchImageCaptureRequestID(id), APIKeyID: service.ImageStudioWalletOwnerSlot, BatchID: id, UserID: user.ID, HoldAmount: .7, ActualAmount: .4,
+	}
+	result, err = repo.CaptureBatchImageBalance(ctx, &capture)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.InDelta(t, 9.6, *result.NewBalance, 1e-9)
+	require.Zero(t, *result.FrozenBalance)
+	result, err = repo.CaptureBatchImageBalance(ctx, &capture)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+	var keys int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT count(*) FROM api_keys WHERE user_id = $1", user.ID).Scan(&keys))
+	require.Zero(t, keys)
+}
+
 func TestUsageBillingRepositoryApply_DeduplicatesBalanceBilling(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
