@@ -128,6 +128,8 @@
 - Read `docs/operations/UPSTREAM_V0224_20261120.md` for the v0.2.24 update.
   Retain media body limits before ingress parsing, fixed-egress metadata-only
   snapshots, and explicit client/account cache TTL precedence.
+  For pooled Responses WS, end a CPR-generated `upstream_unavailable` only on
+  verified terminal evidence; preserve delayed usage and never replay a visible failure.
 
 - Read `docs/operations/UPSTREAM_V0223_20261118.md` for the v0.2.23 update.
   Keep the channel Ultra Fast multiplier independent from currency and time
