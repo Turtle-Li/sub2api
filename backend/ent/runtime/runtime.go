@@ -548,11 +548,11 @@ func init() {
 	// batchimageitem.DefaultImageCount holds the default value on creation for the image_count field.
 	batchimageitem.DefaultImageCount = batchimageitemDescImageCount.Default.(int)
 	// batchimageitemDescErrorCode is the schema descriptor for error_code field.
-	batchimageitemDescErrorCode := batchimageitemFields[12].Descriptor()
+	batchimageitemDescErrorCode := batchimageitemFields[14].Descriptor()
 	// batchimageitem.ErrorCodeValidator is a validator for the "error_code" field. It is called by the builders before save.
 	batchimageitem.ErrorCodeValidator = batchimageitemDescErrorCode.Validators[0].(func(string) error)
 	// batchimageitemDescCreatedAt is the schema descriptor for created_at field.
-	batchimageitemDescCreatedAt := batchimageitemFields[15].Descriptor()
+	batchimageitemDescCreatedAt := batchimageitemFields[17].Descriptor()
 	// batchimageitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	batchimageitem.DefaultCreatedAt = batchimageitemDescCreatedAt.Default.(func() time.Time)
 	batchimagejobFields := schema.BatchImageJob{}.Fields()

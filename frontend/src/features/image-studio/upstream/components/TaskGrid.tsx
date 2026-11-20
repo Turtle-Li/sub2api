@@ -1,111 +1,49 @@
 // Adapted from 88lin TaskGrid.tsx 5523a592, MIT; see UPSTREAM.md.
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { StudioTask, studioAPI } from '../../api'
+import React, { useLayoutEffect, useRef, useState } from 'react'
+import type { StudioTask } from '../../api'
+import type { ThumbnailLoader } from '../../thumbnailLoader'
 import TaskCard from './TaskCard'
 
-const PAGE_STEP = 24
+interface Props {
+  readonly tasks: readonly StudioTask[]
+  readonly previews: ThumbnailLoader
+  readonly open: (task: StudioTask) => void
+  readonly edit: (task: StudioTask) => void
+}
 
 function resolveColumns(width: number): number {
-  if (typeof window !== 'undefined' && window.innerWidth > 0 && window.innerWidth <= 760) return 2
-  if (width <= 0) return 3
-  if (width <= 520) return 2
-  return Math.max(2, Math.floor((width + 16) / (220 + 16)))
+  if (window.matchMedia?.('(max-width: 760px)').matches) return 2
+  return width > 0 ? Math.max(2, Math.floor((width + 16) / 236)) : 3
 }
 
-interface Props {
-  tasks: StudioTask[]
-  api: ReturnType<typeof studioAPI>
-  open: (task: StudioTask) => void
-  edit: (task: StudioTask) => void
-  hasMore?: boolean
-  loadingMore?: boolean
-  onLoadMore?: () => void
-}
-
-export default function TaskGrid({ tasks, api, open, edit, hasMore = false, loadingMore = false, onLoadMore }: Props) {
-  const rootRef = useRef<HTMLDivElement>(null)
-  const gridRef = useRef<HTMLDivElement>(null)
-  const sentinelRef = useRef<HTMLDivElement>(null)
-  const filteredTasks = useMemo(() => [...tasks].sort((a, b) => b.job.created_at - a.job.created_at), [tasks])
-  const [columns, setColumns] = useState(() => resolveColumns(0))
-  const [visibleCount, setVisibleCount] = useState(() => (
-    typeof IntersectionObserver === 'undefined' ? filteredTasks.length : Math.max(PAGE_STEP, filteredTasks.length)
-  ))
-
-  useEffect(() => {
-    setVisibleCount(prev => (
-      typeof IntersectionObserver === 'undefined'
-        ? filteredTasks.length
-        : Math.max(PAGE_STEP, prev, Math.min(filteredTasks.length, prev + PAGE_STEP))
-    ))
-  }, [filteredTasks.length])
-
+export default function TaskGrid({ tasks, previews, open, edit }: Props) {
+  const grid = useRef<HTMLDivElement>(null)
+  const [columns, setColumns] = useState(3)
   useLayoutEffect(() => {
-    const grid = gridRef.current
-    if (!grid) return
-    const measure = () => setColumns(resolveColumns(grid.clientWidth))
+    const element = grid.current
+    if (!element) return
+    const measure = () => setColumns(resolveColumns(element.clientWidth))
     measure()
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
-    ro?.observe(grid)
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : undefined
+    observer?.observe(element)
     window.addEventListener('resize', measure)
-    return () => {
-      ro?.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [filteredTasks.length])
+    return () => { observer?.disconnect(); window.removeEventListener('resize', measure) }
+  }, [])
 
-  useEffect(() => {
-    const sentinel = sentinelRef.current
-    if (!sentinel || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver(entries => {
-      if (!entries.some(entry => entry.isIntersecting)) return
-      if (visibleCount < filteredTasks.length) {
-        setVisibleCount(prev => Math.min(filteredTasks.length, prev + PAGE_STEP))
-      } else if (hasMore && !loadingMore) {
-        onLoadMore?.()
-      }
-    }, { rootMargin: '360px 0px' })
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [filteredTasks.length, hasMore, loadingMore, onLoadMore, visibleCount])
-
-  const visibleTasks = filteredTasks.slice(0, visibleCount)
-  const columnTasks = useMemo(() => {
-    const count = Math.max(1, columns)
-    const buckets = Array.from({ length: count }, () => [] as StudioTask[])
-    visibleTasks.forEach((task, index) => {
-      buckets[index % count].push(task)
-    })
-    return buckets
-  }, [visibleTasks, columns])
+  const buckets = Array.from({ length: columns }, (): StudioTask[] => [])
+  tasks.forEach((task, index) => buckets[index % columns]?.push(task))
 
   return (
-    <div
-      ref={rootRef}
-      data-task-grid-root
-      className="relative min-h-[50vh] pb-10"
-    >
-      <div
-        ref={gridRef}
-        className="studio-source-grid grid gap-4"
-        style={{ '--studio-columns': columns } as React.CSSProperties}
-      >
-        {columnTasks.map((col, colIndex) => (
-          <div key={colIndex} className="studio-gallery-column" data-gallery-column={colIndex}>
-            {col.map((task) => (
-              <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
-                <TaskCard
-                  record={task}
-                  api={api}
-                  onOpen={() => open(task)}
-                  onEditOutputs={() => edit(task)}
-                />
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-      <div ref={sentinelRef} className="studio-grid-sentinel" aria-hidden="true" />
+    <div ref={grid} data-task-grid-root className="studio-source-grid" role="list" style={{ gridTemplateColumns: 'repeat(' + columns + ', minmax(0, 1fr))' }}>
+      {buckets.map((bucket, index) => (
+        <div key={index} className="studio-gallery-column" role="presentation">
+          {bucket.map(task => (
+            <div key={task.id} className="task-card-wrapper" data-task-id={task.id} role="listitem">
+              <TaskCard record={task} previews={previews} onOpen={() => open(task)} onEditOutputs={() => edit(task)} />
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   )
 }

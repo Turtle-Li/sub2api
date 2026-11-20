@@ -233,6 +233,11 @@ type CreateBatchImageJobParams struct {
 	OutputExpiresAt *time.Time
 }
 
+type BatchImagePreviewSize struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
 type BatchImageItem struct {
 	ID                   int64
 	JobID                string
@@ -247,6 +252,7 @@ type BatchImageItem struct {
 	MimeType             *string
 	FileExtension        *string
 	ImageCount           int
+	PreviewSize          *BatchImagePreviewSize
 	ErrorCode            *string
 	ErrorMessage         *string
 	BilledAmount         *float64
@@ -267,6 +273,7 @@ type CreateBatchImageItemParams struct {
 	MimeType             *string
 	FileExtension        *string
 	ImageCount           int
+	PreviewSize          *BatchImagePreviewSize
 	ErrorCode            *string
 	ErrorMessage         *string
 	BilledAmount         *float64

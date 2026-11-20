@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { studioAPI, type StudioTask } from '../api'
 import { modelIdentity, workspaceAPI } from '../workspaceAPI'
 import { cacheStudioModels, cachedStudioModels } from '../cache'
@@ -9,7 +9,11 @@ const task = (id: string) => ({ id: `${id}/one`, job: { id, model: 'image', prov
 function client(models = [model('image')]) {
   return { models: vi.fn(async () => models), tasks: vi.fn(async (_cursor = '') => ({ tasks: [] as StudioTask[], itemContinuations: [], nextCursor: null as string | null })), items: vi.fn(), image: vi.fn(), thumbnail: vi.fn(), cancel: vi.fn(), refreshPending: vi.fn(async (tasks: StudioTask[]) => tasks), submit: vi.fn() }
 }
-beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear() })
+beforeEach(() => {
+  vi.clearAllMocks(); sessionStorage.clear()
+  vi.stubGlobal('URL', class extends URL { static createObjectURL = vi.fn(() => 'blob:cover'); static revokeObjectURL = vi.fn() })
+})
+afterEach(() => vi.unstubAllGlobals())
 describe('model-directed workspace', () => {
   it('shows available works before a slow history channel completes, retaining its cursor', async () => {
     const fast = client(), slow = client(), a = task('fast'), b = task('slow')
@@ -22,7 +26,7 @@ describe('model-directed workspace', () => {
     const update = vi.fn()
     const pending = api.tasks('', undefined, update)
     await vi.waitFor(() => expect(update).toHaveBeenCalledWith([a]))
-    await api.thumbnail(a)
+    await api.previews.load(a)
     expect(fast.thumbnail).toHaveBeenCalledWith(a, expect.any(AbortSignal))
     finish({ tasks: [b], itemContinuations: [], nextCursor: 'next-slow' })
     const page = await pending
@@ -100,8 +104,8 @@ describe('model-directed workspace', () => {
     expect(generation.tasks).toHaveBeenCalledOnce()
   })
   it('loads other covers while a cold preview remains pending with bounded concurrency', async () => {
-    // Given five visible covers, including a slow first cover.
-    const source = client(), tasks = Array.from({ length: 5 }, (_, index) => task(String(index)))
+    // Given six visible covers, including a slow first cover.
+    const source = client(), tasks = Array.from({ length: 6 }, (_, index) => task(String(index)))
     source.tasks.mockResolvedValue({ tasks, itemContinuations: [], nextCursor: null })
     const release: (() => void)[] = []
     source.thumbnail.mockImplementation(() => new Promise<Blob>(resolve => { release.push(() => resolve(new Blob(['cover']))) }))
@@ -109,13 +113,13 @@ describe('model-directed workspace', () => {
     const api = workspaceAPI([1], new AbortController().signal)
     await api.tasks()
     // When covers enter the shared preview queue.
-    const pending = tasks.map(item => api.thumbnail(item))
-    // Then three reads can progress and completing a later cover starts another.
-    await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledTimes(3))
-    release[1]?.()
+    const pending = tasks.map(item => api.previews.load(item))
+    // Then four reads can progress and completing a later cover starts another.
     await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledTimes(4))
-    release[2]?.()
+    release[1]?.()
     await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledTimes(5))
+    release[2]?.()
+    await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledTimes(6))
     for (const finish of release) finish()
     await Promise.all(pending)
   })
@@ -229,25 +233,26 @@ describe('model-directed workspace', () => {
     expect(source.image).toHaveBeenCalledOnce()
   })
   it('opens originals while a cover is preparing and skips cancelled queued covers', async () => {
-    const source = client(), a = task('a'), b = task('b'), c = task('c'), d = task('d'), card = new AbortController()
-    source.tasks.mockResolvedValue({ tasks: [a, b, c, d], itemContinuations: [], nextCursor: null })
+    const source = client(), card = new AbortController(), b = task('b')
+    const active = Array.from({ length: 4 }, (_, i) => task(String(i)))
+    source.tasks.mockResolvedValue({ tasks: [...active, b], itemContinuations: [], nextCursor: null })
     const finishes: ((blob: Blob) => void)[] = []
     source.thumbnail.mockImplementation(() => new Promise<Blob>(resolve => { finishes.push(resolve) }))
     source.image.mockResolvedValue(new Blob(['original']))
     vi.mocked(studioAPI).mockReturnValue(source)
     const api = workspaceAPI([10], new AbortController().signal)
     await api.tasks()
-    const covers = [api.thumbnail(a), api.thumbnail(c), api.thumbnail(d)]
-    const queued = api.thumbnail(b, card.signal)
-    await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledTimes(3))
+    const covers = active.map(item => api.previews.load(item))
+    const queued = api.previews.load(b, card.signal)
+    await vi.waitFor(() => expect(source.thumbnail).toHaveBeenCalledTimes(4))
     await expect(api.image(b)).resolves.toBeInstanceOf(Blob)
-    card.abort()
     const cancelled = expect(queued).rejects.toMatchObject({ name: 'AbortError' })
+    card.abort()
     for (const finish of finishes) finish(new Blob(['cover']))
     await Promise.all(covers)
     await cancelled
-    await api.thumbnail(a)
-    expect(source.thumbnail).toHaveBeenCalledTimes(3)
+    await api.previews.load(active[0]!)
+    expect(source.thumbnail).toHaveBeenCalledTimes(4)
     expect(source.image).toHaveBeenCalledWith(b, 0)
   })
 })

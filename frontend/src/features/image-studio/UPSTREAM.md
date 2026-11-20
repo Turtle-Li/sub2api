@@ -17,10 +17,10 @@ The exact retained line ranges and both SHA256 hashes are recorded in
 
 | Source | Retained behavior / integration |
 | --- | --- |
-| `components/TaskCard.tsx:25–63, 425–746` | TaskActionButton tooltip lifecycle, pending/error/success render branches, prompt clamp and original SVG actions. Server task props replace local store/cache. The host replaces horizontal geometry/metadata chips with an uncropped square canvas and compact footer. |
-| `components/TaskGrid.tsx:341–385` | Grid wrapper, measured visible slice and padding; props replace local-store filters/selection. Host CSS chooses available-width columns and two phone columns; measurement remains authoritative. |
+| `components/TaskCard.tsx:25–63, 425–746` | TaskActionButton tooltip lifecycle, pending/error/success render branches, prompt clamp and original SVG actions. Server task props replace local store/cache. The host uses a thumbnail-matched frame and compact footer rather than horizontal geometry/metadata chips. |
+| `components/TaskGrid.tsx:341–385` | Grid wrapper and keyed task cards; props replace local-store filters/selection. The host keeps responsive waterfall columns (two on phones) and commits whole metadata pages using the server cursor and a single tail. |
 | `hooks/useVirtualGrid.ts`, `lib/virtualGrid.ts` | Verbatim measurement, resize observation, anchored scrolling, overscan and range arithmetic. `pageScroll.ts` binds the host's document scroll. |
-| `hooks/useNearViewport.ts` | Verbatim shared IntersectionObserver gates authenticated card-image reads. |
+| `hooks/useNearViewport.ts` | Shared observers rank authenticated thumbnail reads (visible first, nearby next). Viewport exit drops work that never started; like the pinned UI, it does not clear a painted preview or cancel an admitted read. |
 | `components/Lightbox.tsx:13–25, 325–918` | Original ref-based transform state, clamp, wheel anchoring, mouse drag, double click, pinch, pan, horizontal swipe thresholds, tap suppression, image-change reset, timers/listener cleanup, image/navigation/action rendering. Props replace global local-image store. |
 | `hooks/useCloseOnEscape.ts`, `hooks/usePreventBackgroundScroll.ts` | Verbatim nested overlay Escape ownership and reference-counted scroll lock. |
 | `components/ViewportTooltip.tsx`, `lib/tooltipDismiss.ts` | Original viewport-clamped portal tooltip and overlay dismissal bus; desktop titlebar offset is zero on web. |
@@ -150,9 +150,9 @@ exact model IDs and size-sensitive backend quotes. Routing remains the first
 eligible key, including that key's quote; account differences appear as a range.
 History and catalogue now resolve independently. The host `api.ts` reads 24
 joined item/job records per key/page; root/status/search filters run on the server.
-`TaskCard` uses `thumbnail()`; original detail/edit/download uses `image()`.
-No task state moves to browser storage. Originals retain their download queue;
-thumbnail reads use an independent queue and each card cancels when offscreen.
+`TaskCard` uses the workspace preview loader over `thumbnail()`; original
+detail/edit/download uses `image()`. No task state moves to browser storage.
+Originals retain their download queue; thumbnail reads are prioritized separately.
 Server-side historical backfills retain the per-user download permit. A completed
 job transition and explicit metadata refresh reload its cover, including a previous
 temporary failure; unchanged records do not repeat reads. DOM rendering remains
@@ -175,11 +175,38 @@ The November 9 entry cache contains owner/key-scoped display metadata only;
 fresh discovery still selects generation routes. Per-key model/first-gallery
 updates preserve the original ownership and cursor contracts. Conditional reads
 recheck authorization before 304; Gemini aliases are hidden only when equivalent.
-See `docs/features/IMAGE_STUDIO_CATALOGUE_CACHE_20261109.md` for limits, reference
-observations and intentional card geometry changes. The later Gemini 4 refinement uses an adaptive preview frame matching the decoded
-image aspect ratio (clamped between 9:16 and 16:9), multi-column waterfall layout
-with sentinel-driven downward loading, compact platform badges with short model
-labels (such as `G · 3.1 Pro`), fixed-height model trigger/parameter slots and
-fixed-height model picker dialog so switching models or platforms never shifts
-layout position, and a horizontal phone platform picker; see
-`docs/features/IMAGE_STUDIO_GEMINI4_UI_20261109.md` for details.
+See `docs/features/IMAGE_STUDIO_CATALOGUE_CACHE_20261109.md` for limits and reference
+observations. The November 9 Gemini 4 refinement introduced compact platform badges,
+fixed-height model trigger/parameter slots and picker dialog, and a horizontal phone
+platform picker; see `docs/features/IMAGE_STUDIO_GEMINI4_UI_20261109.md`.
+
+## Gallery scroll and preview stability (2026-11-20)
+
+The waterfall remains the visual contract. Use `item.preview_size` when the
+metadata arrives, preserving portrait, square and landscape frames (same
+9:16–16:9 guardrails). Mount the whole page immediately; never fetch or decode a
+thumbnail to decide which cards to render. Older items without dimensions use a
+stable fallback with an uncropped thumbnail. After a successful thumbnail read
+records the size, the next metadata refresh uses it. Loading, decoding or
+failing an image does not resize its frame.
+
+The client requests 24 items per page and history scope. The server cursor and
+batch-item continuation share a tail observer that prefetches within 400px of
+the viewport, plus one manual action. Only metadata
+loading controls the tail. Separately, card thumbnails prefetch within 640px of
+the viewport, with visible cards taking precedence in a four-read queue. The
+limit leaves HTTP/1.1 connections available for metadata and originals. Scrolling
+away skips queued reads, not transfers that already started. A transient page
+failure pauses automatic reads without removing prior cards. Metadata refresh keeps
+displayed covers and retries failed previews; filter changes fence old work.
+Mounted cards keep the same image node and object URL within the workspace's
+192-item/16MiB LRU budget. Output expiry, deletion and workspace exit still revoke
+previews. Originals remain explicit; no provider, storage, or billing path changes.
+The pinned 88lin and VSO references above were reviewed before editing; the host keeps
+its own multi-owner cursor and does not transplant additional upstream code.
+
+The main gallery reads `current`; `已过期` is a separate, paged text list of
+retired outputs and offers only task details. Only opening that filter reads its
+metadata. It does not mount the gallery card/preview pipeline, including when
+opening details with a browser clock behind the server. Continued edits retain
+full root history under `all`.

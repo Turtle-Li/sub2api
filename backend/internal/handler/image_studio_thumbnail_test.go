@@ -51,6 +51,9 @@ func (*thumbnailHTTPRepository) DeferBatchImageThumbnailBackfill(context.Context
 func (*thumbnailHTTPRepository) DisableBatchImageThumbnails(context.Context, string) error {
 	return nil
 }
+func (*thumbnailHTTPRepository) FillBatchImagePreviewSize(context.Context, string, string, service.BatchImagePreviewSize) error {
+	return nil
+}
 
 type thumbnailHTTPStore struct {
 	service.BatchImageDeliveryObjectStore

@@ -45,6 +45,15 @@ func (r *thumbnailRepositoryTest) DisableBatchImageThumbnails(context.Context, s
 	r.disabled = true
 	return nil
 }
+func (r *thumbnailRepositoryTest) FillBatchImagePreviewSize(_ context.Context, batchID, customID string, size BatchImagePreviewSize) error {
+	for i := range r.items[batchID] {
+		item := &r.items[batchID][i]
+		if item.CustomID == customID && item.PreviewSize == nil {
+			item.PreviewSize = &size
+		}
+	}
+	return nil
+}
 
 type thumbnailProviderTest struct {
 	publicBatchImageProvider
@@ -111,6 +120,9 @@ func TestImageStudioThumbnailFreshProcessReadsStoredCoverWithoutOriginal(t *test
 	config, _, err := image.DecodeConfig(bytes.NewReader(got))
 	require.NoError(t, err)
 	require.Equal(t, 480, config.Width)
+	item, err := repo.GetBatchImageItemForDownload(t.Context(), "imgbatch_download", "cover/../001")
+	require.NoError(t, err)
+	require.Equal(t, &BatchImagePreviewSize{Width: 480, Height: 240}, item.PreviewSize)
 	require.Zero(t, provider.reads.Load())
 	repo.disabled = true
 	_, err = cold.ItemThumbnail(t.Context(), testBatchImageOwner(), "imgbatch_download", "cover/../001")

@@ -55,3 +55,14 @@ func TestImageStudioThumbnailReadsDurableDeletionAndRetryState(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, noTx)
 }
+
+func TestImageStudioThumbnailFillsOnlyMissingLiveMetadata(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectExec(`(?s)WITH live_job AS .*WHERE batch_id = \$1 AND status = 'completed' AND output_deleted_at IS NULL.*user_deleted_at IS NULL AND thumbnail_disabled_at IS NULL.*output_expires_at > NOW\(\).*FOR UPDATE.*UPDATE batch_image_items i SET preview_width = \$3, preview_height = \$4.*i.custom_id = \$2.*i.status = 'success' AND i.image_count > 0.*i.preview_width IS NULL AND i.preview_height IS NULL`).
+		WithArgs("batch", "item", 360, 480).WillReturnResult(sqlmock.NewResult(0, 1))
+	repo := &batchImageRepository{sql: db}
+	require.NoError(t, repo.FillBatchImagePreviewSize(t.Context(), "batch", "item", service.BatchImagePreviewSize{Width: 360, Height: 480}))
+	require.NoError(t, mock.ExpectationsWereMet())
+}

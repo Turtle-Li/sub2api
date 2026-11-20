@@ -8,6 +8,12 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+// A failed item remains in history even when its batch's successful outputs are cleaned up.
+const galleryRetiredOutput = `(((i.status = 'success' AND i.image_count > 0)
+OR (i.status = 'result_available' AND j.status IN ('completed', 'output_deleted')))
+AND (j.status = 'output_deleted' OR j.output_deleted_at IS NOT NULL
+OR (j.output_expires_at IS NOT NULL AND j.output_expires_at <= NOW())))`
+
 func (r *batchImageRepository) ListBatchImageGalleryForOwner(ctx context.Context, userID, keyID int64, q service.BatchImageGalleryQuery) ([]service.BatchImageGalleryRecord, error) {
 	// Page items, not batches: one huge batch cannot expand an initial page to
 	// thousands of cards. The tuple cursor stays stable when newer jobs arrive.
@@ -16,7 +22,7 @@ j.provider, j.model, j.image_size, j.item_count, j.success_count, j.fail_count,
 j.estimated_cost, j.hold_amount, j.actual_cost, j.created_at, j.settled_at,
 j.output_expires_at, j.output_deleted_at, j.last_error_code, j.last_error_message,
 i.id, i.custom_id, i.status, i.prompt_preview, i.mime_type, i.file_extension,
-i.image_count, i.error_code, i.error_message
+i.image_count, i.error_code, i.error_message, i.preview_width, i.preview_height
 FROM batch_image_jobs j JOIN batch_image_items i ON i.job_id = j.batch_id
 WHERE j.user_id = $1 AND j.api_key_id = $2 AND j.user_deleted_at IS NULL
 AND ($3::bigint = 0 OR j.id <= $3)
@@ -27,6 +33,10 @@ AND ($3::bigint = 0 OR (j.id, i.id) < ($3, $4))`
 		query += fmt.Sprintf(` AND (j.batch_id = $%d OR j.parent_batch_id = $%d)`, len(args), len(args))
 	}
 	switch q.Status {
+	case "current":
+		query += ` AND NOT ` + galleryRetiredOutput
+	case "expired":
+		query += ` AND ` + galleryRetiredOutput
 	case "pending":
 		query += ` AND j.status NOT IN ('completed', 'failed', 'cancelled', 'output_deleted')`
 	case "completed":
@@ -56,15 +66,17 @@ AND (j.output_expires_at IS NULL OR j.output_expires_at > NOW())`
 	result := make([]service.BatchImageGalleryRecord, 0)
 	for rows.Next() {
 		job, item := &service.BatchImageJob{}, &service.BatchImageItem{}
+		var previewWidth, previewHeight *int
 		if err := rows.Scan(&job.ID, &job.BatchID, &job.ParentBatchID, &job.TaskName, &job.Status,
 			&job.Provider, &job.Model, &job.ImageSize, &job.ItemCount, &job.SuccessCount, &job.FailCount,
 			&job.EstimatedCost, &job.HoldAmount, &job.ActualCost, &job.CreatedAt, &job.SettledAt,
 			&job.OutputExpiresAt, &job.OutputDeletedAt, &job.LastErrorCode, &job.LastErrorMessage,
 			&item.ID, &item.CustomID, &item.Status, &item.PromptPreview, &item.MimeType, &item.FileExtension,
-			&item.ImageCount, &item.ErrorCode, &item.ErrorMessage); err != nil {
+			&item.ImageCount, &item.ErrorCode, &item.ErrorMessage, &previewWidth, &previewHeight); err != nil {
 			return nil, fmt.Errorf("scan image studio gallery: %w", err)
 		}
 		item.JobID = job.BatchID
+		item.PreviewSize = batchImagePreviewSize(previewWidth, previewHeight)
 		result = append(result, service.BatchImageGalleryRecord{Job: job, Item: item})
 	}
 	return result, rows.Err()

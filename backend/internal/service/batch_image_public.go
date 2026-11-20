@@ -160,6 +160,7 @@ type BatchImagePublicItem struct {
 	MimeType      *string                `json:"mime_type"`
 	FileExtension *string                `json:"file_extension"`
 	ImageCount    int                    `json:"image_count"`
+	PreviewSize   *BatchImagePreviewSize `json:"preview_size,omitempty"`
 	Error         *BatchImagePublicError `json:"error"`
 }
 
@@ -2178,6 +2179,7 @@ func BatchImageItemToPublic(item *BatchImageItem) BatchImagePublicItem {
 	}
 	if item.Status == BatchImageItemStatusSuccess {
 		out.Status = "succeeded"
+		out.PreviewSize = item.PreviewSize
 		return out
 	}
 	if item.Status == BatchImageItemStatusResultAvailable {

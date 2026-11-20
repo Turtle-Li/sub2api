@@ -33,6 +33,7 @@ func TestImageStudioGalleryPageOwnsCursorAndPublicProjection(t *testing.T) {
 			Item: &BatchImageItem{ID: id, CustomID: "item", Status: BatchImageItemStatusSuccess, ImageCount: 1},
 		})
 	}
+	r.rows[0].Item.PreviewSize = &BatchImagePreviewSize{Width: 768, Height: 1024}
 	s := &BatchImagePublicService{Repo: r}
 	got, err := s.Gallery(t.Context(), BatchImageOwner{UserID: 10, APIKeyID: 20}, BatchImageGalleryRequest{Limit: 2, Cursor: "9:5", Status: "completed", Search: "flower"})
 	require.NoError(t, err)
@@ -41,6 +42,10 @@ func TestImageStudioGalleryPageOwnsCursorAndPublicProjection(t *testing.T) {
 	require.Len(t, got.Data, 2)
 	require.Equal(t, "8:2", got.NextCursor)
 	require.Equal(t, "succeeded", got.Data[0].Item.Status)
+	require.Equal(t, &BatchImagePreviewSize{Width: 768, Height: 1024}, got.Data[0].Item.PreviewSize)
+	legacy, err := json.Marshal(got.Data[1].Item)
+	require.NoError(t, err)
+	require.NotContains(t, string(legacy), "preview_size")
 	require.Equal(t, "owned", got.Data[0].Job.ID)
 	body, err := json.Marshal(got.Data[0].Job)
 	require.NoError(t, err)

@@ -166,6 +166,34 @@ func (_c *BatchImageItemCreate) SetNillableImageCount(v *int) *BatchImageItemCre
 	return _c
 }
 
+// SetPreviewWidth sets the "preview_width" field.
+func (_c *BatchImageItemCreate) SetPreviewWidth(v int) *BatchImageItemCreate {
+	_c.mutation.SetPreviewWidth(v)
+	return _c
+}
+
+// SetNillablePreviewWidth sets the "preview_width" field if the given value is not nil.
+func (_c *BatchImageItemCreate) SetNillablePreviewWidth(v *int) *BatchImageItemCreate {
+	if v != nil {
+		_c.SetPreviewWidth(*v)
+	}
+	return _c
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (_c *BatchImageItemCreate) SetPreviewHeight(v int) *BatchImageItemCreate {
+	_c.mutation.SetPreviewHeight(v)
+	return _c
+}
+
+// SetNillablePreviewHeight sets the "preview_height" field if the given value is not nil.
+func (_c *BatchImageItemCreate) SetNillablePreviewHeight(v *int) *BatchImageItemCreate {
+	if v != nil {
+		_c.SetPreviewHeight(*v)
+	}
+	return _c
+}
+
 // SetErrorCode sets the "error_code" field.
 func (_c *BatchImageItemCreate) SetErrorCode(v string) *BatchImageItemCreate {
 	_c.mutation.SetErrorCode(v)
@@ -412,6 +440,14 @@ func (_c *BatchImageItemCreate) createSpec() (*BatchImageItem, *sqlgraph.CreateS
 	if value, ok := _c.mutation.ImageCount(); ok {
 		_spec.SetField(batchimageitem.FieldImageCount, field.TypeInt, value)
 		_node.ImageCount = value
+	}
+	if value, ok := _c.mutation.PreviewWidth(); ok {
+		_spec.SetField(batchimageitem.FieldPreviewWidth, field.TypeInt, value)
+		_node.PreviewWidth = &value
+	}
+	if value, ok := _c.mutation.PreviewHeight(); ok {
+		_spec.SetField(batchimageitem.FieldPreviewHeight, field.TypeInt, value)
+		_node.PreviewHeight = &value
 	}
 	if value, ok := _c.mutation.ErrorCode(); ok {
 		_spec.SetField(batchimageitem.FieldErrorCode, field.TypeString, value)
@@ -698,6 +734,54 @@ func (u *BatchImageItemUpsert) UpdateImageCount() *BatchImageItemUpsert {
 // AddImageCount adds v to the "image_count" field.
 func (u *BatchImageItemUpsert) AddImageCount(v int) *BatchImageItemUpsert {
 	u.Add(batchimageitem.FieldImageCount, v)
+	return u
+}
+
+// SetPreviewWidth sets the "preview_width" field.
+func (u *BatchImageItemUpsert) SetPreviewWidth(v int) *BatchImageItemUpsert {
+	u.Set(batchimageitem.FieldPreviewWidth, v)
+	return u
+}
+
+// UpdatePreviewWidth sets the "preview_width" field to the value that was provided on create.
+func (u *BatchImageItemUpsert) UpdatePreviewWidth() *BatchImageItemUpsert {
+	u.SetExcluded(batchimageitem.FieldPreviewWidth)
+	return u
+}
+
+// AddPreviewWidth adds v to the "preview_width" field.
+func (u *BatchImageItemUpsert) AddPreviewWidth(v int) *BatchImageItemUpsert {
+	u.Add(batchimageitem.FieldPreviewWidth, v)
+	return u
+}
+
+// ClearPreviewWidth clears the value of the "preview_width" field.
+func (u *BatchImageItemUpsert) ClearPreviewWidth() *BatchImageItemUpsert {
+	u.SetNull(batchimageitem.FieldPreviewWidth)
+	return u
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (u *BatchImageItemUpsert) SetPreviewHeight(v int) *BatchImageItemUpsert {
+	u.Set(batchimageitem.FieldPreviewHeight, v)
+	return u
+}
+
+// UpdatePreviewHeight sets the "preview_height" field to the value that was provided on create.
+func (u *BatchImageItemUpsert) UpdatePreviewHeight() *BatchImageItemUpsert {
+	u.SetExcluded(batchimageitem.FieldPreviewHeight)
+	return u
+}
+
+// AddPreviewHeight adds v to the "preview_height" field.
+func (u *BatchImageItemUpsert) AddPreviewHeight(v int) *BatchImageItemUpsert {
+	u.Add(batchimageitem.FieldPreviewHeight, v)
+	return u
+}
+
+// ClearPreviewHeight clears the value of the "preview_height" field.
+func (u *BatchImageItemUpsert) ClearPreviewHeight() *BatchImageItemUpsert {
+	u.SetNull(batchimageitem.FieldPreviewHeight)
 	return u
 }
 
@@ -1073,6 +1157,62 @@ func (u *BatchImageItemUpsertOne) AddImageCount(v int) *BatchImageItemUpsertOne 
 func (u *BatchImageItemUpsertOne) UpdateImageCount() *BatchImageItemUpsertOne {
 	return u.Update(func(s *BatchImageItemUpsert) {
 		s.UpdateImageCount()
+	})
+}
+
+// SetPreviewWidth sets the "preview_width" field.
+func (u *BatchImageItemUpsertOne) SetPreviewWidth(v int) *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.SetPreviewWidth(v)
+	})
+}
+
+// AddPreviewWidth adds v to the "preview_width" field.
+func (u *BatchImageItemUpsertOne) AddPreviewWidth(v int) *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.AddPreviewWidth(v)
+	})
+}
+
+// UpdatePreviewWidth sets the "preview_width" field to the value that was provided on create.
+func (u *BatchImageItemUpsertOne) UpdatePreviewWidth() *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.UpdatePreviewWidth()
+	})
+}
+
+// ClearPreviewWidth clears the value of the "preview_width" field.
+func (u *BatchImageItemUpsertOne) ClearPreviewWidth() *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.ClearPreviewWidth()
+	})
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (u *BatchImageItemUpsertOne) SetPreviewHeight(v int) *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.SetPreviewHeight(v)
+	})
+}
+
+// AddPreviewHeight adds v to the "preview_height" field.
+func (u *BatchImageItemUpsertOne) AddPreviewHeight(v int) *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.AddPreviewHeight(v)
+	})
+}
+
+// UpdatePreviewHeight sets the "preview_height" field to the value that was provided on create.
+func (u *BatchImageItemUpsertOne) UpdatePreviewHeight() *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.UpdatePreviewHeight()
+	})
+}
+
+// ClearPreviewHeight clears the value of the "preview_height" field.
+func (u *BatchImageItemUpsertOne) ClearPreviewHeight() *BatchImageItemUpsertOne {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.ClearPreviewHeight()
 	})
 }
 
@@ -1627,6 +1767,62 @@ func (u *BatchImageItemUpsertBulk) AddImageCount(v int) *BatchImageItemUpsertBul
 func (u *BatchImageItemUpsertBulk) UpdateImageCount() *BatchImageItemUpsertBulk {
 	return u.Update(func(s *BatchImageItemUpsert) {
 		s.UpdateImageCount()
+	})
+}
+
+// SetPreviewWidth sets the "preview_width" field.
+func (u *BatchImageItemUpsertBulk) SetPreviewWidth(v int) *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.SetPreviewWidth(v)
+	})
+}
+
+// AddPreviewWidth adds v to the "preview_width" field.
+func (u *BatchImageItemUpsertBulk) AddPreviewWidth(v int) *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.AddPreviewWidth(v)
+	})
+}
+
+// UpdatePreviewWidth sets the "preview_width" field to the value that was provided on create.
+func (u *BatchImageItemUpsertBulk) UpdatePreviewWidth() *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.UpdatePreviewWidth()
+	})
+}
+
+// ClearPreviewWidth clears the value of the "preview_width" field.
+func (u *BatchImageItemUpsertBulk) ClearPreviewWidth() *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.ClearPreviewWidth()
+	})
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (u *BatchImageItemUpsertBulk) SetPreviewHeight(v int) *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.SetPreviewHeight(v)
+	})
+}
+
+// AddPreviewHeight adds v to the "preview_height" field.
+func (u *BatchImageItemUpsertBulk) AddPreviewHeight(v int) *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.AddPreviewHeight(v)
+	})
+}
+
+// UpdatePreviewHeight sets the "preview_height" field to the value that was provided on create.
+func (u *BatchImageItemUpsertBulk) UpdatePreviewHeight() *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.UpdatePreviewHeight()
+	})
+}
+
+// ClearPreviewHeight clears the value of the "preview_height" field.
+func (u *BatchImageItemUpsertBulk) ClearPreviewHeight() *BatchImageItemUpsertBulk {
+	return u.Update(func(s *BatchImageItemUpsert) {
+		s.ClearPreviewHeight()
 	})
 }
 

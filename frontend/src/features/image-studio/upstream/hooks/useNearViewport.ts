@@ -1,34 +1,32 @@
 import { useEffect, useState, type RefObject } from 'react'
+import type { ThumbnailPriority } from '../../thumbnailLoader'
 
-// 所有卡片共用一个观察器；上下各预留一屏，滚动到达前就开始加载
-let observer: IntersectionObserver | null = null
-const callbacks = new WeakMap<Element, () => void>()
-
-function getObserver() {
-  observer ??= new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue
-      callbacks.get(entry.target)?.()
-    }
-  }, { rootMargin: '100% 0px' })
-  return observer
+// Adapted from 88lin 5523a592, MIT; see UPSTREAM.md. Separate prefetch from display lifetime.
+function observeWithin(rootMargin: string) {
+  let observer: IntersectionObserver | undefined
+  const callbacks = new WeakMap<Element, (intersects: boolean) => void>()
+  return (el: Element, callback: (intersects: boolean) => void) => {
+    observer ??= new IntersectionObserver(entries => {
+      for (const entry of entries) callbacks.get(entry.target)?.(entry.isIntersecting)
+    }, { rootMargin })
+    callbacks.set(el, callback)
+    observer.observe(el)
+    return () => { observer?.unobserve(el); callbacks.delete(el) }
+  }
 }
 
-/** 元素首次进入（或接近）可视区域后返回 true，之后保持 true；不支持 IntersectionObserver 时直接为 true */
-export function useNearViewport(ref: RefObject<Element | null>) {
-  const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined')
+const observeNearby = observeWithin('640px 0px')
+const observeVisible = observeWithin('0px')
 
+export function useThumbnailPriority(ref: RefObject<Element | null>): ThumbnailPriority {
+  const [near, setNear] = useState(false)
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
   useEffect(() => {
     const el = ref.current
-    if (near || !el) return
-    const io = getObserver()
-    callbacks.set(el, () => setNear(true))
-    io.observe(el)
-    return () => {
-      io.unobserve(el)
-      callbacks.delete(el)
-    }
-  }, [near, ref])
-
-  return near
+    if (!el || typeof IntersectionObserver === 'undefined') return
+    const stopNearby = observeNearby(el, setNear)
+    const stopVisible = observeVisible(el, setVisible)
+    return () => { stopNearby(); stopVisible() }
+  }, [ref])
+  return visible ? 2 : near ? 1 : 0
 }

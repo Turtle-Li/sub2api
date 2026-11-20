@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -21,6 +22,9 @@ func TestImageStudioThumbnailIndexerEagerlyPersistsBeforeFirstListRead(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 2, result.SuccessCount)
 	require.Equal(t, 1, result.FailCount)
+	item, err := repo.GetBatchImageItemForDownload(t.Context(), job.BatchID, "cover/../001")
+	require.NoError(t, err)
+	require.Equal(t, &BatchImagePreviewSize{Width: 1024, Height: 512}, item.PreviewSize)
 	require.EqualValues(t, 1, provider.reads.Load())
 	sourceBytes := provider.bytesRead.Load()
 	job.Status = BatchImageJobStatusCompleted
@@ -51,6 +55,9 @@ func TestImageStudioThumbnailFailureDoesNotFailGenerationAndRetryIsBounded(t *te
 	result, err := indexer.Index(t.Context(), job, provider, &Account{})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.SuccessCount)
+	item, err := repo.GetBatchImageItemForDownload(t.Context(), job.BatchID, "ok_2")
+	require.NoError(t, err)
+	require.Equal(t, &BatchImagePreviewSize{Width: 1024, Height: 512}, item.PreviewSize, "layout metadata is independent of thumbnail storage")
 	job.Status = BatchImageJobStatusCompleted
 	svc.DeliveryStore = failing
 	_, err = svc.ItemThumbnail(t.Context(), testBatchImageOwner(), job.BatchID, "ok_2")
@@ -124,6 +131,12 @@ func TestImageStudioThumbnailUpscaleUsesFinalPixelsAndNeedsNoExtraSourceRead(t *
 	actual, err := previews.Open(t.Context(), job.BatchID, "cover/../001")
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
+	finalSize := readBatchImagePreviewSize(bytes.NewReader(store.objects[key].data))
+	require.NotNil(t, finalSize)
+	require.Greater(t, finalSize.Width, 16)
+	item, err := repo.GetBatchImageItemForDownload(t.Context(), job.BatchID, "cover/../001")
+	require.NoError(t, err)
+	require.Equal(t, finalSize, item.PreviewSize)
 	require.EqualValues(t, 1, provider.reads.Load())
 }
 

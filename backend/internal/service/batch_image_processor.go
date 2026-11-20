@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -464,7 +465,7 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 		}
 		if parsed.Status == BatchImageParsedStatusSucceeded {
 			if _, upscaleRequired := RequestedImageUpscaleScale(job.ImageSize); upscaleRequired {
-				mimeType, extension, imageCount, _, upscaleErr := upscaleBatchImageResultLine(
+				output, upscaleErr := upscaleBatchImageResultLine(
 					upscaleCtx, i.Config, i.Upscaler, i.UpscaleStore, writeFencer, job, []byte(line),
 					thumbnails,
 				)
@@ -480,15 +481,17 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 				} else {
 					item.Status = BatchImageItemStatusSuccess
 					item.ProviderSourceObject = batchImageOptionalStringPtr(batchImageUpscaleMarker)
-					item.MimeType = batchImageOptionalStringPtr(mimeType)
-					item.FileExtension = batchImageOptionalStringPtr(extension)
-					item.ImageCount = imageCount
+					item.MimeType = batchImageOptionalStringPtr(output.mimeType)
+					item.FileExtension = batchImageOptionalStringPtr(output.extension)
+					item.ImageCount = output.imageCount
+					item.PreviewSize = output.previewSize
 					result.SuccessCount++
 				}
 			} else {
 				item.Status = BatchImageItemStatusSuccess
 				item.MimeType = batchImageOptionalStringPtr(parsed.MimeType)
 				item.FileExtension = batchImageOptionalStringPtr(parsed.FileExtension)
+				item.PreviewSize = parsed.PreviewSize
 				thumbnails.persistLine(ctx, job, []byte(line))
 				result.SuccessCount++
 			}
@@ -590,6 +593,7 @@ type ParsedBatchImageResult struct {
 	MimeType      string
 	FileExtension string
 	ImageCount    int
+	PreviewSize   *BatchImagePreviewSize
 
 	ErrorCode    string
 	ErrorMessage string
@@ -617,12 +621,13 @@ func ParseBatchImageResultLine(line []byte, lineNumber int) (*ParsedBatchImageRe
 		CustomID:         customID,
 		SourceLineNumber: lineNumber,
 	}
-	imageCount, mimeType := batchImageFindImageParts(obj)
+	imageCount, mimeType, previewSize := batchImageFindImageParts(obj)
 	if imageCount > 0 {
 		parsed.Status = BatchImageParsedStatusSucceeded
 		parsed.ImageCount = imageCount
 		parsed.MimeType = mimeType
 		parsed.FileExtension = batchImageFileExtension(mimeType)
+		parsed.PreviewSize = previewSize
 		return parsed, nil
 	}
 
@@ -646,21 +651,22 @@ func ParseBatchImageResultLine(line []byte, lineNumber int) (*ParsedBatchImageRe
 	return parsed, nil
 }
 
-func batchImageFindImageParts(obj map[string]any) (int, string) {
-	count, mimeType := batchImageFindImagePartsInCandidates(batchImageNestedAny(obj, "response", "candidates"))
+func batchImageFindImageParts(obj map[string]any) (int, string, *BatchImagePreviewSize) {
+	count, mimeType, previewSize := batchImageFindImagePartsInCandidates(batchImageNestedAny(obj, "response", "candidates"))
 	if count > 0 {
-		return count, mimeType
+		return count, mimeType, previewSize
 	}
 	return batchImageFindImagePartsInCandidates(obj["candidates"])
 }
 
-func batchImageFindImagePartsInCandidates(raw any) (int, string) {
+func batchImageFindImagePartsInCandidates(raw any) (int, string, *BatchImagePreviewSize) {
 	candidates, ok := raw.([]any)
 	if !ok {
-		return 0, ""
+		return 0, "", nil
 	}
 	count := 0
 	firstMime := ""
+	var previewSize *BatchImagePreviewSize
 	for _, candidateRaw := range candidates {
 		candidate, ok := candidateRaw.(map[string]any)
 		if !ok {
@@ -688,10 +694,11 @@ func batchImageFindImagePartsInCandidates(raw any) (int, string) {
 			count++
 			if firstMime == "" {
 				firstMime = strings.TrimSpace(mime)
+				previewSize = readBatchImagePreviewSize(base64.NewDecoder(base64.StdEncoding, strings.NewReader(data)))
 			}
 		}
 	}
-	return count, firstMime
+	return count, firstMime, previewSize
 }
 
 func batchImageFailureFromProviderFields(obj map[string]any) (string, string, bool) {

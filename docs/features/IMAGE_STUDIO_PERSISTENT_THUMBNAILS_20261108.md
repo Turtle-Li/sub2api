@@ -12,6 +12,10 @@ do not create a second generation task table or derive history from usage logs.
 Store a versioned 480px JPEG cover per item in the existing private delivery
 object store. Job/custom ID determine its exact key; completed results are immutable.
 The database retains lifecycle and backfill retry fences, not image bytes.
+The November 20 metadata-first gallery adds optional first-output dimensions
+to existing item rows. After authorization, legacy thumbnail reads can fill
+that metadata from the same JPEG while honoring the job deletion fence; no
+additional object fetch is needed.
 
 The fixed reference is VSO `4edef85ab3716fd43989b4a49561a148ba500d93`:
 `backend/src/main/java/com/vso/controlplane/service/ImageVariantStorageService.java`

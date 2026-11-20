@@ -10,9 +10,12 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"io"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/sync/singleflight"
 )
@@ -21,6 +24,7 @@ const studioThumbnailEdge = 480
 const studioThumbnailMaxBytes = 32 << 20
 const studioThumbnailCacheBytes = 32 << 20
 const studioThumbnailCacheEntries = 256
+const studioThumbnailMaxPixels = 40_000_000
 
 // Bound source decoding across users as well as the per-user download limiter.
 var studioThumbnailDecoders = make(chan struct{}, 2)
@@ -136,6 +140,16 @@ func (s *BatchImageDownloadService) ItemThumbnail(ctx context.Context, owner Bat
 		if _, err := previews.Repo.BatchImageThumbnailRetryAt(ctx, batchID); err != nil {
 			return nil, err
 		}
+		if item.PreviewSize == nil {
+			if size := readBatchImagePreviewSize(bytes.NewReader(thumbnail)); size != nil {
+				metadataCtx, stop := context.WithTimeout(ctx, time.Second)
+				err := previews.Repo.FillBatchImagePreviewSize(metadataCtx, batchID, customID, *size)
+				stop()
+				if err != nil {
+					logger.L().Warn("image_studio.preview_size_write_failed", zap.String("batch_id", batchID))
+				}
+			}
+		}
 		s.thumbnails.put(key, thumbnail)
 		return thumbnail, nil
 	})
@@ -165,12 +179,21 @@ func (s *BatchImageDownloadService) thumbnailJob(ctx context.Context, owner Batc
 	return job, nil
 }
 
+// Read a bounded header, not the pixels. Unsupported media has no layout hint.
+func readBatchImagePreviewSize(r io.Reader) *BatchImagePreviewSize {
+	cfg, _, err := image.DecodeConfig(io.LimitReader(r, 1<<20))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width) > studioThumbnailMaxPixels/int64(cfg.Height) {
+		return nil
+	}
+	return &BatchImagePreviewSize{Width: cfg.Width, Height: cfg.Height}
+}
+
 func encodeStudioThumbnail(data []byte) ([]byte, error) {
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
-	if config.Width <= 0 || config.Height <= 0 || int64(config.Width) > 40_000_000/int64(config.Height) {
+	if config.Width <= 0 || config.Height <= 0 || int64(config.Width) > studioThumbnailMaxPixels/int64(config.Height) {
 		return nil, fmt.Errorf("image thumbnail source exceeds pixel limit")
 	}
 	source, _, err := image.Decode(bytes.NewReader(data))

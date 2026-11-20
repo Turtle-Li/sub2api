@@ -1,6 +1,7 @@
 import type { BatchImageJob, BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
 import { studioAPI, type StudioTask, type GalleryFilters } from './api'
 import { cachedStudioModels, cacheStudioModels, forgetStudioModels } from './cache'
+import { createThumbnailLoader } from './thumbnailLoader'
 
 export const modelIdentity = (model: Pick<BatchImageModel, 'provider' | 'id'>) => `${model.provider}:${model.id}`
 type Client = ReturnType<typeof studioAPI>
@@ -14,10 +15,7 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
   const owners = new Map<string, number>()
   const attempts = new Map<string, number>()
   let imageQueue: Promise<void> = Promise.resolve()
-  let activeThumbnails = 0
-  const thumbnailWaiters: (() => void)[] = []
-  const thumbnails = new Map<string, Blob>()
-  let thumbnailBytes = 0
+  const previews = createThumbnailLoader((task, requestSignal) => owned(task.job).thumbnail(task, requestSignal), signal)
   let directory: Promise<{ key: number; models: BatchImageModel[] }[]> | undefined
   let directoryVersion = 0
   const displayed = new Map([...clients.keys()].filter(key => modelKeys.has(key)).map(key => [key, cachedStudioModels(access?.userId, key) || []]))
@@ -29,7 +27,6 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
   }
   function publish() { for (const listener of listeners) listener(visibleModels()) }
   let warnings: string[] = []
-  let historyWarnings: string[] = []
   async function discover() {
     if (!directory) directory = (async () => {
       const version = directoryVersion
@@ -82,7 +79,7 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
   return {
     refreshDirectory: () => { directoryVersion++; directory = undefined },
     cachedModels: visibleModels,
-    warnings: () => [...new Set([...warnings, ...historyWarnings])],
+    warnings: () => [...new Set(warnings)],
     async canContinue(task: StudioTask, model: BatchImageModel) {
       try { await route(model, task.job.parent_batch_id || task.job.id); return true } catch { return false }
     },
@@ -94,10 +91,11 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
     async tasks(cursor = '', filters?: GalleryFilters, onUpdate?: (tasks: StudioTask[]) => void) {
       // History does not wait for every model catalogue to finish.
       const entries = [...clients.entries()].filter(([key]) => historyKeys.has(key))
-      historyWarnings = []
       const offsets: Record<string, string | null> = cursor ? JSON.parse(cursor) : {}
       const pages: Awaited<ReturnType<Client['tasks']>>[] = []
       const next: Record<string, string | null> = {}
+      const denied = new Set<number>()
+      let incomplete = false
       for (let start = 0; start < entries.length; start += 6) {
         await Promise.all(entries.slice(start, start + 6).map(async ([key, client]) => {
           if (cursor && offsets[key] === null) { next[key] = null; return }
@@ -111,11 +109,13 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
             if (signal.aborted) throw error
             const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined
             next[key] = status === 403 ? null : offsets[key] || ''
-            if (status !== 403) historyWarnings.push('部分作品暂时无法读取，请刷新重试。')
+            if (status === 403) denied.add(key)
+            else incomplete = true
           }
         }))
       }
-      return { tasks: pages.flatMap(page => page.tasks), itemContinuations: pages.flatMap(page => page.itemContinuations), nextCursor: Object.values(next).some(value => value !== null) ? JSON.stringify(next) : null }
+      const deniedBatchIds = denied.size ? new Set([...owners].filter(([, key]) => denied.has(key)).map(([id]) => id)) : new Set<string>()
+      return { tasks: pages.flatMap(page => page.tasks), itemContinuations: pages.flatMap(page => page.itemContinuations), nextCursor: Object.values(next).some(value => value !== null) ? JSON.stringify(next) : null, incomplete, deniedBatchIds }
     },
     async items(job: BatchImageJob, cursor = 0) { return owned(job).items(job, cursor) },
     async refreshPending(tasks: StudioTask[]) {
@@ -148,39 +148,7 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
     archivePreview(task: StudioTask, requestSignal: AbortSignal) {
       return owned(task.job).archivePreview(task, requestSignal)
     },
-    async thumbnail(task: StudioTask, requestSignal: AbortSignal = signal) {
-      signal.throwIfAborted()
-      requestSignal.throwIfAborted()
-      const cached = thumbnails.get(task.id)
-      if (cached) {
-        thumbnails.delete(task.id); thumbnails.set(task.id, cached)
-        return cached
-      }
-      // Preview preparation never queues ahead of explicit originals or edits.
-      if (activeThumbnails >= 3) await new Promise<void>(resolve => thumbnailWaiters.push(resolve))
-      else activeThumbnails++
-      try {
-        signal.throwIfAborted()
-        requestSignal.throwIfAborted()
-        const ready = thumbnails.get(task.id)
-        if (ready) return ready
-        const blob = await owned(task.job).thumbnail(task, requestSignal)
-        const completed = thumbnails.get(task.id)
-        if (completed) return completed
-        if (blob.size <= 16 * 1024 * 1024) {
-          thumbnails.set(task.id, blob); thumbnailBytes += blob.size
-          for (const [id, previous] of thumbnails) {
-            if (thumbnails.size <= 64 && thumbnailBytes <= 16 * 1024 * 1024) break
-            thumbnails.delete(id); thumbnailBytes -= previous.size
-          }
-        }
-        return blob
-      } finally {
-        const next = thumbnailWaiters.shift()
-        if (next) next()
-        else activeThumbnails--
-      }
-    },
+    previews,
     async cancel(task: StudioTask) { return owned(task.job).cancel(task) },
   }
 }

@@ -127,7 +127,7 @@ acceptance are documented separately in `IMAGE_STUDIO_REDESIGN_20261108.md`.
 
 `GET /batches/gallery` returns raw `{data:[{job,item}],next_cursor?}`. Defaults
 to 24 items, maximum 50; query parameters are `limit`, `cursor`, `status`
-(`all|pending|completed|failed`), literal substring `q` (max240 bytes), and
+(`all|current|pending|completed|failed|expired`), literal substring `q` (max240 bytes), and
 optional `root` batch ID (max200 bytes, root plus direct children). The cursor
 is a positive `job-row-id:item-row-id` descending boundary. It conveys no
 authorization: every query still binds the session owner and selected key.
@@ -136,6 +136,24 @@ a frozen snapshot. No object reads occur in the metadata query. Existing
 `/batches` and `/items` responses remain compatible. Repeated `custom_id`
 parameters on `/items` (max100) let polling update only loaded items from very
 large batches; ownership still uses the existing ListItems service.
+
+`all` retains the full history, including for continued edits. The main Studio
+gallery uses `current`, which excludes indexed images and completed archives whose
+deadline has elapsed or whose output has been deleted. The `expired` filter reads
+exactly those records. Filtering happens before the cursor page limit, using the
+database clock and the existing owner, key or wallet, root, and search constraints.
+Failed items with no output stay in ordinary history; live `result_available`
+archives still open on demand. Expired records display text and task details only.
+Neither filter deletes records or changes output retention.
+
+The studio requests 24 items per page and history scope. Migration 281 adds nullable
+preview dimensions to existing item rows. A successful item may include
+`preview_size: {"width":768,"height":1024}` for its first output. Indexing reads
+the existing image header (or uses the final upscaled dimensions); an authorized
+thumbnail read can fill missing legacy dimensions from the JPEG it already has.
+The list never opens a thumbnail, original, or archive to populate this field.
+Missing values, including archives that have not been opened, are not inferred
+from the requested size or aspect ratio and do not block scrolling or pagination.
 
 Models now include optional `prices: {"1K":{"min":number,"max":number},...}`
 for supported sizes. These reuse submission pricing, currency conversion,
@@ -150,8 +168,11 @@ retention gates. It emits a white-composited JPEG, quality80, long edge at most
 Response caching is private for 300s, varying on Authorization and X-API-Key-ID.
 Server cache: 32MiB/256 entries, coalesced reads, owner and output rechecked
 on each actual request. Source decoding is bounded by32MiB/40MP and two
-concurrent decodes. The browser cache is scoped to the mounted user's workspace,
-64 blobs/16MiB. New successful items persist private cloud previews while their
+concurrent decodes. The browser keeps stable object URLs in a memory-only cache
+scoped to the mounted user's workspace, up to 192 entries/16MiB. It prioritizes
+visible cards over nearby prefetches, with four in-flight reads, and skips queued
+reads for cards that leave the prefetch area. Admitted reads can finish during
+scrolling. New successful items persist private cloud previews while their
 result bytes are available; 2K/4K previews use final pixels. A process-cold read
 opens the stored JPEG, without a provider account or original result read.
 Only historical/missing previews trigger a shared-lease batch backfill, reusing

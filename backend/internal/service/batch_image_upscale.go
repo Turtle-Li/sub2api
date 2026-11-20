@@ -132,6 +132,13 @@ func deleteBatchImageUpscaleKeys(ctx context.Context, store BatchImageUpscaleObj
 	return ErrBatchImageUpscaleCleanupFailed.WithCause(lastErr)
 }
 
+type batchImageUpscaledOutput struct {
+	mimeType    string
+	extension   string
+	imageCount  int
+	previewSize *BatchImagePreviewSize
+}
+
 func upscaleBatchImageResultLine(
 	ctx context.Context,
 	cfg *config.Config,
@@ -141,28 +148,29 @@ func upscaleBatchImageResultLine(
 	job *BatchImageJob,
 	line []byte,
 	thumbnails ...*batchImageThumbnailCapture,
-) (mimeType, extension string, imageCount int, storedKeys []string, err error) {
+) (*batchImageUpscaledOutput, error) {
 	if job == nil || upscaler == nil || !upscaler.Active() || store == nil || writeFencer == nil {
-		return "", "", 0, nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
+		return nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
 	}
 	if _, required := RequestedImageUpscaleScale(job.ImageSize); !required {
-		return "", "", 0, nil, errors.New("batch item does not require upscale")
+		return nil, errors.New("batch item does not require upscale")
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", "", 0, nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
+		return nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
 	}
 	parts, err := ExtractBatchImagePartsFromResultLine(line)
 	if err != nil || strings.TrimSpace(parts.CustomID) == "" {
-		return "", "", 0, nil, imageUpscaleError("SOURCE_RESULT_INVALID", 0, false, err)
+		return nil, imageUpscaleError("SOURCE_RESULT_INVALID", 0, false, err)
 	}
 	if len(parts.Images) != batchImageUpscaleImagesPerLine {
-		return "", "", 0, nil, imageUpscaleError(
+		return nil, imageUpscaleError(
 			"SOURCE_RESULT_INVALID",
 			0,
 			false,
 			fmt.Errorf("result line contains %d images, expected %d", len(parts.Images), batchImageUpscaleImagesPerLine),
 		)
 	}
+	output := &batchImageUpscaledOutput{}
 	for index, imagePart := range parts.Images {
 		normalized, prepareErr := prepareUpscaleSourceBase64(imagePart.Base64Data, imageUpscaleMaxSourceBytes)
 		if prepareErr != nil {
@@ -217,17 +225,17 @@ func upscaleBatchImageResultLine(
 			err = imageUpscaleError("STORE_FAILED", 0, true, keyErr)
 			break
 		}
-		storedKeys = append(storedKeys, key)
-		if mimeType == "" {
-			mimeType = result.MimeType
-			extension = ext
+		if index == 0 {
+			output.mimeType = result.MimeType
+			output.extension = ext
+			output.previewSize = &BatchImagePreviewSize{Width: result.Width, Height: result.Height}
 		}
-		imageCount++
+		output.imageCount++
 	}
 	if err != nil {
-		return "", "", 0, nil, err
+		return nil, err
 	}
-	return mimeType, extension, imageCount, storedKeys, nil
+	return output, nil
 }
 
 func batchImageUpscaleFailure(err error) (string, string) {

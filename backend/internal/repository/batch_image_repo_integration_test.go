@@ -371,6 +371,48 @@ func TestBatchImageRepository_ReplaceBatchImageItemsForJob(t *testing.T) {
 	require.Equal(t, 1, job.FailCount)
 }
 
+func TestImageStudioPreviewSizeRoundTripsAndOnlyFillsLiveLegacyMetadata(t *testing.T) {
+	ctx := t.Context()
+	repo := newBatchImageRepositoryWithSQL(testTx(t))
+	batchID := batchImageTestID(t, "preview-metadata")
+	userID, keyID := int64(1001), int64(2001)
+	measured := service.BatchImagePreviewSize{Width: 768, Height: 1024}
+	legacyJPEG := service.BatchImagePreviewSize{Width: 360, Height: 480}
+	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+		BatchID: batchID, UserID: userID, APIKeyID: &keyID, Provider: service.BatchImageProviderGeminiAPI,
+		Model: "gemini-2.5-flash-image", ImageSize: "1K", ItemCount: 3,
+	})
+	require.NoError(t, err)
+	for _, status := range []string{service.BatchImageJobStatusSubmitted, service.BatchImageJobStatusIndexing} {
+		require.NoError(t, repo.TransitionBatchImageJobStatus(ctx, batchID, status, service.BatchImageTransitionOptions{}))
+	}
+	require.NoError(t, repo.ReplaceBatchImageItemsForJob(ctx, batchID, []service.CreateBatchImageItemParams{
+		{CustomID: "measured", Status: service.BatchImageItemStatusSuccess, ImageCount: 1, PreviewSize: &measured},
+		{CustomID: "legacy", Status: service.BatchImageItemStatusSuccess, ImageCount: 1},
+		{CustomID: "unread", Status: service.BatchImageItemStatusSuccess, ImageCount: 1},
+	}, service.BatchImageCounts{SuccessCount: 3}))
+	for _, status := range []string{service.BatchImageJobStatusSettling, service.BatchImageJobStatusCompleted} {
+		require.NoError(t, repo.TransitionBatchImageJobStatus(ctx, batchID, status, service.BatchImageTransitionOptions{}))
+	}
+	require.NoError(t, repo.FillBatchImagePreviewSize(ctx, batchID, "legacy", legacyJPEG))
+	require.NoError(t, repo.FillBatchImagePreviewSize(ctx, batchID, "measured", legacyJPEG))
+	require.NoError(t, repo.DisableBatchImageThumbnails(ctx, batchID))
+	require.NoError(t, repo.FillBatchImagePreviewSize(ctx, batchID, "unread", legacyJPEG))
+
+	query := service.BatchImageGalleryQuery{RootBatchID: batchID, Limit: 49}
+	rows, err := repo.ListBatchImageGalleryForOwner(ctx, userID, keyID, query)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	sizes := make(map[string]*service.BatchImagePreviewSize)
+	for _, row := range rows {
+		sizes[row.Item.CustomID] = row.Item.PreviewSize
+	}
+	require.Equal(t, map[string]*service.BatchImagePreviewSize{"measured": &measured, "legacy": &legacyJPEG, "unread": nil}, sizes)
+	otherOwner, err := repo.ListBatchImageGalleryForOwner(ctx, userID, keyID+1, query)
+	require.NoError(t, err)
+	require.Empty(t, otherOwner)
+}
+
 func TestBatchImageRepository_MarkBatchImageJobSettled(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
