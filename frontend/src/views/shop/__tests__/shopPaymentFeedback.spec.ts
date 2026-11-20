@@ -43,13 +43,18 @@ describe('shop checkout feedback', () => {
     expect(wrapper.findComponent(PaymentPanel).exists()).toBe(true)
   })
   it('keeps a successfully created checkout usable when optional recovery storage is full', async () => {
+    // Given: jsdom looks up the Storage method on its prototype, not the instance.
     const wrapper = mount(ShopProductView, options)
-    const setItem = window.localStorage.setItem.bind(window.localStorage)
-    const write = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
-      if (key === PAYMENT_RECOVERY_STORAGE_KEY) throw new DOMException('full', 'QuotaExceededError')
-      return setItem(key, value)
+    const setItem = window.Storage.prototype.setItem
+    const write = vi.spyOn(window.Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (this === window.localStorage && key === PAYMENT_RECOVERY_STORAGE_KEY) {
+        throw new DOMException('full', 'QuotaExceededError')
+      }
+      setItem.call(this, key, value)
     })
+    // When: the checkout is created and saving its recovery token fails.
     await openCheckout(wrapper)
+    // Then: the existing checkout remains usable without a recoverable redirect.
     expect(createOrder).toHaveBeenCalledTimes(1)
     expect(write).toHaveBeenCalledWith(PAYMENT_RECOVERY_STORAGE_KEY, expect.any(String))
     expect(wrapper.getComponent(PaymentPanel).props('allowTopLevelRedirect')).toBe(false)
