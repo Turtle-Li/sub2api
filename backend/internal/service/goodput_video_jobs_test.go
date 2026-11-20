@@ -15,7 +15,7 @@ import (
 )
 
 type goodPutReconcileStore struct {
-	UsageBillingRepository
+	UsageBillingBatchRepository
 	GoodPutVideoJobRepository
 	job    *GoodPutVideoJob
 	states []string
@@ -55,11 +55,13 @@ func TestGoodPutWorkerSettlesWithoutClientRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			job := &GoodPutVideoJob{ID: "test-job", AccountID: 42, NativeID: "video_test", Seconds: 5, CreatedAt: time.Now()}
 			store := &goodPutReconcileStore{job: job}
+			lanes := NewUsageBillingLaneCombiner(store)
+			t.Cleanup(lanes.Stop)
 			account := &Account{ID: job.AccountID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{
 				"api_key": "test", "base_url": goodPutVideoOrigin + "/v1", "model_mapping": map[string]any{GoodPutH3Model: GoodPutH3Model},
 			}}
 			calls := 0
-			svc := &OpenAIGatewayService{usageBillingRepo: store, cfg: &config.Config{},
+			svc := &OpenAIGatewayService{usageBillingRepo: ProvideUsageBillingRepository(lanes), cfg: &config.Config{},
 				accountRepo:        &openAIRecordUsageAccountRepoStub{account: account},
 				concurrencyService: NewConcurrencyService(&stubConcurrencyCacheForTest{acquireResult: true}),
 				httpUpstream: goodPutReconcileTransport{call: func(req *http.Request, accountID int64) (*http.Response, error) {
@@ -70,6 +72,7 @@ func TestGoodPutWorkerSettlesWithoutClientRead(t *testing.T) {
 					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.response))}, nil
 				}},
 			}
+			require.Same(t, store, svc.goodPutVideoJobs(), "the production billing provider must preserve the durable repository")
 			svc.reconcileGoodPutVideo(t.Context())
 			require.Equal(t, 1, calls)
 			if tc.state == "" {

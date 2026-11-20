@@ -40,6 +40,9 @@ type GoodPutVideoJobRepository interface {
 }
 
 func (s *OpenAIGatewayService) goodPutVideoJobs() GoodPutVideoJobRepository {
+	if lanes, ok := s.usageBillingRepo.(*UsageBillingLaneCombiner); ok {
+		return lanes.goodPutVideoJobs()
+	}
 	repo, _ := s.usageBillingRepo.(GoodPutVideoJobRepository)
 	return repo
 }
