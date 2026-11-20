@@ -41,6 +41,10 @@ type BatchImageItem struct {
 	FileExtension *string `json:"file_extension,omitempty"`
 	// ImageCount holds the value of the "image_count" field.
 	ImageCount int `json:"image_count,omitempty"`
+	// PreviewWidth holds the value of the "preview_width" field.
+	PreviewWidth *int `json:"preview_width,omitempty"`
+	// PreviewHeight holds the value of the "preview_height" field.
+	PreviewHeight *int `json:"preview_height,omitempty"`
 	// ErrorCode holds the value of the "error_code" field.
 	ErrorCode *string `json:"error_code,omitempty"`
 	// ErrorMessage holds the value of the "error_message" field.
@@ -61,7 +65,7 @@ func (*BatchImageItem) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case batchimageitem.FieldBilledAmount:
 			values[i] = new(sql.NullFloat64)
-		case batchimageitem.FieldID, batchimageitem.FieldSourceLineNumber, batchimageitem.FieldSourceByteOffset, batchimageitem.FieldSourceByteLength, batchimageitem.FieldImageCount:
+		case batchimageitem.FieldID, batchimageitem.FieldSourceLineNumber, batchimageitem.FieldSourceByteOffset, batchimageitem.FieldSourceByteLength, batchimageitem.FieldImageCount, batchimageitem.FieldPreviewWidth, batchimageitem.FieldPreviewHeight:
 			values[i] = new(sql.NullInt64)
 		case batchimageitem.FieldJobID, batchimageitem.FieldCustomID, batchimageitem.FieldStatus, batchimageitem.FieldRequestHash, batchimageitem.FieldPromptPreview, batchimageitem.FieldProviderSourceObject, batchimageitem.FieldMimeType, batchimageitem.FieldFileExtension, batchimageitem.FieldErrorCode, batchimageitem.FieldErrorMessage:
 			values[i] = new(sql.NullString)
@@ -167,6 +171,20 @@ func (_m *BatchImageItem) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field image_count", values[i])
 			} else if value.Valid {
 				_m.ImageCount = int(value.Int64)
+			}
+		case batchimageitem.FieldPreviewWidth:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field preview_width", values[i])
+			} else if value.Valid {
+				_m.PreviewWidth = new(int)
+				*_m.PreviewWidth = int(value.Int64)
+			}
+		case batchimageitem.FieldPreviewHeight:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field preview_height", values[i])
+			} else if value.Valid {
+				_m.PreviewHeight = new(int)
+				*_m.PreviewHeight = int(value.Int64)
 			}
 		case batchimageitem.FieldErrorCode:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -289,6 +307,16 @@ func (_m *BatchImageItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("image_count=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ImageCount))
+	builder.WriteString(", ")
+	if v := _m.PreviewWidth; v != nil {
+		builder.WriteString("preview_width=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.PreviewHeight; v != nil {
+		builder.WriteString("preview_height=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	if v := _m.ErrorCode; v != nil {
 		builder.WriteString("error_code=")

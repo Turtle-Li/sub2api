@@ -37,6 +37,10 @@ const (
 	FieldFileExtension = "file_extension"
 	// FieldImageCount holds the string denoting the image_count field in the database.
 	FieldImageCount = "image_count"
+	// FieldPreviewWidth holds the string denoting the preview_width field in the database.
+	FieldPreviewWidth = "preview_width"
+	// FieldPreviewHeight holds the string denoting the preview_height field in the database.
+	FieldPreviewHeight = "preview_height"
 	// FieldErrorCode holds the string denoting the error_code field in the database.
 	FieldErrorCode = "error_code"
 	// FieldErrorMessage holds the string denoting the error_message field in the database.
@@ -66,6 +70,8 @@ var Columns = []string{
 	FieldMimeType,
 	FieldFileExtension,
 	FieldImageCount,
+	FieldPreviewWidth,
+	FieldPreviewHeight,
 	FieldErrorCode,
 	FieldErrorMessage,
 	FieldBilledAmount,
@@ -172,6 +178,16 @@ func ByFileExtension(opts ...sql.OrderTermOption) OrderOption {
 // ByImageCount orders the results by the image_count field.
 func ByImageCount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageCount, opts...).ToFunc()
+}
+
+// ByPreviewWidth orders the results by the preview_width field.
+func ByPreviewWidth(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPreviewWidth, opts...).ToFunc()
+}
+
+// ByPreviewHeight orders the results by the preview_height field.
+func ByPreviewHeight(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPreviewHeight, opts...).ToFunc()
 }
 
 // ByErrorCode orders the results by the error_code field.

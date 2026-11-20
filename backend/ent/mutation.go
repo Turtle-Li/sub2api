@@ -10420,6 +10420,10 @@ type BatchImageItemMutation struct {
 	file_extension         *string
 	image_count            *int
 	addimage_count         *int
+	preview_width          *int
+	addpreview_width       *int
+	preview_height         *int
+	addpreview_height      *int
 	error_code             *string
 	error_message          *string
 	billed_amount          *float64
@@ -11149,6 +11153,146 @@ func (m *BatchImageItemMutation) ResetImageCount() {
 	m.addimage_count = nil
 }
 
+// SetPreviewWidth sets the "preview_width" field.
+func (m *BatchImageItemMutation) SetPreviewWidth(i int) {
+	m.preview_width = &i
+	m.addpreview_width = nil
+}
+
+// PreviewWidth returns the value of the "preview_width" field in the mutation.
+func (m *BatchImageItemMutation) PreviewWidth() (r int, exists bool) {
+	v := m.preview_width
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPreviewWidth returns the old "preview_width" field's value of the BatchImageItem entity.
+// If the BatchImageItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BatchImageItemMutation) OldPreviewWidth(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPreviewWidth is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPreviewWidth requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPreviewWidth: %w", err)
+	}
+	return oldValue.PreviewWidth, nil
+}
+
+// AddPreviewWidth adds i to the "preview_width" field.
+func (m *BatchImageItemMutation) AddPreviewWidth(i int) {
+	if m.addpreview_width != nil {
+		*m.addpreview_width += i
+	} else {
+		m.addpreview_width = &i
+	}
+}
+
+// AddedPreviewWidth returns the value that was added to the "preview_width" field in this mutation.
+func (m *BatchImageItemMutation) AddedPreviewWidth() (r int, exists bool) {
+	v := m.addpreview_width
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearPreviewWidth clears the value of the "preview_width" field.
+func (m *BatchImageItemMutation) ClearPreviewWidth() {
+	m.preview_width = nil
+	m.addpreview_width = nil
+	m.clearedFields[batchimageitem.FieldPreviewWidth] = struct{}{}
+}
+
+// PreviewWidthCleared returns if the "preview_width" field was cleared in this mutation.
+func (m *BatchImageItemMutation) PreviewWidthCleared() bool {
+	_, ok := m.clearedFields[batchimageitem.FieldPreviewWidth]
+	return ok
+}
+
+// ResetPreviewWidth resets all changes to the "preview_width" field.
+func (m *BatchImageItemMutation) ResetPreviewWidth() {
+	m.preview_width = nil
+	m.addpreview_width = nil
+	delete(m.clearedFields, batchimageitem.FieldPreviewWidth)
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (m *BatchImageItemMutation) SetPreviewHeight(i int) {
+	m.preview_height = &i
+	m.addpreview_height = nil
+}
+
+// PreviewHeight returns the value of the "preview_height" field in the mutation.
+func (m *BatchImageItemMutation) PreviewHeight() (r int, exists bool) {
+	v := m.preview_height
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPreviewHeight returns the old "preview_height" field's value of the BatchImageItem entity.
+// If the BatchImageItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BatchImageItemMutation) OldPreviewHeight(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPreviewHeight is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPreviewHeight requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPreviewHeight: %w", err)
+	}
+	return oldValue.PreviewHeight, nil
+}
+
+// AddPreviewHeight adds i to the "preview_height" field.
+func (m *BatchImageItemMutation) AddPreviewHeight(i int) {
+	if m.addpreview_height != nil {
+		*m.addpreview_height += i
+	} else {
+		m.addpreview_height = &i
+	}
+}
+
+// AddedPreviewHeight returns the value that was added to the "preview_height" field in this mutation.
+func (m *BatchImageItemMutation) AddedPreviewHeight() (r int, exists bool) {
+	v := m.addpreview_height
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearPreviewHeight clears the value of the "preview_height" field.
+func (m *BatchImageItemMutation) ClearPreviewHeight() {
+	m.preview_height = nil
+	m.addpreview_height = nil
+	m.clearedFields[batchimageitem.FieldPreviewHeight] = struct{}{}
+}
+
+// PreviewHeightCleared returns if the "preview_height" field was cleared in this mutation.
+func (m *BatchImageItemMutation) PreviewHeightCleared() bool {
+	_, ok := m.clearedFields[batchimageitem.FieldPreviewHeight]
+	return ok
+}
+
+// ResetPreviewHeight resets all changes to the "preview_height" field.
+func (m *BatchImageItemMutation) ResetPreviewHeight() {
+	m.preview_height = nil
+	m.addpreview_height = nil
+	delete(m.clearedFields, batchimageitem.FieldPreviewHeight)
+}
+
 // SetErrorCode sets the "error_code" field.
 func (m *BatchImageItemMutation) SetErrorCode(s string) {
 	m.error_code = &s
@@ -11436,7 +11580,7 @@ func (m *BatchImageItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BatchImageItemMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 19)
 	if m.job_id != nil {
 		fields = append(fields, batchimageitem.FieldJobID)
 	}
@@ -11472,6 +11616,12 @@ func (m *BatchImageItemMutation) Fields() []string {
 	}
 	if m.image_count != nil {
 		fields = append(fields, batchimageitem.FieldImageCount)
+	}
+	if m.preview_width != nil {
+		fields = append(fields, batchimageitem.FieldPreviewWidth)
+	}
+	if m.preview_height != nil {
+		fields = append(fields, batchimageitem.FieldPreviewHeight)
 	}
 	if m.error_code != nil {
 		fields = append(fields, batchimageitem.FieldErrorCode)
@@ -11520,6 +11670,10 @@ func (m *BatchImageItemMutation) Field(name string) (ent.Value, bool) {
 		return m.FileExtension()
 	case batchimageitem.FieldImageCount:
 		return m.ImageCount()
+	case batchimageitem.FieldPreviewWidth:
+		return m.PreviewWidth()
+	case batchimageitem.FieldPreviewHeight:
+		return m.PreviewHeight()
 	case batchimageitem.FieldErrorCode:
 		return m.ErrorCode()
 	case batchimageitem.FieldErrorMessage:
@@ -11563,6 +11717,10 @@ func (m *BatchImageItemMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldFileExtension(ctx)
 	case batchimageitem.FieldImageCount:
 		return m.OldImageCount(ctx)
+	case batchimageitem.FieldPreviewWidth:
+		return m.OldPreviewWidth(ctx)
+	case batchimageitem.FieldPreviewHeight:
+		return m.OldPreviewHeight(ctx)
 	case batchimageitem.FieldErrorCode:
 		return m.OldErrorCode(ctx)
 	case batchimageitem.FieldErrorMessage:
@@ -11666,6 +11824,20 @@ func (m *BatchImageItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetImageCount(v)
 		return nil
+	case batchimageitem.FieldPreviewWidth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPreviewWidth(v)
+		return nil
+	case batchimageitem.FieldPreviewHeight:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPreviewHeight(v)
+		return nil
 	case batchimageitem.FieldErrorCode:
 		v, ok := value.(string)
 		if !ok {
@@ -11721,6 +11893,12 @@ func (m *BatchImageItemMutation) AddedFields() []string {
 	if m.addimage_count != nil {
 		fields = append(fields, batchimageitem.FieldImageCount)
 	}
+	if m.addpreview_width != nil {
+		fields = append(fields, batchimageitem.FieldPreviewWidth)
+	}
+	if m.addpreview_height != nil {
+		fields = append(fields, batchimageitem.FieldPreviewHeight)
+	}
 	if m.addbilled_amount != nil {
 		fields = append(fields, batchimageitem.FieldBilledAmount)
 	}
@@ -11740,6 +11918,10 @@ func (m *BatchImageItemMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedSourceByteLength()
 	case batchimageitem.FieldImageCount:
 		return m.AddedImageCount()
+	case batchimageitem.FieldPreviewWidth:
+		return m.AddedPreviewWidth()
+	case batchimageitem.FieldPreviewHeight:
+		return m.AddedPreviewHeight()
 	case batchimageitem.FieldBilledAmount:
 		return m.AddedBilledAmount()
 	}
@@ -11779,6 +11961,20 @@ func (m *BatchImageItemMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddImageCount(v)
 		return nil
+	case batchimageitem.FieldPreviewWidth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPreviewWidth(v)
+		return nil
+	case batchimageitem.FieldPreviewHeight:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPreviewHeight(v)
+		return nil
 	case batchimageitem.FieldBilledAmount:
 		v, ok := value.(float64)
 		if !ok {
@@ -11817,6 +12013,12 @@ func (m *BatchImageItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(batchimageitem.FieldFileExtension) {
 		fields = append(fields, batchimageitem.FieldFileExtension)
+	}
+	if m.FieldCleared(batchimageitem.FieldPreviewWidth) {
+		fields = append(fields, batchimageitem.FieldPreviewWidth)
+	}
+	if m.FieldCleared(batchimageitem.FieldPreviewHeight) {
+		fields = append(fields, batchimageitem.FieldPreviewHeight)
 	}
 	if m.FieldCleared(batchimageitem.FieldErrorCode) {
 		fields = append(fields, batchimageitem.FieldErrorCode)
@@ -11867,6 +12069,12 @@ func (m *BatchImageItemMutation) ClearField(name string) error {
 		return nil
 	case batchimageitem.FieldFileExtension:
 		m.ClearFileExtension()
+		return nil
+	case batchimageitem.FieldPreviewWidth:
+		m.ClearPreviewWidth()
+		return nil
+	case batchimageitem.FieldPreviewHeight:
+		m.ClearPreviewHeight()
 		return nil
 	case batchimageitem.FieldErrorCode:
 		m.ClearErrorCode()
@@ -11923,6 +12131,12 @@ func (m *BatchImageItemMutation) ResetField(name string) error {
 		return nil
 	case batchimageitem.FieldImageCount:
 		m.ResetImageCount()
+		return nil
+	case batchimageitem.FieldPreviewWidth:
+		m.ResetPreviewWidth()
+		return nil
+	case batchimageitem.FieldPreviewHeight:
+		m.ResetPreviewHeight()
 		return nil
 	case batchimageitem.FieldErrorCode:
 		m.ResetErrorCode()

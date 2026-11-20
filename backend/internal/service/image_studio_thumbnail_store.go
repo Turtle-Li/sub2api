@@ -23,6 +23,7 @@ type BatchImageThumbnailRepository interface {
 	BeginBatchImageThumbnailWrite(context.Context, string) (BatchImageUpscaleWritePermit, error)
 	DeferBatchImageThumbnailBackfill(context.Context, string, time.Time) error
 	DisableBatchImageThumbnails(context.Context, string) error
+	FillBatchImagePreviewSize(context.Context, string, string, BatchImagePreviewSize) error
 }
 
 type BatchImageThumbnailService struct {

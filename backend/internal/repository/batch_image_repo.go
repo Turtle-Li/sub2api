@@ -1026,23 +1026,28 @@ RETURNING `+batchImageJobColumns,
 }
 
 func createBatchImageItemWithSQL(ctx context.Context, sqlq batchImageSQLExecutor, params service.CreateBatchImageItemParams) (*service.BatchImageItem, error) {
+	var previewWidth, previewHeight *int
+	if params.PreviewSize != nil {
+		previewWidth, previewHeight = &params.PreviewSize.Width, &params.PreviewSize.Height
+	}
 	return scanBatchImageItem(sqlq.QueryRowContext(ctx, `
 INSERT INTO batch_image_items (
     job_id, custom_id, status, request_hash, prompt_preview, provider_source_object,
     source_line_number, source_byte_offset, source_byte_length,
     mime_type, file_extension, image_count,
-    error_code, error_message, billed_amount, indexed_at
+    error_code, error_message, billed_amount, indexed_at, preview_width, preview_height
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9,
     $10, $11, $12,
-    $13, $14, $15, $16
+    $13, $14, $15, $16, $17, $18
 )
 RETURNING `+batchImageItemColumns,
 		params.JobID, params.CustomID, params.Status, params.RequestHash, params.PromptPreview, params.ProviderSourceObject,
 		params.SourceLineNumber, params.SourceByteOffset, params.SourceByteLength,
 		params.MimeType, params.FileExtension, params.ImageCount,
 		params.ErrorCode, params.ErrorMessage, params.BilledAmount, params.IndexedAt,
+		previewWidth, previewHeight,
 	))
 }
 
@@ -1163,7 +1168,7 @@ id, job_id, custom_id, status, request_hash, prompt_preview, provider_source_obj
 source_line_number, source_byte_offset, source_byte_length,
 mime_type, file_extension, image_count,
 error_code, error_message, billed_amount,
-created_at, indexed_at`
+created_at, indexed_at, preview_width, preview_height`
 
 const batchImageItemSelectSQL = `SELECT ` + batchImageItemColumns + ` FROM batch_image_items`
 
@@ -1175,13 +1180,14 @@ func scanBatchImageItem(row rowScanner) (*service.BatchImageItem, error) {
 	var mimeType, fileExtension, errorCode, errorMessage sql.NullString
 	var billedAmount sql.NullFloat64
 	var indexedAt sql.NullTime
+	var previewWidth, previewHeight *int
 
 	err := row.Scan(
 		&item.ID, &item.JobID, &item.CustomID, &item.Status, &requestHash, &promptPreview, &providerSourceObject,
 		&sourceLineNumber, &sourceByteOffset, &sourceByteLength,
 		&mimeType, &fileExtension, &item.ImageCount,
 		&errorCode, &errorMessage, &billedAmount,
-		&item.CreatedAt, &indexedAt,
+		&item.CreatedAt, &indexedAt, &previewWidth, &previewHeight,
 	)
 	if err != nil {
 		return nil, err
@@ -1199,7 +1205,15 @@ func scanBatchImageItem(row rowScanner) (*service.BatchImageItem, error) {
 	item.ErrorMessage = batchImageNullStringPtr(errorMessage)
 	item.BilledAmount = batchImageNullFloat64Ptr(billedAmount)
 	item.IndexedAt = batchImageNullTimePtr(indexedAt)
+	item.PreviewSize = batchImagePreviewSize(previewWidth, previewHeight)
 	return &item, nil
+}
+
+func batchImagePreviewSize(width, height *int) *service.BatchImagePreviewSize {
+	if width == nil || height == nil || *width <= 0 || *height <= 0 {
+		return nil
+	}
+	return &service.BatchImagePreviewSize{Width: *width, Height: *height}
 }
 
 func batchImageNullStringPtr(v sql.NullString) *string {

@@ -55,7 +55,7 @@ func (s *BatchImagePublicService) Gallery(ctx context.Context, owner BatchImageO
 	}
 	query := BatchImageGalleryQuery{Limit: limit + 1, Status: request.Status, Search: strings.TrimSpace(request.Search), RootBatchID: request.RootBatchID}
 	switch query.Status {
-	case "", "all", "pending", "completed", "failed":
+	case "", "all", "current", "pending", "completed", "failed", "expired":
 	default:
 		return nil, ErrBatchImageInvalidItems
 	}

@@ -36,6 +36,8 @@ func (BatchImageItem) Fields() []ent.Field {
 		field.String("mime_type").Optional().Nillable().MaxLen(128),
 		field.String("file_extension").Optional().Nillable().MaxLen(32),
 		field.Int("image_count").Default(0),
+		field.Int("preview_width").Optional().Nillable(),
+		field.Int("preview_height").Optional().Nillable(),
 		field.String("error_code").Optional().Nillable().MaxLen(128),
 		field.String("error_message").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "text"}),
 		field.Float("billed_amount").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),

@@ -54,4 +54,21 @@ WHERE batch_id = $1`, batchID)
 	return err
 }
 
+func (r *batchImageRepository) FillBatchImagePreviewSize(ctx context.Context, batchID, customID string, size service.BatchImagePreviewSize) error {
+	// Use the same job lock as output deletion and item replacement. Do not
+	// overwrite measured original dimensions with rounded legacy JPEG dimensions.
+	_, err := r.sql.ExecContext(ctx, `WITH live_job AS (
+    SELECT batch_id FROM batch_image_jobs
+    WHERE batch_id = $1 AND status = 'completed' AND output_deleted_at IS NULL
+      AND user_deleted_at IS NULL AND thumbnail_disabled_at IS NULL
+      AND (output_expires_at IS NULL OR output_expires_at > NOW())
+    FOR UPDATE
+)
+UPDATE batch_image_items i SET preview_width = $3, preview_height = $4
+FROM live_job j WHERE i.job_id = j.batch_id AND i.custom_id = $2
+  AND i.status = 'success' AND i.image_count > 0
+  AND i.preview_width IS NULL AND i.preview_height IS NULL`, batchID, customID, size.Width, size.Height)
+	return err
+}
+
 var _ service.BatchImageThumbnailRepository = (*batchImageRepository)(nil)

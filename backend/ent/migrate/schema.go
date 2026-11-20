@@ -513,6 +513,8 @@ var (
 		{Name: "mime_type", Type: field.TypeString, Nullable: true, Size: 128},
 		{Name: "file_extension", Type: field.TypeString, Nullable: true, Size: 32},
 		{Name: "image_count", Type: field.TypeInt, Default: 0},
+		{Name: "preview_width", Type: field.TypeInt, Nullable: true},
+		{Name: "preview_height", Type: field.TypeInt, Nullable: true},
 		{Name: "error_code", Type: field.TypeString, Nullable: true, Size: 128},
 		{Name: "error_message", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "billed_amount", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},

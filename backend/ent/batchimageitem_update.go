@@ -272,6 +272,60 @@ func (_u *BatchImageItemUpdate) AddImageCount(v int) *BatchImageItemUpdate {
 	return _u
 }
 
+// SetPreviewWidth sets the "preview_width" field.
+func (_u *BatchImageItemUpdate) SetPreviewWidth(v int) *BatchImageItemUpdate {
+	_u.mutation.ResetPreviewWidth()
+	_u.mutation.SetPreviewWidth(v)
+	return _u
+}
+
+// SetNillablePreviewWidth sets the "preview_width" field if the given value is not nil.
+func (_u *BatchImageItemUpdate) SetNillablePreviewWidth(v *int) *BatchImageItemUpdate {
+	if v != nil {
+		_u.SetPreviewWidth(*v)
+	}
+	return _u
+}
+
+// AddPreviewWidth adds value to the "preview_width" field.
+func (_u *BatchImageItemUpdate) AddPreviewWidth(v int) *BatchImageItemUpdate {
+	_u.mutation.AddPreviewWidth(v)
+	return _u
+}
+
+// ClearPreviewWidth clears the value of the "preview_width" field.
+func (_u *BatchImageItemUpdate) ClearPreviewWidth() *BatchImageItemUpdate {
+	_u.mutation.ClearPreviewWidth()
+	return _u
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (_u *BatchImageItemUpdate) SetPreviewHeight(v int) *BatchImageItemUpdate {
+	_u.mutation.ResetPreviewHeight()
+	_u.mutation.SetPreviewHeight(v)
+	return _u
+}
+
+// SetNillablePreviewHeight sets the "preview_height" field if the given value is not nil.
+func (_u *BatchImageItemUpdate) SetNillablePreviewHeight(v *int) *BatchImageItemUpdate {
+	if v != nil {
+		_u.SetPreviewHeight(*v)
+	}
+	return _u
+}
+
+// AddPreviewHeight adds value to the "preview_height" field.
+func (_u *BatchImageItemUpdate) AddPreviewHeight(v int) *BatchImageItemUpdate {
+	_u.mutation.AddPreviewHeight(v)
+	return _u
+}
+
+// ClearPreviewHeight clears the value of the "preview_height" field.
+func (_u *BatchImageItemUpdate) ClearPreviewHeight() *BatchImageItemUpdate {
+	_u.mutation.ClearPreviewHeight()
+	return _u
+}
+
 // SetErrorCode sets the "error_code" field.
 func (_u *BatchImageItemUpdate) SetErrorCode(v string) *BatchImageItemUpdate {
 	_u.mutation.SetErrorCode(v)
@@ -519,6 +573,24 @@ func (_u *BatchImageItemUpdate) sqlSave(ctx context.Context) (_node int, err err
 	}
 	if value, ok := _u.mutation.AddedImageCount(); ok {
 		_spec.AddField(batchimageitem.FieldImageCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.PreviewWidth(); ok {
+		_spec.SetField(batchimageitem.FieldPreviewWidth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPreviewWidth(); ok {
+		_spec.AddField(batchimageitem.FieldPreviewWidth, field.TypeInt, value)
+	}
+	if _u.mutation.PreviewWidthCleared() {
+		_spec.ClearField(batchimageitem.FieldPreviewWidth, field.TypeInt)
+	}
+	if value, ok := _u.mutation.PreviewHeight(); ok {
+		_spec.SetField(batchimageitem.FieldPreviewHeight, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPreviewHeight(); ok {
+		_spec.AddField(batchimageitem.FieldPreviewHeight, field.TypeInt, value)
+	}
+	if _u.mutation.PreviewHeightCleared() {
+		_spec.ClearField(batchimageitem.FieldPreviewHeight, field.TypeInt)
 	}
 	if value, ok := _u.mutation.ErrorCode(); ok {
 		_spec.SetField(batchimageitem.FieldErrorCode, field.TypeString, value)
@@ -811,6 +883,60 @@ func (_u *BatchImageItemUpdateOne) AddImageCount(v int) *BatchImageItemUpdateOne
 	return _u
 }
 
+// SetPreviewWidth sets the "preview_width" field.
+func (_u *BatchImageItemUpdateOne) SetPreviewWidth(v int) *BatchImageItemUpdateOne {
+	_u.mutation.ResetPreviewWidth()
+	_u.mutation.SetPreviewWidth(v)
+	return _u
+}
+
+// SetNillablePreviewWidth sets the "preview_width" field if the given value is not nil.
+func (_u *BatchImageItemUpdateOne) SetNillablePreviewWidth(v *int) *BatchImageItemUpdateOne {
+	if v != nil {
+		_u.SetPreviewWidth(*v)
+	}
+	return _u
+}
+
+// AddPreviewWidth adds value to the "preview_width" field.
+func (_u *BatchImageItemUpdateOne) AddPreviewWidth(v int) *BatchImageItemUpdateOne {
+	_u.mutation.AddPreviewWidth(v)
+	return _u
+}
+
+// ClearPreviewWidth clears the value of the "preview_width" field.
+func (_u *BatchImageItemUpdateOne) ClearPreviewWidth() *BatchImageItemUpdateOne {
+	_u.mutation.ClearPreviewWidth()
+	return _u
+}
+
+// SetPreviewHeight sets the "preview_height" field.
+func (_u *BatchImageItemUpdateOne) SetPreviewHeight(v int) *BatchImageItemUpdateOne {
+	_u.mutation.ResetPreviewHeight()
+	_u.mutation.SetPreviewHeight(v)
+	return _u
+}
+
+// SetNillablePreviewHeight sets the "preview_height" field if the given value is not nil.
+func (_u *BatchImageItemUpdateOne) SetNillablePreviewHeight(v *int) *BatchImageItemUpdateOne {
+	if v != nil {
+		_u.SetPreviewHeight(*v)
+	}
+	return _u
+}
+
+// AddPreviewHeight adds value to the "preview_height" field.
+func (_u *BatchImageItemUpdateOne) AddPreviewHeight(v int) *BatchImageItemUpdateOne {
+	_u.mutation.AddPreviewHeight(v)
+	return _u
+}
+
+// ClearPreviewHeight clears the value of the "preview_height" field.
+func (_u *BatchImageItemUpdateOne) ClearPreviewHeight() *BatchImageItemUpdateOne {
+	_u.mutation.ClearPreviewHeight()
+	return _u
+}
+
 // SetErrorCode sets the "error_code" field.
 func (_u *BatchImageItemUpdateOne) SetErrorCode(v string) *BatchImageItemUpdateOne {
 	_u.mutation.SetErrorCode(v)
@@ -1088,6 +1214,24 @@ func (_u *BatchImageItemUpdateOne) sqlSave(ctx context.Context) (_node *BatchIma
 	}
 	if value, ok := _u.mutation.AddedImageCount(); ok {
 		_spec.AddField(batchimageitem.FieldImageCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.PreviewWidth(); ok {
+		_spec.SetField(batchimageitem.FieldPreviewWidth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPreviewWidth(); ok {
+		_spec.AddField(batchimageitem.FieldPreviewWidth, field.TypeInt, value)
+	}
+	if _u.mutation.PreviewWidthCleared() {
+		_spec.ClearField(batchimageitem.FieldPreviewWidth, field.TypeInt)
+	}
+	if value, ok := _u.mutation.PreviewHeight(); ok {
+		_spec.SetField(batchimageitem.FieldPreviewHeight, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPreviewHeight(); ok {
+		_spec.AddField(batchimageitem.FieldPreviewHeight, field.TypeInt, value)
+	}
+	if _u.mutation.PreviewHeightCleared() {
+		_spec.ClearField(batchimageitem.FieldPreviewHeight, field.TypeInt)
 	}
 	if value, ok := _u.mutation.ErrorCode(); ok {
 		_spec.SetField(batchimageitem.FieldErrorCode, field.TypeString, value)

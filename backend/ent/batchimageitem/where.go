@@ -114,6 +114,16 @@ func ImageCount(v int) predicate.BatchImageItem {
 	return predicate.BatchImageItem(sql.FieldEQ(FieldImageCount, v))
 }
 
+// PreviewWidth applies equality check predicate on the "preview_width" field. It's identical to PreviewWidthEQ.
+func PreviewWidth(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldEQ(FieldPreviewWidth, v))
+}
+
+// PreviewHeight applies equality check predicate on the "preview_height" field. It's identical to PreviewHeightEQ.
+func PreviewHeight(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldEQ(FieldPreviewHeight, v))
+}
+
 // ErrorCode applies equality check predicate on the "error_code" field. It's identical to ErrorCodeEQ.
 func ErrorCode(v string) predicate.BatchImageItem {
 	return predicate.BatchImageItem(sql.FieldEQ(FieldErrorCode, v))
@@ -897,6 +907,106 @@ func ImageCountLT(v int) predicate.BatchImageItem {
 // ImageCountLTE applies the LTE predicate on the "image_count" field.
 func ImageCountLTE(v int) predicate.BatchImageItem {
 	return predicate.BatchImageItem(sql.FieldLTE(FieldImageCount, v))
+}
+
+// PreviewWidthEQ applies the EQ predicate on the "preview_width" field.
+func PreviewWidthEQ(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldEQ(FieldPreviewWidth, v))
+}
+
+// PreviewWidthNEQ applies the NEQ predicate on the "preview_width" field.
+func PreviewWidthNEQ(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldNEQ(FieldPreviewWidth, v))
+}
+
+// PreviewWidthIn applies the In predicate on the "preview_width" field.
+func PreviewWidthIn(vs ...int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldIn(FieldPreviewWidth, vs...))
+}
+
+// PreviewWidthNotIn applies the NotIn predicate on the "preview_width" field.
+func PreviewWidthNotIn(vs ...int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldNotIn(FieldPreviewWidth, vs...))
+}
+
+// PreviewWidthGT applies the GT predicate on the "preview_width" field.
+func PreviewWidthGT(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldGT(FieldPreviewWidth, v))
+}
+
+// PreviewWidthGTE applies the GTE predicate on the "preview_width" field.
+func PreviewWidthGTE(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldGTE(FieldPreviewWidth, v))
+}
+
+// PreviewWidthLT applies the LT predicate on the "preview_width" field.
+func PreviewWidthLT(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldLT(FieldPreviewWidth, v))
+}
+
+// PreviewWidthLTE applies the LTE predicate on the "preview_width" field.
+func PreviewWidthLTE(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldLTE(FieldPreviewWidth, v))
+}
+
+// PreviewWidthIsNil applies the IsNil predicate on the "preview_width" field.
+func PreviewWidthIsNil() predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldIsNull(FieldPreviewWidth))
+}
+
+// PreviewWidthNotNil applies the NotNil predicate on the "preview_width" field.
+func PreviewWidthNotNil() predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldNotNull(FieldPreviewWidth))
+}
+
+// PreviewHeightEQ applies the EQ predicate on the "preview_height" field.
+func PreviewHeightEQ(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldEQ(FieldPreviewHeight, v))
+}
+
+// PreviewHeightNEQ applies the NEQ predicate on the "preview_height" field.
+func PreviewHeightNEQ(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldNEQ(FieldPreviewHeight, v))
+}
+
+// PreviewHeightIn applies the In predicate on the "preview_height" field.
+func PreviewHeightIn(vs ...int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldIn(FieldPreviewHeight, vs...))
+}
+
+// PreviewHeightNotIn applies the NotIn predicate on the "preview_height" field.
+func PreviewHeightNotIn(vs ...int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldNotIn(FieldPreviewHeight, vs...))
+}
+
+// PreviewHeightGT applies the GT predicate on the "preview_height" field.
+func PreviewHeightGT(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldGT(FieldPreviewHeight, v))
+}
+
+// PreviewHeightGTE applies the GTE predicate on the "preview_height" field.
+func PreviewHeightGTE(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldGTE(FieldPreviewHeight, v))
+}
+
+// PreviewHeightLT applies the LT predicate on the "preview_height" field.
+func PreviewHeightLT(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldLT(FieldPreviewHeight, v))
+}
+
+// PreviewHeightLTE applies the LTE predicate on the "preview_height" field.
+func PreviewHeightLTE(v int) predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldLTE(FieldPreviewHeight, v))
+}
+
+// PreviewHeightIsNil applies the IsNil predicate on the "preview_height" field.
+func PreviewHeightIsNil() predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldIsNull(FieldPreviewHeight))
+}
+
+// PreviewHeightNotNil applies the NotNil predicate on the "preview_height" field.
+func PreviewHeightNotNil() predicate.BatchImageItem {
+	return predicate.BatchImageItem(sql.FieldNotNull(FieldPreviewHeight))
 }
 
 // ErrorCodeEQ applies the EQ predicate on the "error_code" field.

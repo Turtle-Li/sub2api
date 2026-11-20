@@ -223,7 +223,7 @@ func TestBatchImageUpscaleWriteFenceSerializesTerminalCleanupAndRejectsPostClean
 
 	firstResult := make(chan error, 1)
 	go func() {
-		_, _, _, _, callErr := upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, fencer, job, line)
+		_, callErr := upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, fencer, job, line)
 		firstResult <- callErr
 	}()
 	select {
@@ -255,7 +255,7 @@ func TestBatchImageUpscaleWriteFenceSerializesTerminalCleanupAndRejectsPostClean
 	require.Empty(t, baseStore.objects)
 	require.Len(t, baseStore.puts, 1)
 
-	_, _, _, _, err = upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, fencer, job, line)
+	_, err = upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, fencer, job, line)
 	require.ErrorIs(t, err, ErrBatchImageIndexStateConflict)
 	require.Len(t, baseStore.puts, 1, "a stale worker must be rejected before its post-cleanup Put")
 	require.Empty(t, baseStore.objects)
@@ -300,13 +300,12 @@ func TestUpscaleBatchImageResultLine_RejectsSurplusImagesBeforeSideEffects(t *te
 	job := &BatchImageJob{BatchID: "imgbatch_surplus", Model: "gemini-2.5-flash-image", ImageSize: "2K"}
 	line := batchImageUpscaleTestResultLine("two-images", source, source)
 
-	_, _, count, keys, err := upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	output, err := upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
 	require.Error(t, err)
 	var upscaleErr *ImageUpscaleError
 	require.ErrorAs(t, err, &upscaleErr)
 	require.Equal(t, "SOURCE_RESULT_INVALID", upscaleErr.Code)
-	require.Zero(t, count)
-	require.Nil(t, keys)
+	require.Nil(t, output)
 	require.Empty(t, store.puts)
 	require.Empty(t, store.deletes)
 	require.Empty(t, store.objects)
@@ -323,11 +322,10 @@ func TestUpscaleBatchImageResultLine_ExpiredOperationDoesNotSubmit(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, count, keys, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	output, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
 	upscaleErr := requireImageUpscaleError(t, err, "JOB_TIMEOUT")
 	require.ErrorIs(t, upscaleErr, context.Canceled)
-	require.Zero(t, count)
-	require.Nil(t, keys)
+	require.Nil(t, output)
 	require.Empty(t, store.objects)
 	require.Empty(t, upscaleAPI.SubmittedScales())
 }
@@ -343,7 +341,7 @@ func TestUpscaleBatchImageResultLine_BoundsBlockingCOSPut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	_, _, _, _, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	_, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
 	require.Error(t, err)
 	var upscaleErr *ImageUpscaleError
 	require.ErrorAs(t, err, &upscaleErr)
