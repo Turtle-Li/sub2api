@@ -85,9 +85,9 @@
 
 - Read `docs/features/VIDEO_STUDIO_20261120.md` and `docs/features/VIDEO_STUDIO_GALLERY_20261121.md` (real output frames, private cache and submitted parameters) before changing the session catalogue, receipt index, image handoff or video UI. The newer `docs/features/VIDEO_STUDIO_WALLET_CONTROLS.md` owns group-paid zero-key sessions, the parameter matrix, picker and video details. Keep explicit workspace-only sharing separate from public keys, never replay a paid POST or poll providers while listing history. Historical bearer work keeps its original binding. The owner assigns frontend design and implementation to an external client, not Codex.
 
-## Creative canvas (proposal)
+## Creative canvas
 
-- Read `docs/features/CREATIVE_CANVAS_20261121.md` for the approved prototype and `docs/features/CREATIVE_CANVAS_OPEN_SOURCE_20261121.md` for the pinned upstream sources, tests and licenses. Trial Vue Flow 2 for canvas mechanics; use AIGCCanvasFlow for branch interactions and BeatDesign for placement/take selection only. Persist only owner-scoped asset references, layout and drafts; paid submits stay in the existing studios. No production canvas route is implied.
+- Read `docs/features/CREATIVE_CANVAS_INTEGRATION.md` for the opt-in private board API, revision/ownership checks, and offline tests; `docs/features/CREATIVE_CANVAS_OPEN_SOURCE_20261121.md` pins the upstream sources, tests and licenses. Preserve Gemini's design (`docs/features/CREATIVE_CANVAS_20261121.md`), original studio media access, and explicit group-paid submissions. Never send a paid request from a board read, save, restore or edge. No deployment is implied by a merge.
 
 ## Image Studio integration
 

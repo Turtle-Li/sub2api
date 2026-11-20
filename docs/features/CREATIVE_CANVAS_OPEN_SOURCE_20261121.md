@@ -1,6 +1,6 @@
 # 生图 / 生视频无限画布：开源选型
 
-2026-11-21 · **选型建议，不是已接入的功能。** [产品提案与已确认的离线样机](./CREATIVE_CANVAS_20261121.md)
+2026-11-21 · **选型记录。** 首版使用下列固定版本；实际接入范围、权限与本地验证方式见[创作画布接入说明](CREATIVE_CANVAS_INTEGRATION.md)。 [产品提案与已确认的离线样机](./CREATIVE_CANVAS_20261121.md)
 
 **建议用 Vue Flow 2 做底座，不自己写拖拽、缩放和连线，也不把别人的 AI 工作台整个搬进来。** 用户关心的是：从自己的同一张图建出「推镜头」「固定机位」两条视频草稿，原图不动；两个成片回来后可以并排比较。围绕这条路径，下面三个项目分别解决不同的问题。
 
@@ -43,7 +43,9 @@
 
 **许可交付：** 若正式采用，附带 [xyflow MIT](https://github.com/xyflow/xyflow/blob/29ab9e001c2ba320c9d84b00c729c745132d9145/LICENSE)、[VueUse MIT](https://github.com/vueuse/vueuse/blob/dce876a23ccec3335c2fbf7600244ea8756889a5/LICENSE) 的完整声明；若复制 AIGCCanvasFlow 的实质代码，保留 [MaLunan MIT](https://github.com/MaLunan/AIGCCanvasFlow/blob/c88c00c58c6fcf613d58c6674c46b4a11c1d9911/LICENSE)。若移植 BeatDesign 的函数或测试，随分发提供 [Apache-2.0](https://github.com/BeatAPI/BeatDesign/blob/796d89f0f451b436877836f91392152f43c3e270/LICENSE)，保留适用版权及归属声明、标明修改，并检查[第三方声明](https://github.com/BeatAPI/BeatDesign/tree/796d89f0f451b436877836f91392152f43c3e270/third_party)与[商标限制](https://github.com/BeatAPI/BeatDesign/blob/796d89f0f451b436877836f91392152f43c3e270/docs/TRADEMARKS.md)。引用这些工程不代表获得其品牌、演示媒体、上游模型或 Pro 示例的授权。
 
-## 下一步：只试接一条不花钱的完整路径
+## 原选型的验收条件（已在本地完成）
+
+下面是选型时定义的试接路径；[实测结果与未发布边界](CREATIVE_CANVAS_INTEGRATION.md#已验证的结果2026-11-21未发布)记录在接入说明中。
 
 1. **前端由 Gemini 4 试接**：在隔离路由里，把现有样机换成 Vue Flow 2，用本地素材模拟「一图 → 两条视频草稿」。在桌面拖线、手机点「＋」、两指缩放；撤销/重做、刷新后保留两条独立分支与视口（含 x=0、y=0）。验证新卡不盖原图，不因进入视口加载整条视频，能以真实封面并排比对。比较加入前后主包与懒加载路由的体积，检查打包是否引入重复 Vue、是否影响原工作台。
 2. **后端负责账号存档、素材权限和结果关联，不另做生成服务**：[已有的图→视频交接](../../frontend/src/views/user/ImageStudioView.vue)和[原图读取](../../frontend/src/features/video-studio/source.ts)保留。画布存本人作品引用、布局、草稿、版本号；读取重查归属与时效，跨账号拒绝、过期留位置。分支 A/B 的模拟回执故意乱序返回，按原 `request_id` 与任务号各自回挂；刷新不重发，也不跨分支猜「最近作品」。双标签保存冲突不能静默覆盖。

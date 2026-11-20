@@ -217,6 +217,7 @@ docs/features/*
 !docs/features/VIDEO_STUDIO_WALLET_CONTROLS.md
 !docs/features/CREATIVE_CANVAS_20261121.md
 !docs/features/CREATIVE_CANVAS_OPEN_SOURCE_20261121.md
+!docs/features/CREATIVE_CANVAS_INTEGRATION.md
 !docs/features/evidence/
 docs/features/evidence/*
 !docs/features/evidence/daily-request-quota/
