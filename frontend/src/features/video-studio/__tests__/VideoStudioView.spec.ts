@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick, reactive } from 'vue'
 import VideoStudioView from '@/views/user/VideoStudioView.vue'
 import VideoComposer from '@/features/video-studio/VideoComposer.vue'
@@ -68,6 +69,7 @@ const modalClose = vi.fn(function (this: HTMLDialogElement) { this.removeAttribu
 let createdUrl: ReturnType<typeof vi.fn>
 let revokedUrl: ReturnType<typeof vi.fn>
 beforeEach(() => {
+  setActivePinia(createPinia())
   vi.resetAllMocks(); sessionStorage.clear(); desktop = true; auth.isAuthenticated = true; auth.user = { id: 11 }
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: (media: string) => ({ media, matches: media.includes('821px') && desktop, addEventListener() {}, removeEventListener() {} }) })

@@ -180,7 +180,7 @@ function Workspace({ keys, wallet, directoryCurrent, userId, onVideo, onCanvas }
     if (!files?.length) return
     if (capabilities && refs.length + files.length > capabilities.max_reference_images) { setError(`当前模型最多支持 ${capabilities.max_reference_images} 张参考图，请减少选择或先移除已有图片。`); return }
     const selection = continuation.beginSelection()
-    try { const picked = Array.from(files); if (picked.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024)) throw new Error('请选择 8 MB 以内的 PNG、JPEG 或 WebP 图片'); const images = await Promise.all(picked.map(readImage)); if (continuation.isCurrent(selection)) setRefs(previous => [...previous, ...images]) } catch (error) { setError(errorMessage(error)) }
+    try { const picked = Array.from(files); if (picked.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024)) throw new Error('请选择 8 MB 以内的 PNG、JPEG 或 WebP 图片'); const images = await Promise.all(picked.map(file => readImage(file))); if (continuation.isCurrent(selection)) setRefs(previous => [...previous, ...images]) } catch (error) { setError(errorMessage(error)) }
   }
   async function submit() {
     const selected = models.find(item => modelIdentity(item) === model)

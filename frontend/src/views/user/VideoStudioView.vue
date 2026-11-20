@@ -9,15 +9,27 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getStoredUserID } from '@/api/tokenRefresh'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import { clearCanvasDraftHandoff } from '@/features/creative-canvas/handoff'
+import { clearImage } from '@/features/video-studio/source'
 import VideoWorkspace from '@/features/video-studio/VideoWorkspace.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const sessionChanged = ref(false)
-watch(() => auth.user?.id, () => { sessionChanged.value = false }, { flush: 'sync' })
+watch(() => auth.user?.id, (nextId, prevId) => {
+  if (prevId !== undefined && nextId !== prevId) {
+    clearCanvasDraftHandoff(prevId)
+    clearImage()
+  }
+  sessionChanged.value = false
+}, { flush: 'sync' })
 function onStorage(e: StorageEvent) {
   if (e.key === null || (e.key === 'auth_token' && !e.newValue) ||
-    (e.key === 'auth_user' && getStoredUserID(e.newValue) !== auth.user?.id)) sessionChanged.value = true
+    (e.key === 'auth_user' && getStoredUserID(e.newValue) !== auth.user?.id)) {
+    clearCanvasDraftHandoff(auth.user?.id)
+    clearImage()
+    sessionChanged.value = true
+  }
 }
 onMounted(() => window.addEventListener('storage', onStorage))
 onBeforeUnmount(() => window.removeEventListener('storage', onStorage))

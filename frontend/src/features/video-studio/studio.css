@@ -144,6 +144,11 @@
 .vs-model-cap > div > span { padding: 1px 6px; border: 1px solid var(--vs-line); border-radius: 5px; background: var(--vs-surface); }
 .vs-draft { padding: 10px 12px; border: 1px solid var(--vs-soft-line); border-radius: 9px; background: var(--vs-soft); }
 .vs-draft > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vs-draft-actions { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.vs-canvas-meta { margin-top: 3px; color: var(--vs-ink); font-size: .75rem; font-weight: 600; }
+.vs-canvas-status { margin-bottom: 13px; padding: 10px 12px; border: 1px solid var(--vs-line); border-radius: 9px; background: var(--vs-field); }
+.vs-canvas-status strong { display: block; color: var(--vs-ink); font-size: .75rem; margin-bottom: 2px; }
+.vs-canvas-error .vs-actions { margin-top: 8px; }
 .vs-draft strong { color: var(--vs-accent); font-size: .75rem; }
 .vs-draft p { color: var(--vs-muted); font-size: .75rem; }
 .vs-draft .vs-text { min-height: 28px; padding: 2px 4px; font-size: .75rem; }

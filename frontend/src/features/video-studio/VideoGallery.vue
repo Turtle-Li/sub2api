@@ -10,7 +10,7 @@
       <button type="button" class="vs-text" :disabled="checking" @click="readTracked">{{ checking ? '查询中…' : '更新状态' }}</button>
       <button type="button" class="vs-icon" aria-label="关闭任务跟踪" @click="stopTracking"><Icon name="x" size="xs" aria-hidden="true" /></button>
     </div>
-    <VideoDelivery ref="delivery" :mobile="mobile" :cache="posterCache" :durations="measuredDurations" :jobs="visibleJobs" @expired="markExpired" @focus-card="focusCard" @reuse="(job, opener) => emit('reuse', job, opener)" />
+    <VideoDelivery ref="delivery" :mobile="mobile" :cache="posterCache" :durations="measuredDurations" :jobs="visibleJobs" :canvas-enabled="canvasEnabled" @expired="markExpired" @focus-card="focusCard" @reuse="(job, opener) => emit('reuse', job, opener)" @canvas="job => emit('canvas', job)" />
     <div class="vs-gallery-head">
       <div class="vs-title-line"><h2 id="vs-gallery-title" ref="galleryHeading" tabindex="-1">我的视频</h2><span class="vs-count">已加载 {{ jobs.length }} 条</span></div>
       <div v-if="jobs.length" class="vs-filters" role="group" aria-label="筛选已加载的视频">
@@ -44,6 +44,7 @@
             <h3><span class="vs-model-mark" aria-hidden="true">{{ modelLabel(job.model).slice(0, 1) }}</span>{{ modelLabel(job.model) }}</h3>
             <time :datetime="String(job.created_at)">{{ shortDate(job.created_at) }}</time>
             <div class="vs-card-actions">
+              <button v-if="canvasEnabled && job.status === 'completed'" type="button" class="vs-icon vs-canvas-button" aria-label="加入画布" title="加入画布" @click.stop="emit('canvas', job)"><Icon name="grid" size="xs" aria-hidden="true" /></button>
               <button v-if="job.status === 'completed'" type="button" class="vs-icon" aria-label="下载" title="下载" @click.stop="delivery?.open(job, 'download', $event.currentTarget as HTMLElement)"><Icon name="download" size="xs" aria-hidden="true" /></button>
               <button type="button" class="vs-icon vs-details-button" aria-label="详情" title="详情" @click.stop="delivery?.open(job, 'details', $event.currentTarget as HTMLElement)"><Icon name="infoCircle" size="xs" aria-hidden="true" /></button>
               <button v-if="!['completed', 'expired', 'failed'].includes(job.status)" type="button" class="vs-text vs-query-button" :disabled="checking && tracked === job.id" @click.stop="lookup(job.id)">{{ job.status === 'uncertain' ? '核对原任务' : '查询状态' }}</button>
@@ -70,8 +71,10 @@ import { useGalleryLayout } from './galleryLayout'
 import { createWorkspaceDurationStore, formatVideoDuration, measuredDurationMs } from './mediaDuration'
 import { createVideoPosterCache } from './posterCache'
 
-defineProps<{ outstanding: string[]; example: string; mobile: boolean }>()
-const emit = defineEmits<{ resolved: [job: VideoJob]; example: [opener: HTMLElement]; reuse: [job: VideoJob, opener?: HTMLElement] }>()
+withDefaults(defineProps<{ outstanding: string[]; example: string; mobile: boolean; canvasEnabled?: boolean }>(), {
+  canvasEnabled: false,
+})
+const emit = defineEmits<{ resolved: [job: VideoJob]; example: [opener: HTMLElement]; reuse: [job: VideoJob, opener?: HTMLElement]; canvas: [job: VideoJob] }>()
 const states: Record<VideoJob['status'], string> = { submitting: '提交中', queued: '排队中', running: '生成中', completed: '已完成', failed: '生成失败', uncertain: '状态待核实', expired: '已过期' }
 const modelLabel = (id: string) => ({ 'minimax/h3': 'H3', 'minimax/h3-fast': 'H3 Fast', 'muse-video': 'Muse' })[id] || id
 const measuredDurations = createWorkspaceDurationStore()

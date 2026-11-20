@@ -30,6 +30,7 @@ const appStore = vi.hoisted(() => ({
     risk_control_enabled?: boolean
     subscription_enabled?: boolean
     video_studio_enabled?: boolean
+    creative_canvas_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -134,6 +135,18 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+  })
+
+  it('only admits the private canvas when the public opt-in is affirmative', async () => {
+    const meta = { requiresAuth: true, requiresCreativeCanvas: true }
+    appStore.fetchPublicSettings.mockResolvedValue(null)
+    for (const flag of [undefined, false, true]) {
+      appStore.publicSettingsLoaded = flag !== undefined
+      appStore.cachedPublicSettings = flag === undefined ? null : { creative_canvas_enabled: flag }
+      const { next, navigation } = runGuard(meta, '/creative-canvas')
+      await navigation
+      expect(next.mock.calls).toEqual(flag === true ? [[]] : [['/dashboard']])
+    }
   })
 
   it('waits for the first public-settings request before deciding payment access', async () => {

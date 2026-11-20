@@ -13,11 +13,35 @@
           <strong>{{ availability }}</strong><p>{{ catalogError ? '未取得有效报价，暂不能生成。' : '已有视频仍可查看。需要开通视频权限时，请联系管理员。' }}</p>
           <button class="vs-text" type="button" :disabled="busy || loading" @click="loadModels">重新读取模型</button>
         </div>
-        <div v-if="source && !draftCleared" class="vs-draft" role="status">
+        <div v-if="canvasVerifying" class="vs-hint vs-canvas-status" role="status">
+          <strong>正在验证画布草稿…</strong>
+          <p>正在核对登录账号、画布修订号、草稿内容与关联原图授权，核对完成前不可提交。</p>
+        </div>
+        <div v-else-if="canvasErrorBanner" class="vs-notice vs-canvas-error" role="alert">
+          <strong>{{ canvasErrorTitle }}</strong>
+          <p>{{ canvasErrorBanner.message }}</p>
+          <div class="vs-actions">
+            <button v-if="canvasErrorBanner.retryable" type="button" class="vs-button" :disabled="busy" @click="emit('retryCanvasDraft')">重新验证</button>
+            <button type="button" class="vs-text" :disabled="busy || !!heldId" @click="clearDraft">离开画布草稿</button>
+          </div>
+        </div>
+        <div v-else-if="canvasReady && !draftCleared" class="vs-draft" role="status">
+          <div>
+            <strong>来自画布草稿 · 尚未提交</strong>
+            <div class="vs-draft-actions">
+              <button v-if="canReturnCanvas" type="button" class="vs-text" :disabled="busy" @click="emit('returnCanvas')">返回画布</button>
+              <button type="button" class="vs-text" :disabled="busy || !!heldId" @click="clearDraft">清除草稿</button>
+            </div>
+          </div>
+          <p class="vs-canvas-meta">画布「{{ canvasReady.canvasTitle }}」· {{ canvasReady.draftTitle }}（v{{ canvasReady.revision }}）</p>
+          <p>{{ canvasReady.hasSourceImage ? '已通过私有工作台核验并恢复关联原图，不会自动生成。请确认模型、素材用途与报价。' : '已核验画布草稿与提示词，不会自动生成。请确认模型与报价。' }}</p>
+          <p v-if="canvasReady.unavailableAttempt" class="vs-error" role="alert">该草稿曾关联的私有任务已过期或授权已失效，无法继续读取旧结果。</p>
+        </div>
+        <div v-else-if="!canvasActive && source && !draftCleared" class="vs-draft" role="status">
           <div><strong>来自生图草稿 · 尚未提交</strong><button type="button" class="vs-text" :disabled="busy || !!heldId" @click="clearDraft">清除草稿</button></div>
           <p>已带入本人原图，不会自动生成。请确认模型、素材用途与报价。</p>
         </div>
-        <fieldset class="vs-controls" :disabled="busy || !!heldId || loading">
+        <fieldset class="vs-controls" :disabled="busy || !!heldId || loading || canvasBlocked">
           <div v-if="model || models.length" class="vs-field">
             <span class="vs-label-row"><span>视频模型与服务渠道</span><small>点击切换</small></span>
             <button type="button" class="vs-model-trigger" aria-label="选择视频模型与渠道" aria-haspopup="dialog" @click="openModelPicker">
@@ -86,8 +110,11 @@
           <strong>{{ unconfirmed ? '未收到服务端回执 · 已锁定原任务号' : failed ? '本次生成失败' : '已提交本次创作' }}</strong>
           <p class="vs-hint">{{ unconfirmed ? '请勿重发。只能凭原任务号核对结果；明确分类后才能新建。' : failed ? '已查询原任务，未自动重发。' : '查看原任务不需要再次生成。' }}</p>
           <code>{{ heldId }}</code>
-          <div class="vs-actions"><button class="vs-button" type="button" @click="emit('lookup', heldId)">查询原任务</button>
-            <button v-if="!unconfirmed" class="vs-text" type="button" @click="freshDraft">另起新草稿</button></div>
+          <div class="vs-actions">
+            <button class="vs-button" type="button" @click="emit('lookup', heldId)">查询原任务</button>
+            <button v-if="canReturnCanvas" class="vs-text" type="button" @click="emit('returnCanvas')">返回画布</button>
+            <button v-if="!unconfirmed" class="vs-text" type="button" @click="freshDraft">另起新草稿</button>
+          </div>
         </div>
         <template v-else>
           <div v-if="notice" class="vs-notice" role="alert">{{ notice }}</div>
@@ -106,14 +133,39 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAuthStore } from '@/stores/auth'
+import { creativeCanvasApi } from '@/features/creative-canvas/api'
 import { videoDurationMode, videoStudio, type VideoModel, type VideoJob, type VideoSubmission } from '@/features/video-studio/api'
 import type { pendingImage } from '@/features/video-studio/source'
+import { formatCanvasBindError, type CanvasDraftState } from './canvasDraft'
 import VideoMaterials from './VideoMaterials.vue'
 import VideoModelPicker from './VideoModelPicker.vue'
 import './composer.css'
 
-const props = defineProps<{ userId: number; source: ReturnType<typeof pendingImage>; mobile: boolean; heldId: string; unconfirmed: boolean; failed: boolean; example: string; reserve: (id: string) => void }>()
-const emit = defineEmits<{ accepted: [job: VideoJob]; rejected: [id: string]; lookup: [id: string]; newDraft: [] }>()
+const props = withDefaults(defineProps<{
+  userId: number
+  source: ReturnType<typeof pendingImage>
+  mobile: boolean
+  heldId: string
+  unconfirmed: boolean
+  failed: boolean
+  example: string
+  reserve: (id: string) => void
+  canvasDraft?: CanvasDraftState
+  canReturnCanvas?: boolean
+}>(), {
+  canvasDraft: () => ({ status: 'none' }),
+  canReturnCanvas: false,
+})
+const emit = defineEmits<{
+  accepted: [job: VideoJob]
+  rejected: [id: string]
+  lookup: [id: string]
+  newDraft: []
+  clearCanvasDraft: []
+  retryCanvasDraft: []
+  returnCanvas: []
+  canvasConflict: [message: string]
+}>()
 const auth = useAuthStore()
 const sameOwner = () => auth.isAuthenticated && auth.user?.id === props.userId
 const rail = ref<HTMLElement>()
@@ -122,7 +174,24 @@ const heading = ref<HTMLElement>()
 const promptInput = ref<HTMLTextAreaElement>()
 const materials = ref<InstanceType<typeof VideoMaterials>>()
 const picker = ref<InstanceType<typeof VideoModelPicker>>()
-const prompt = ref(props.source ? props.example : '')
+const canvasActive = computed(() => props.canvasDraft.status !== 'none')
+const canvasReady = computed(() => props.canvasDraft.status === 'ready' ? props.canvasDraft : null)
+const canvasVerifying = computed(() => props.canvasDraft.status === 'verifying')
+const canvasBlocked = computed(() => canvasActive.value && props.canvasDraft.status !== 'ready')
+const canvasErrorBanner = computed(() => (
+  props.canvasDraft.status === 'invalid' ||
+  props.canvasDraft.status === 'source-unavailable' ||
+  props.canvasDraft.status === 'conflict' ||
+  props.canvasDraft.status === 'error'
+) ? props.canvasDraft : null)
+const canvasErrorTitle = computed(() => {
+  const status = canvasErrorBanner.value?.status
+  if (status === 'source-unavailable') return '画布来源原图不可用'
+  if (status === 'conflict') return '画布版本已变更'
+  if (status === 'invalid') return '画布草稿无效'
+  return '无法验证画布草稿'
+})
+const prompt = ref(props.canvasDraft.status === 'ready' ? props.canvasDraft.prompt : (!canvasActive.value && props.source ? props.example : ''))
 const draftCleared = ref(false)
 const model = shallowRef<VideoModel | null>(null)
 const models = shallowRef<VideoModel[]>([])
@@ -190,7 +259,7 @@ const price = (m: VideoModel | null, s: number) => {
   return m?.quote_id?.trim() && (m.currency === 'USD' || m.currency === 'CNY') && typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null
 }
 const amount = computed(() => enabled.value && eligible.value && !catalogError.value ? price(model.value, quoteSeconds(model.value)) : null)
-const canSubmit = computed(() => !props.heldId && !busy.value && !loading.value && !!prompt.value.trim() && !tooLong.value && amount.value !== null && seedValid.value && advancedValid.value && (!supportsMaterials.value || materials.value?.ready))
+const canSubmit = computed(() => !props.heldId && !busy.value && !loading.value && !canvasBlocked.value && !!prompt.value.trim() && !tooLong.value && amount.value !== null && seedValid.value && advancedValid.value && (!supportsMaterials.value || materials.value?.ready))
 
 const providerLabel = (m: VideoModel) => m.provider === 'muse' ? 'Muse 服务渠道' : 'GoodPut H3 服务渠道'
 function durationSummary(m: VideoModel) {
@@ -280,12 +349,14 @@ function errorInfo(error: unknown) {
 }
 async function submit() {
   if (!sameOwner() || !canSubmit.value || !model.value || (supportsMaterials.value && !materials.value)) return
+  const activeCanvas = canvasReady.value && !draftCleared.value ? canvasReady.value : null
   const seen = snapshot(model.value)
   let sentId = ''
   notice.value = ''; phase.value = '正在核对报价…'
   try {
     await loadModels()
     signal.throwIfAborted()
+    if (canvasBlocked.value) { notice.value = '画布草稿状态已变化，暂不能提交。'; return }
     if (availability.value || amount.value === null) { notice.value = '未提交。当前无法确认此模型的授权或报价。'; return }
     if (snapshot(model.value) !== seen || (supportsMaterials.value && !materials.value?.ready)) { notice.value = '报价、通道或可用设置已变化。请核对新设置，再次确认生成。'; return }
     phase.value = '正在检查素材…'
@@ -309,6 +380,37 @@ async function submit() {
     const h3 = model.value.provider === 'goodput'
     const wireSize = new Blob([JSON.stringify(body).replace(/[<>&\u2028\u2029]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)]).size
     if (wireSize > (h3 ? 8 : 24) * 1024 * 1024) { notice.value = `编码后的请求超过 ${h3 ? 8 : 24} MiB，请缩小或减少素材。未提交。`; return }
+    if (!sameOwner()) return
+    if (activeCanvas) {
+      const current = canvasReady.value
+      if (
+        !current ||
+        draftCleared.value ||
+        current.canvasId !== activeCanvas.canvasId ||
+        current.nodeId !== activeCanvas.nodeId ||
+        current.revision !== activeCanvas.revision
+      ) {
+        notice.value = '画布草稿已离开或变更，本次未提交视频任务。'
+        return
+      }
+      phase.value = '正在绑定画布草稿…'
+      try {
+        await creativeCanvasApi.bindAttempt(
+          activeCanvas.canvasId,
+          activeCanvas.nodeId,
+          body.request_id,
+          activeCanvas.revision,
+          signal,
+        )
+        signal.throwIfAborted()
+      } catch (bindError) {
+        if (signal.aborted) return
+        const formatted = formatCanvasBindError(bindError)
+        notice.value = formatted.message
+        if (formatted.conflict) emit('canvasConflict', formatted.message)
+        return
+      }
+    }
     if (!sameOwner()) return
     props.reserve(body.request_id); sentId = body.request_id; phase.value = '正在提交…'
     const job = await videoStudio.create(body, signal)
@@ -345,11 +447,18 @@ function useExample(trigger: HTMLElement) {
 function clearDraft() {
   draftCleared.value = true
   materials.value?.reset()
+  if (canvasActive.value) {
+    prompt.value = ''
+    notice.value = ''
+    emit('clearCanvasDraft')
+  }
   void nextTick(() => promptInput.value?.focus())
 }
 function freshDraft() {
   if (props.unconfirmed) return
-  emit('newDraft'); materials.value?.reset(); prompt.value = ''; seed.value = ''; nativeSize.value = ''; resolution.value = ''; timeout.value = ''; extra.value = ''; notice.value = ''
+  emit('newDraft')
+  if (canvasActive.value) emit('clearCanvasDraft')
+  materials.value?.reset(); prompt.value = ''; seed.value = ''; nativeSize.value = ''; resolution.value = ''; timeout.value = ''; extra.value = ''; notice.value = ''
   void nextTick(() => promptInput.value?.focus())
 }
 function reuse(job: VideoJob, trigger?: HTMLElement) {
@@ -357,6 +466,7 @@ function reuse(job: VideoJob, trigger?: HTMLElement) {
   const target = models.value.find(item => item.id === job.model)
   if (!target) { notice.value = '原模型当前不可用，未回填参数。'; return }
   if (props.heldId) emit('newDraft')
+  if (canvasActive.value) emit('clearCanvasDraft')
   materials.value?.reset(); draftCleared.value = true; choose(target)
   if (!isAutomatic(target) && secondsOptions(target).includes(job.seconds)) seconds.value = job.seconds
   nativeSize.value = target.muse_options && job.parameters?.native_size ? job.parameters.native_size : ''
@@ -369,6 +479,20 @@ function reuse(job: VideoJob, trigger?: HTMLElement) {
   extra.value = ''; prompt.value = ''; notice.value = '已回填仍兼容的已记录参数。历史未保存文字描述、补充文本和本地素材，请重新提供并确认当前报价。'
   open(trigger)
 }
+watch(() => props.canvasDraft, (next, prev) => {
+  if (next.status === 'ready') {
+    const changed =
+      prev?.status !== 'ready' ||
+      prev.canvasId !== next.canvasId ||
+      prev.nodeId !== next.nodeId ||
+      prev.revision !== next.revision
+    if (changed) {
+      draftCleared.value = false
+      if (!props.heldId) prompt.value = next.prompt
+      notice.value = ''
+    }
+  }
+})
 watch(() => props.mobile, v => { if (!v) close() })
 onMounted(loadModels)
 onBeforeUnmount(() => { lifetime.abort(); picker.value?.close(); close() })

@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import Icon from '@/components/icons/Icon.vue'
 import { clearImage, readImage, pendingImage } from '@/features/video-studio/source'
 import { validateVideoImage, validateVideoReference, videoReferenceTypes, VIDEO_IMAGE_MAX_BYTES as maxFile, type VideoModel, type VideoReferenceKind, type VideoSubmission } from '@/features/video-studio/api'
@@ -244,5 +244,25 @@ async function prepare(signal: AbortSignal): Promise<Pick<VideoSubmission, 'firs
   return mode.value === 'refs' ? { references: values } : { first_frame: values[0], ...(values[1] ? { last_frame: values[1] } : {}) }
 }
 onBeforeUnmount(() => { lifetime.abort(); slots.value.forEach(a => dispose(a, false)) })
+watch(() => props.source, (nextSource, prevSource) => {
+  if (nextSource === prevSource) return
+  if (nextSource && nextSource.userId === props.userId) {
+    slots.value.forEach(a => dispose(a, false))
+    spentSource.value = false
+    fileError.value = ''
+    change.value = null
+    slots.value = [{ source: nextSource, label: nextSource.label, kind: 'image' }]
+    return
+  }
+  const filtered = slots.value.map(asset => {
+    if (asset && 'source' in asset) {
+      dispose(asset, false)
+      return null
+    }
+    return asset
+  })
+  slots.value = mode.value === 'frames' ? filtered : filtered.filter(a => a !== null)
+  spentSource.value = false
+})
 defineExpose({ chooseModel, prepare, reset, ready })
 </script>

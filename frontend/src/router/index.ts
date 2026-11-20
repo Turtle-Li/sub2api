@@ -257,6 +257,18 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: false, title: '视频工作台' }
   },
   {
+    path: '/creative-canvas',
+    name: 'CreativeCanvas',
+    component: () => import('@/views/user/CreativeCanvasView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: '创作画布',
+      titleKey: 'nav.creativeCanvas',
+      requiresCreativeCanvas: true
+    }
+  },
+  {
     path: '/batch-image',
     name: 'BatchImageGuide',
     alias: '/docs/batch-image',
@@ -1087,12 +1099,21 @@ router.beforeEach(async (to, _from, next) => {
   // 公共设置可能尚未加载（App.vue 的 onMounted 异步拉取晚于首次导航，且纯静态部署
   // 无 __APP_CONFIG__ 注入）。此时 cachedPublicSettings 为空会把 payment/risk_control
   // 误判为“未启用”而错误拦截，故这里先确保设置加载完成。
-  if ((to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresSubscription) && !appStore.publicSettingsLoaded) {
+  if ((to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresSubscription || to.meta.requiresCreativeCanvas) && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()
     } catch (error) {
       console.warn('Failed to load public settings in route guard', error)
     }
+  }
+
+  // Creative Canvas is opt-in (default off): only reachable when explicitly enabled.
+  if (
+    to.meta.requiresCreativeCanvas &&
+    appStore.cachedPublicSettings?.creative_canvas_enabled !== true
+  ) {
+    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+    return
   }
 
   // Only an explicit value from successfully loaded settings can disable a route.

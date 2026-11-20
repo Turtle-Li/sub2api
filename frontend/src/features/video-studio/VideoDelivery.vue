@@ -95,6 +95,9 @@
           </button>
           <button type="button" class="vs-button" @click="reuseCurrent">复用参数</button>
           <button type="button" class="vs-button" @click="copyId">{{ copiedId ? '已复制' : '复制 ID' }}</button>
+          <button v-if="canvasEnabled && job.status === 'completed'" type="button" class="vs-button vs-delivery-canvas-btn" @click="addToCanvas">
+            <Icon name="grid" size="xs" aria-hidden="true" />加入画布
+          </button>
         </div>
 
         <!-- Honest Prompt Notice (never fabricated) -->
@@ -212,14 +215,17 @@ const props = withDefaults(defineProps<{
   cache: VideoPosterCache
   durations?: WorkspaceDurationStore
   jobs?: readonly VideoJob[]
+  canvasEnabled?: boolean
 }>(), {
   jobs: () => [],
+  canvasEnabled: false,
 })
 
 const emit = defineEmits<{
   expired: [id: string]
   focusCard: [id: string]
   reuse: [job: VideoJob, opener?: HTMLElement]
+  canvas: [job: VideoJob]
 }>()
 
 const states: Record<VideoJob['status'], string> = {
@@ -563,6 +569,13 @@ function reuseCurrent() {
   const trigger = opener
   close()
   emit('reuse', current, trigger)
+}
+
+function addToCanvas() {
+  const current = job.value
+  if (!current || current.status !== 'completed' || !props.canvasEnabled) return
+  close()
+  emit('canvas', current)
 }
 
 function triggerDownload() {

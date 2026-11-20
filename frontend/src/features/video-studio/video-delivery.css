@@ -324,6 +324,10 @@
   white-space: nowrap;
 }
 
+.vs-delivery-actions .vs-delivery-canvas-btn {
+  grid-column: 1 / -1;
+}
+
 /* Honest prompt note */
 .vs-prompt-card {
   display: grid;
