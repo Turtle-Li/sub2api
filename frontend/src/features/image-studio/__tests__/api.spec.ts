@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import apiClient from '@/api/client'
-import { listKeys, studioAPI, studioWalletRoute, taskRoot, type StudioTask } from '../api'
+import { listKeys, studioAPI, studioWalletRoute, taskDisplay, taskRoot, type StudioTask } from '../api'
 
 vi.mock('@/api/client', () => ({ default: { get: vi.fn(), post: vi.fn() } }))
 describe('Image Studio session adapter', () => {
@@ -25,6 +25,17 @@ describe('Image Studio session adapter', () => {
     // Then only that page is requested, with a continuation for an explicit action.
     expect(apiClient.get).toHaveBeenCalledTimes(1)
     expect(page.nextCursor).toBe('12:3')
+  })
+  it('trusts the expired history scope even if the browser clock is behind the server', async () => {
+    const deadline = Math.floor(Date.now() / 1000) + 1800
+    const job = { id: 'retired', status: 'completed', output_expires_at: deadline }
+    const item = { custom_id: 'one', status: 'result_available', image_count: 0 }
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { data: [{ job, item }], next_cursor: '12:3' } })
+    const page = await studioAPI(studioWalletRoute, new AbortController().signal).tasks('13:9', { status: 'expired', search: 'portrait' })
+    expect(apiClient.get).toHaveBeenCalledOnce()
+    expect(apiClient.get).toHaveBeenCalledWith('/image-studio/wallet/batches/gallery', expect.objectContaining({ params: { limit: 24, cursor: '13:9', status: 'expired', q: 'portrait' }, headers: {} }))
+    expect(page.nextCursor).toBe('12:3')
+    expect(taskDisplay(page.tasks[0])).toMatchObject({ label: '图片已过期', canViewOutput: false, canOpenArchive: false })
   })
   it('does not poll the server when no tasks are pending', async () => {
     // Given an empty visible history.

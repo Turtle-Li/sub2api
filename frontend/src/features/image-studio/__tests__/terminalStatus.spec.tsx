@@ -1,8 +1,10 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { taskDisplay, taskPending, type StudioTask, type studioAPI } from '../api'
+import { taskDisplay, taskPending, type StudioTask } from '../api'
 import TaskCard from '../upstream/components/TaskCard'
+import { createThumbnailLoader } from '../thumbnailLoader'
+const previews = createThumbnailLoader(vi.fn(), new AbortController().signal)
 const record = (jobStatus: StudioTask['job']['status'], itemStatus: string): StudioTask => ({ id: 'job/one', job: { id: 'job', status: jobStatus, model: 'fixture', error: { code: 'BATCH_FAILED', message: 'provider unavailable' } }, item: { custom_id: 'one', status: itemStatus, image_count: 0 } } as StudioTask)
 describe('terminal batch / unfinished item display projection', () => {
  it.each(['succeeded', 'success', 'completed'])('labels the successful item status %s in Chinese', status => {
@@ -10,7 +12,7 @@ describe('terminal batch / unfinished item display projection', () => {
  })
  it.each([['cancelled', '已取消'], ['failed', '任务失败'], ['output_deleted', '结果已清理']] as const)('projects %s without mutating pending server items or retaining a spinner', (status, label) => {
    const task = record(status, 'pending')
-   const html = renderToStaticMarkup(<TaskCard record={task} api={{} as ReturnType<typeof studioAPI>} onOpen={vi.fn()} onEditOutputs={vi.fn()} />)
+   const html = renderToStaticMarkup(<TaskCard record={task} previews={previews} onOpen={vi.fn()} onEditOutputs={vi.fn()} />)
    expect(html).toContain(label); expect(html).not.toContain('animate-spin')
    expect(task.item.status).toBe('pending'); expect(taskPending(task)).toBe(false)
    if (status === 'failed') expect(html).toContain('provider unavailable')
@@ -29,7 +31,7 @@ describe('terminal batch / unfinished item display projection', () => {
    const failed = { ...task, item: { ...task.item, status: 'failed', error: { code: 'RESULT_DELIVERY_FAILED', message: 'result delivery error' } } }
    expect(taskDisplay(cleaned)).toMatchObject({ status: 'output_deleted', label: '图片已清理' })
    expect(taskDisplay(failed)).toMatchObject({ status: 'failed', message: '生成结果未能交付到作品库。' })
-   const html = renderToStaticMarkup(<TaskCard record={cleaned} api={{} as ReturnType<typeof studioAPI>} onOpen={vi.fn()} onEditOutputs={vi.fn()} />)
+   const html = renderToStaticMarkup(<TaskCard record={cleaned} previews={previews} onOpen={vi.fn()} onEditOutputs={vi.fn()} />)
    expect(html).toContain('图片已清理')
    expect(html).toContain('disabled="" aria-label="继续改图"')
  })

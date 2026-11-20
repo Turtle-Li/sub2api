@@ -81,6 +81,7 @@ export interface BatchImageItem {
   mime_type: string | null
   file_extension: string | null
   image_count: number
+  readonly preview_size?: { readonly width: number; readonly height: number }
   error?: {
     code: string
     message: string

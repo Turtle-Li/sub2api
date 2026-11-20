@@ -73,7 +73,8 @@ it('submits the second edit with the completed first output and its source metad
  }
  await typePrompt('first modification')
  await act(async () => button('生成修改图').click())
- expect(host.querySelector('[role="alert"]')?.textContent).toBeUndefined()
+ const alerts = [...host.querySelectorAll('[role="alert"]')].map(alert => alert.textContent?.trim()).filter(Boolean)
+ expect(alerts).toEqual([])
  expect(client.submit).toHaveBeenCalledOnce()
  await vi.waitFor(() => expect(host.querySelector('.studio-references img')?.getAttribute('src')).toBe('data:image/png;base64,bmV3LW91dHB1dA=='))
  await typePrompt('second modification')
@@ -111,7 +112,7 @@ it('applies the cancellation response immediately, retaining item pending but st
 it('retains task details for expired work without fetching or reusing deleted bytes', async () => {
   const expired = { ...original, job: { ...original.job, status: 'output_deleted' as const, output_expires_at: 1, output_deleted_at: 2 } }
   const image = vi.fn(), thumbnail = vi.fn()
-  const tasks = vi.fn(async () => ({ tasks: [expired], nextCursor: null, itemContinuations: [] }))
+  const tasks = vi.fn<ReturnType<typeof studioAPI>['tasks']>(async (_, filters) => ({ tasks: filters?.status === 'expired' ? [expired] : [], nextCursor: null, itemContinuations: [] }))
   const client = { models: vi.fn(async () => []), tasks, image, thumbnail, submit: vi.fn(), refreshPending: vi.fn(), items: vi.fn(), cancel: vi.fn() }
   vi.mocked(studioAPI).mockReturnValue(client)
   vi.mocked(listKeys).mockResolvedValue([{ id: 42, name: 'fixture', group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false }])
@@ -119,9 +120,17 @@ it('retains task details for expired work without fetching or reusing deleted by
   const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
   await act(async () => root.render(<Studio userId={1} />))
 
-  await act(async () => host.querySelector<HTMLElement>('.studio-source-card')?.click())
+  expect(tasks).toHaveBeenCalledOnce()
+  expect(tasks).toHaveBeenCalledWith('', { status: 'current', search: '', root: '' })
+  expect(host.querySelector('.studio-source-card')).toBeNull()
+  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === '已过期')!.click())
+  expect(tasks).toHaveBeenLastCalledWith('', { status: 'expired', search: '', root: '' })
+  expect(host.querySelector('.studio-source-card')).toBeNull()
+  const row = host.querySelector<HTMLButtonElement>('.studio-expired-row')!
+  expect(row.textContent).toContain('图片已清理')
+  await act(async () => row.click())
   const detail = host.querySelector('dialog[aria-label="任务详情"]')!
-  expect(detail.textContent).toContain('图片已过期')
+  expect(detail.textContent).toContain('图片已清理')
   const actions = Array.from(detail.querySelectorAll('button')).filter(button => ['下载图片', '引用此图继续修改'].includes(button.textContent || ''))
   expect(actions.map(button => button.disabled)).toEqual([true, true])
   expect(image).not.toHaveBeenCalled()
@@ -140,14 +149,19 @@ it.each(['success', 'failed', 'expired'] as const)('opens a %s Vertex archive on
   } : {
     custom_id: 'one', status: 'success', image_count: 1, images: [new Blob(['original'], { type: 'image/png' })],
   })
-  const tasks = vi.fn(async () => ({ tasks: [task], nextCursor: null, itemContinuations: [] }))
+  const tasks = vi.fn<ReturnType<typeof studioAPI>['tasks']>(async (_, filters) => ({ tasks: filters?.status === (outcome === 'expired' ? 'expired' : 'current') ? [task] : [], nextCursor: null, itemContinuations: [] }))
   vi.mocked(studioAPI).mockReturnValue({ models: vi.fn(async () => []), tasks, image, thumbnail, archivePreview, submit: vi.fn(), refreshPending: vi.fn(), items: vi.fn(), cancel: vi.fn() })
   vi.mocked(listKeys).mockResolvedValue([{ id: 42, name: 'fixture', group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false }])
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
   await act(async () => root.render(<Studio userId={6} />))
-  expect(host.querySelector('.studio-source-card')?.getAttribute('data-status')).toBe(outcome === 'expired' ? 'expired' : 'archived')
-  await act(async () => host.querySelector<HTMLElement>('.studio-source-card')?.click())
+  if (outcome === 'expired') {
+    await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === '已过期')!.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('.studio-expired-row')!.click())
+  } else {
+    expect(host.querySelector('.studio-source-card')?.getAttribute('data-status')).toBe('archived')
+    await act(async () => host.querySelector<HTMLElement>('.studio-source-card')?.click())
+  }
   const detail = host.querySelector('dialog[aria-label="任务详情"]')!
   const open = Array.from(detail.querySelectorAll('button')).find(button => button.textContent === '打开归档结果')
   expect(archivePreview).not.toHaveBeenCalled()

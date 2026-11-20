@@ -6,8 +6,8 @@ export interface StudioKey { readonly id: number; readonly name: string; readonl
 export type StudioWalletMode = 'on' | 'off' | 'legacy'
 export const studioWalletRoute = 0
 export interface ItemContinuation { readonly job: BatchImageJob; readonly cursor: number }
-export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem }
-export interface GalleryFilters { readonly status: string; readonly search: string; readonly root?: string }
+export interface StudioTask { readonly id: string; readonly job: BatchImageJob & { readonly error?: BatchImageItem['error'] }; readonly item: BatchImageItem; readonly knownOutputGone?: true }
+export interface GalleryFilters { readonly status: 'all' | 'current' | 'pending' | 'completed' | 'failed' | 'expired'; readonly search: string; readonly root?: string }
 const itemStatuses: Readonly<Record<string, string>> = { pending: '排队中', queued: '排队中', running: '生成中', processing: '生成中', succeeded: '已完成', success: '已完成', completed: '已完成', failed: '失败', cancelled: '已取消', output_deleted: '图片已删除' }
 const failureMessages: ReadonlyMap<string, string> = new Map([
   ['RESULT_DELIVERY_FAILED', '生成结果未能交付到作品库。'],
@@ -22,9 +22,10 @@ export function taskDisplay(task: StudioTask) {
   const succeeded = ['succeeded', 'success', 'completed'].includes(item.status)
   const archived = item.status === 'result_available' && (job.status === 'completed' || job.status === 'output_deleted')
   const expired = job.output_expires_at != null && job.output_expires_at * 1000 <= Date.now()
-  const outputGone = expired || job.status === 'output_deleted' || job.output_deleted_at != null
-  if ((succeeded && item.image_count > 0 || archived) && outputGone) {
-    return { status: 'output_deleted', label: expired ? '图片已过期' : '图片已清理', message: expired ? '图片保留期已结束，任务记录仍可查看。' : '图片已清理，任务记录仍可查看。', canViewOutput: false, canOpenArchive: false }
+  const cleaned = job.status === 'output_deleted' || job.output_deleted_at != null
+  const outputGone = expired || cleaned
+  if (task.knownOutputGone || ((succeeded && item.image_count > 0 || archived) && outputGone)) {
+    return { status: 'output_deleted', label: cleaned ? '图片已清理' : '图片已过期', message: cleaned ? '图片已清理，任务记录仍可查看。' : '图片保留期已结束，任务记录仍可查看。', canViewOutput: false, canOpenArchive: false }
   }
   if (archived && job.status === 'completed') {
     return { status: 'archived', label: '归档结果', canViewOutput: false, canOpenArchive: true }
@@ -48,6 +49,7 @@ export function isImageOutputGone(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === 410
 }
 const studioBase = '/image-studio'
+const galleryPageSize = 24
 export const taskRoot = (task: StudioTask) => task.job.parent_batch_id || task.job.id
 export const taskPending = (task: StudioTask) => !['completed', 'failed', 'cancelled', 'output_deleted'].includes(task.job.status)
 export const taskId = (job: BatchImageJob, item: BatchImageItem) => `${job.id}/${item.custom_id}`
@@ -75,8 +77,10 @@ export function studioAPI(route: number, signal: AbortSignal) {
     items,
     async models() { return (await apiClient.get<{ data: BatchImageModel[] }>(`${base}/batches/models`, config)).data.data },
     async tasks(cursor = '', filters: GalleryFilters = { status: 'all', search: '' }) {
-      const { data } = await apiClient.get<{ data: Omit<StudioTask, 'id'>[]; next_cursor?: string }>(`${base}/batches/gallery`, { ...config, params: { limit: 24, cursor, status: filters.status, q: filters.search, ...(filters.root ? { root: filters.root } : {}) } })
-      return { tasks: data.data.map(({ job, item }) => ({ id: taskId(job, item), job, item })), itemContinuations: [] as ItemContinuation[], nextCursor: data.next_cursor || null }
+      const { data } = await apiClient.get<{ data: Pick<StudioTask, 'job' | 'item'>[]; next_cursor?: string }>(`${base}/batches/gallery`, { ...config, params: { limit: galleryPageSize, cursor, status: filters.status, q: filters.search, ...(filters.root ? { root: filters.root } : {}) } })
+      // The server's expired scope is authoritative even when the browser clock is behind.
+      const tasks: StudioTask[] = data.data.map(({ job, item }) => ({ id: taskId(job, item), job, item, ...(filters.status === 'expired' && { knownOutputGone: true }) }))
+      return { tasks, itemContinuations: [] as ItemContinuation[], nextCursor: data.next_cursor || null }
     },
     async refreshPending(tasks: StudioTask[]) {
       const pending = [...new Set(tasks.filter(taskPending).map(task => task.job.id))]

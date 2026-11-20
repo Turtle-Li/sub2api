@@ -1,8 +1,9 @@
 import React from 'react'
 // Adapted from 88lin/gpt-image-studio 5523a592, MIT; see UPSTREAM.md.
-import { useEffect, useState, useRef, type ReactNode } from 'react'
-import { isImageOutputGone, taskDisplay, type StudioTask, type studioAPI } from '../../api'
-import { useNearViewport } from '../hooks/useNearViewport'
+import { useCallback, useEffect, useMemo, useState, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { isImageOutputGone, taskDisplay, type StudioTask } from '../../api'
+import type { ThumbnailLoader, ThumbnailPriority } from '../../thumbnailLoader'
+import { useThumbnailPriority } from '../hooks/useNearViewport'
 import { modelBadge } from '../../ModelPicker'
 import ViewportTooltip from './ViewportTooltip'
 function TaskActionButton({
@@ -44,38 +45,89 @@ function TaskActionButton({
   )
 }
 
-export default function TaskCard({ record, api, onOpen, onEditOutputs }: { record: StudioTask; api: ReturnType<typeof studioAPI>; onOpen: () => void; onEditOutputs: () => void }) {
+function galleryCoverAspect(width: number, height: number): number | undefined {
+ const ratio = width / height
+ return width > 0 && height > 0 && Number.isFinite(ratio) ? Math.max(9 / 16, Math.min(16 / 9, ratio)) : undefined
+}
+
+function useTaskThumbnail(record: StudioTask, previews: ThumbnailLoader, enabled: boolean, priority: ThumbnailPriority) {
+ type Request = { priority: ThumbnailPriority; request: AbortController | null; failedOn: StudioTask | null }
+ const slot = useMemo<Request>(() => ({ priority: 0, request: null, failedOn: null }), [previews, record.id, enabled])
+ const [failure, setFailure] = useState<{ slot: Request; message: string } | null>(null)
+ const subscribe = useCallback((listener: () => void) => previews.subscribe(record.id, listener), [previews, record.id])
+ const read = useCallback(() => enabled ? previews.url(record.id) : '', [enabled, previews, record.id])
+ const url = useSyncExternalStore(subscribe, read, () => '')
+
+ useEffect(() => () => { slot.request?.abort(); slot.request = null }, [slot])
+ useEffect(() => {
+   slot.priority = priority
+   if (!enabled) { previews.remove(record.id); return }
+   if (!priority) return
+   if (url) { previews.touch(record.id); return }
+   if (slot.request || slot.failedOn === record) return
+   const request = new AbortController()
+   slot.request = request
+   setFailure(null)
+   void previews.load(record, request.signal, () => slot.priority).catch(error => {
+     if (request.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return
+     slot.failedOn = record
+     const message = isImageOutputGone(error) ? '图片已过期或已清理。' : error instanceof Error ? error.message : '预览暂时不可用。'
+     setFailure({ slot, message })
+   }).finally(() => { if (slot.request === request) slot.request = null })
+ }, [enabled, previews, priority, record, slot, url])
+
+ const onDecodeError = () => {
+   if (!url || previews.url(record.id) !== url) return
+   slot.failedOn = record
+   setFailure({ slot, message: '无法显示这张预览图。' })
+   previews.remove(record.id)
+ }
+ return { url, error: !url && failure?.slot === slot ? failure.message : '', onDecodeError }
+}
+
+export default function TaskCard({ record, previews, measureMissingPreview = false, onOpen, onEditOutputs }: {
+ readonly record: StudioTask
+ readonly previews: ThumbnailLoader
+ readonly measureMissingPreview?: boolean
+ readonly onOpen: () => void
+ readonly onEditOutputs: () => void
+}) {
  const cardRef = useRef<HTMLDivElement>(null)
- const nearViewport = useNearViewport(cardRef)
- const [thumbSrc, setThumbSrc] = useState('')
- const [aspectRatio, setAspectRatio] = useState<number | null>(null)
- const [imageError, setImageError] = useState('')
+ const priority = useThumbnailPriority(cardRef)
  const display = taskDisplay(record)
+ const { url: thumbSrc, error: imageError, onDecodeError } = useTaskThumbnail(record, previews, display.canViewOutput, priority)
+ const hasCoverOrNear = Boolean(thumbSrc || priority)
+ const expiresAt = record.job.output_expires_at
+ const [, setExpiredCheck] = useState(0)
+ useEffect(() => {
+   if (!hasCoverOrNear || !display.canViewOutput || expiresAt == null) return
+   let timer: ReturnType<typeof setTimeout> | undefined
+   function schedule(expiry: number) {
+     const remaining = expiry * 1000 - Date.now()
+     if (remaining <= 0) setExpiredCheck(current => current + 1)
+     else timer = setTimeout(() => schedule(expiry), Math.min(remaining, 2147483647))
+   }
+   schedule(expiresAt)
+   return () => clearTimeout(timer)
+ }, [hasCoverOrNear, display.canViewOutput, expiresAt])
+ const [decodedAspect, setDecodedAspect] = useState<number>()
+ const previewSize = record.item.preview_size
+ const metadataAspect = previewSize ? galleryCoverAspect(previewSize.width, previewSize.height) : undefined
+ // Legacy gallery cards keep their fallback until a metadata refresh, not a thumbnail decode.
+ const aspectRatio = metadataAspect ?? (measureMissingPreview ? decodedAspect : undefined)
  const isExpired = display.status === 'output_deleted'
  const isInterrupted = display.status === 'cancelled'
  const status = isExpired ? 'expired' : isInterrupted ? 'cancelled' : display.status === 'failed' ? 'error' : display.canOpenArchive ? 'archived' : ['succeeded', 'success', 'completed'].includes(display.status) ? 'done' : 'running'
  const badge = modelBadge(record.job.provider, record.job.model)
  const hasPreviewImage = display.canViewOutput && Boolean(thumbSrc)
  const outputImages = Array.from({ length: record.item.image_count }, (_, i) => `${record.id}/${i}`)
- useEffect(() => {
-   if (!nearViewport || !display.canViewOutput) return
-   const controller = new AbortController()
-   let active = true; let url = ''
-   setImageError('')
-   setThumbSrc('')
-   setAspectRatio(null)
-   api.thumbnail(record, controller.signal).then(blob => { if (active) { url = URL.createObjectURL(blob); setThumbSrc(url) } }).catch(error => {
-     if (active) setImageError(isImageOutputGone(error) ? '图片已过期或已清理。' : error instanceof Error ? error.message : '预览暂时不可用。')
-   })
-   return () => { active = false; controller.abort(); if (url) URL.revokeObjectURL(url) }
- }, [nearViewport, record, api, display.canViewOutput])
  return <div className="relative rounded-xl">
    <div ref={cardRef} data-status={status} className="studio-source-card relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-white/[0.08] overflow-hidden cursor-pointer hover:shadow-lg" role="button" tabIndex={0} aria-label="查看任务详情" onClick={onOpen} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}>
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div
-          data-has-image={hasPreviewImage ? 'true' : undefined}
-          style={hasPreviewImage && aspectRatio ? { aspectRatio: String(aspectRatio) } : undefined}
+          style={aspectRatio === undefined ? undefined : { aspectRatio }}
+          data-size-missing={aspectRatio === undefined || undefined}
           className="studio-card-preview w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0"
         >
           {status === 'running' && (
@@ -129,16 +181,13 @@ export default function TaskCard({ record, api, onOpen, onEditOutputs }: { recor
                 data-image-id={outputImages[0]}
                 data-output-image-ids={outputImages.join(',')}
                 className="saveable-image w-full h-auto block object-cover"
-                loading="lazy"
                 decoding="async"
                 alt={record.item.prompt_preview || "生成图片"}
-                onError={() => { setThumbSrc(''); setAspectRatio(null); setImageError('无法显示这张预览图。') }}
-                onLoad={event => {
+                onError={onDecodeError}
+                onLoad={measureMissingPreview && metadataAspect === undefined ? event => {
                   const { naturalWidth, naturalHeight } = event.currentTarget
-                  if (naturalWidth > 0 && naturalHeight > 0) {
-                    setAspectRatio(Math.min(16 / 9, Math.max(9 / 16, naturalWidth / naturalHeight)))
-                  }
-                }}
+                  setDecodedAspect(galleryCoverAspect(naturalWidth, naturalHeight))
+                } : undefined}
               />
               {(outputImages.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">

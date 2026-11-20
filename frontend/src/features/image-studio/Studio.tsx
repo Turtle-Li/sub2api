@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
-import { isImageOutputGone, listKeys, readImage, studioWalletRoute, taskDisplay, taskPending, taskRoot, type StudioTask, type StudioKey, type StudioWalletMode, type ItemContinuation } from './api'
+import { isImageOutputGone, listKeys, readImage, studioWalletRoute, taskDisplay, taskPending, taskRoot, type GalleryFilters, type StudioTask, type StudioKey, type StudioWalletMode } from './api'
 import { modelIdentity, workspaceAPI } from './workspaceAPI'
 import { cachedStudioKeys, cachedStudioWalletMode, cacheStudioKeys } from './cache'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
@@ -12,10 +12,13 @@ import InputBar from './upstream/components/InputBar'
 import { useGlobalClickSuppression } from './upstream/lib/clickSuppression'
 import { dismissAllTooltips } from './upstream/lib/tooltipDismiss'
 import { useEditContinuation } from './useEditContinuation'
+import { useGalleryHistory } from './useGalleryHistory'
+import ExpiredGallery from './ExpiredGallery'
+import GalleryTail from './GalleryTail'
 import './studio.css'
 
 type API = ReturnType<typeof workspaceAPI>
-const galleryFilters = [['all', '全部'], ['pending', '生成中'], ['completed', '可查看'], ['failed', '失败']] as const
+const galleryFilters = [['all', '全部'], ['pending', '生成中'], ['completed', '可查看'], ['failed', '失败'], ['expired', '已过期']] as const
 type GalleryFilter = (typeof galleryFilters)[number][0]
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : '请求失败，请刷新后重试' }
 const outputErrorMessage = (error: unknown) => isImageOutputGone(error) ? '图片已过期或已清理。' : errorMessage(error)
@@ -159,13 +162,6 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     query.addEventListener('change', update)
     return () => query.removeEventListener('change', update)
   }, [])
-  const [tasks, setTasks] = useState<StudioTask[]>([])
-  const readVersion = useRef(0)
-  const tasksRef = useRef<StudioTask[]>([])
-  tasksRef.current = tasks
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const loadedPages = useRef(1)
-  const [itemContinuations, setItemContinuations] = useState<ItemContinuation[]>([])
   const [models, setModels] = useState<BatchImageModel[]>(api.client.cachedModels)
   const [model, setModel] = useState(() => defaultStudioModel(api.client.cachedModels()))
   const manuallySelectedModel = useRef(false)
@@ -191,7 +187,13 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
   useEffect(() => { if (searchOpen) searchInput.current?.focus() }, [searchOpen])
   useEffect(() => { const timer = setTimeout(() => setQuery(search), 250); return () => clearTimeout(timer) }, [search])
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [refresh, setRefresh] = useState(0)
+  const expiredHistory = filter === 'expired'
+  const filterOptions = parent ? galleryFilters.filter(([value]) => value !== 'expired') : galleryFilters
+  const filters = useMemo<GalleryFilters>(() => ({ status: filter === 'all' && !rootBatch ? 'current' : filter, search: query, root: rootBatch }), [filter, query, rootBatch])
+  const onPollError = useCallback((error: unknown) => setError(errorMessage(error)), [])
+  const history = useGalleryHistory(api.client, api.controller.signal, filters, refresh, onPollError)
+  const { tasks } = history
   const [busy, setBusy] = useState(false)
   const attempt = useRef<{ body: string; key: string } | null>(null)
   const continuation = useEditContinuation({
@@ -200,7 +202,6 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     onAdvance: (image, task) => { setRefs([image]); setParent(task) },
     onError: error => setError(`新图片已完成，但自动引用失败：${errorMessage(error)}。请从任务中重新选择参考图。`),
   })
-  const [refresh, setRefresh] = useState(0)
   useEffect(() => {
     let active = true
     setModelsUpdating(true)
@@ -214,7 +215,7 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     void api.client.models(update).then(catalog => {
       update(catalog)
       const warning = api.client.warnings().join(' ')
-      if (warning) setError(warning)
+      if (active && warning) setError(warning)
     }).catch(error => { if (active) setError(errorMessage(error)) }).finally(() => { if (active) setModelsUpdating(false) })
     return () => { active = false }
   }, [api, refresh, catalogueRefresh])
@@ -228,77 +229,13 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     document.addEventListener('visibilitychange', revalidate)
     return () => { window.removeEventListener('focus', revalidate); document.removeEventListener('visibilitychange', revalidate) }
   }, [])
-  useEffect(() => {
-    readVersion.current++; loadedPages.current = 1; setTasks([]); setNextCursor(null)
-  }, [filter, query, rootBatch])
-  useEffect(() => {
-    let active = true
-    setLoading(true)
-    async function load() {
-      const version = readVersion.current
-      try {
-        const filters = { status: filter, search: query, root: rootBatch }
-        const incremental = tasksRef.current.length === 0 && loadedPages.current === 1
-        const first = await api.client.tasks('', filters, rows => {
-          if (incremental && active && version === readVersion.current) setTasks(rows)
-        })
-        let cursor = first.nextCursor
-        const rows = [...first.tasks]
-        const continuations = [...first.itemContinuations]
-        for (let page = 1; page < loadedPages.current && cursor; page++) {
-          const next = await api.client.tasks(cursor, filters); rows.push(...next.tasks); continuations.push(...next.itemContinuations); cursor = next.nextCursor
-        }
-        if (!active || version !== readVersion.current) return
-        setTasks(rows); setItemContinuations(continuations); setNextCursor(cursor); setError(api.client.warnings().join(' '))
-      }
-      catch (error) { if (active) setError(errorMessage(error)) }
-      finally { if (active) setLoading(false) }
-    }
-    void load(); return () => { active = false }
-  }, [api, refresh, filter, query, rootBatch])
-  const hasPending = tasks.some(taskPending)
-  useEffect(() => {
-    if (!hasPending) return
-    let active = true; let timer: ReturnType<typeof setTimeout>
-    async function poll() {
-      const version = readVersion.current
-      try { const updated = await api.client.refreshPending(tasksRef.current); if (active && version === readVersion.current) setTasks(current => current.map(task => updated.find(value => value.id === task.id) || task)) }
-      catch (error) { if (active) setError(errorMessage(error)) }
-      finally { if (active) timer = setTimeout(() => void poll(), 6000) }
-    }
-    timer = setTimeout(() => void poll(), 6000)
-    return () => { active = false; clearTimeout(timer) }
-  }, [api, hasPending])
-  async function loadMore() {
-    if (!nextCursor || loading) return
-    setLoading(true)
-    const version = readVersion.current
-    try { const page = await api.client.tasks(nextCursor, { status: filter, search: query, root: rootBatch }); if (!api.controller.signal.aborted && version === readVersion.current) { loadedPages.current++; setTasks(current => [...current, ...page.tasks.filter(task => !current.some(old => old.id === task.id))]); setNextCursor(page.nextCursor); setItemContinuations(current => [...current, ...page.itemContinuations]) } }
-    catch (error) { if (!api.controller.signal.aborted && version === readVersion.current) setError(errorMessage(error)) }
-    finally { if (!api.controller.signal.aborted && version === readVersion.current) setLoading(false) }
-  }
-  async function loadItems(continuation: ItemContinuation) {
-    if (loading) return
-    setLoading(true)
-    try {
-      const page = await api.client.items(continuation.job, continuation.cursor)
-      if (api.controller.signal.aborted) return
-      setTasks(current => {
-        const job = current.find(task => task.job.id === continuation.job.id)?.job || continuation.job
-        return [...current, ...page.tasks.filter(task => !current.some(old => old.id === task.id)).map(task => ({ ...task, job }))]
-      })
-      setItemContinuations(current => current.flatMap(item => item.job.id === continuation.job.id ? page.next ? [page.next] : [] : [item]))
-    } catch (error) { if (!api.controller.signal.aborted) setError(errorMessage(error)) }
-    finally { if (!api.controller.signal.aborted) setLoading(false) }
-  }
   useEffect(() => () => api.controller.abort(), [api])
+  const refreshGallery = () => { setError(''); setRefresh(value => value + 1) }
   async function cancel(task: StudioTask) {
     const job = await api.client.cancel(task)
     if (api.controller.signal.aborted) return
     // The returned batch is authoritative; its items may intentionally remain pending.
-    readVersion.current++
-    setItemContinuations(current => current.map(item => item.job.id === job.id ? { ...item, job } : item))
-    setTasks(current => current.map(item => item.job.id === job.id ? { ...item, job } : item))
+    history.updateJob(job)
   }
   async function edit(task: StudioTask, index = 0, archiveImage?: Blob) {
     const display = taskDisplay(task)
@@ -353,11 +290,20 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     finally { if (!api.controller.signal.aborted) setBusy(false) }
   }
   const selectedDetail = detail ? tasks.find(task => task.id === detail.id) || detail : null
-  const visible = tasks.filter(task => {
+  const visible = useMemo(() => tasks.filter(task => {
     if (parent && taskRoot(task) !== taskRoot(parent)) return false
     const display = taskDisplay(task)
-    return (filter === 'all' || filter === 'pending' && taskPending(task) || filter === 'completed' && (display.canViewOutput || display.canOpenArchive) || filter === 'failed' && display.status === 'failed') && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase())
-  })
+    return (filter === 'all' || filter === 'expired' || filter === 'pending' && taskPending(task) || filter === 'completed' && (display.canViewOutput || display.canOpenArchive) || filter === 'failed' && display.status === 'failed') && `${task.item.prompt_preview} ${task.job.model}`.toLowerCase().includes(search.toLowerCase())
+  }), [tasks, filter, parent, search])
+  const searching = search !== query
+  const showInitialLoading = !searching && history.phase === 'reading' && tasks.length === 0
+  const nextPageKey = history.pageKey
+  const galleryReadError = searching ? '' : history.failure === 'append' ? '下一页暂时无法加载' : history.failure === 'read' ? '作品暂时无法读取' : ''
+  const galleryCards = visible.length ? parent
+    ? <div className="studio-thread">{[...visible].sort((a, b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} previews={api.client.previews} measureMissingPreview onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div>
+    : expiredHistory ? <ExpiredGallery tasks={visible} open={setDetail} />
+      : <TaskGrid tasks={visible} previews={api.client.previews} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} />
+    : null
   return <div className="studio-workspace">
     <dialog ref={composer} open={!mobile} className="studio-composer" aria-label="创作设置" onClick={event => { if (mobile && event.target === event.currentTarget) composer.current?.close() }}>
       <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
@@ -365,21 +311,29 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
       {mobile && error && <p className="studio-error" role="alert">{error}</p>}
       <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} modelLoading={modelsUpdating} model={model} setModel={value => void changeModel(value)} busy={busy} submitDisabled={!directoryCurrent} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
     </dialog>
-    <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-gallery-count" aria-label={`已加载 ${tasks.length} 个图片任务`}>{tasks.length}</span></div>
-      <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{galleryFilters.map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>
-      <select className="studio-gallery-status" aria-label="筛选作品" value={filter} onChange={event => { const next = galleryFilters.find(([value]) => value === event.target.value); if (next) setFilter(next[0]) }}>{galleryFilters.map(([value, label]) => <option key={value} value={value}>{value === 'all' ? '全部作品' : label}</option>)}</select>
+    <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2><span className="studio-gallery-count" aria-label={`已加载 ${tasks.length} ${expiredHistory ? '条过期记录' : '个图片任务'}`}>{tasks.length}</span></div>
+      <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{filterOptions.map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>
+      <select className="studio-gallery-status" aria-label="筛选作品" value={filter} onChange={event => { const next = filterOptions.find(([value]) => value === event.target.value); if (next) setFilter(next[0]) }}>{filterOptions.map(([value, label]) => <option key={value} value={value}>{value === 'all' ? '全部作品' : label}</option>)}</select>
       <div className="studio-toolbar-actions">{parent && <button onClick={() => { continuation.beginSelection(); setParent(null) }}>返回画廊</button>}
         <button className="studio-search-toggle" aria-label="搜索作品" aria-expanded={searchOpen} aria-pressed={searchOpen || Boolean(search)} onClick={() => setSearchOpen(value => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg></button>
-        <button className="studio-refresh" aria-label="刷新作品" disabled={loading} onClick={() => setRefresh(value => value + 1)}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17" /></svg></button>
+        <button className="studio-refresh" aria-label="刷新作品" disabled={history.phase === 'reading'} onClick={refreshGallery}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17" /></svg></button>
       </div>
       <input ref={searchInput} className={`studio-gallery-search${searchOpen ? ' is-open' : ''}`} type="search" aria-label="搜索图片任务" placeholder="搜索提示词或模型" value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && !search) { setSearchOpen(false); event.currentTarget.closest('.studio-toolbar')?.querySelector<HTMLButtonElement>('.studio-search-toggle')?.focus() } }} />
     </div>
     {notice && <p className="studio-notice" role="status">{notice}</p>}
     {error && <div className="studio-error" role="alert">{error}</div>}
-    {loading && !tasks.length ? <div className="studio-empty" role="status">正在读取任务…</div> : !visible.length && error ? <div className="studio-empty"><h2>作品暂时无法显示</h2><p>请刷新作品后重试。</p></div> : !visible.length ? <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2>{filter === 'completed' ? <p>目前没有匹配的可查看作品。过期记录仍可在「全部」中查看。</p> : (search || filter !== 'all') ? <p>试试其他筛选条件。</p> : <p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p>}</div> : parent ? <div className="studio-thread">{[...visible].sort((a,b) => a.job.created_at - b.job.created_at).map(task => <div key={task.id}><p className="studio-message">{task.item.prompt_preview}</p><TaskCard record={task} api={api.client} onOpen={() => setDetail(task)} onEditOutputs={() => void edit(task)} /></div>)}</div> : <TaskGrid tasks={[...visible].sort((a,b) => b.job.created_at - a.job.created_at)} api={api.client} open={task => { dismissAllTooltips(); setDetail(task) }} edit={task => void edit(task)} hasMore={Boolean((nextCursor || itemContinuations.length) && !error)} loadingMore={loading} onLoadMore={() => { if (itemContinuations[0]) void loadItems(itemContinuations[0]); else if (nextCursor) void loadMore() }} />}
-
-    {itemContinuations.map(continuation => <button key={continuation.job.id} disabled={loading} onClick={() => void loadItems(continuation)}>加载批次 {continuation.job.id} 的更多图片任务</button>)}
-    {nextCursor && <button disabled={loading} onClick={() => void loadMore()}>加载更早的批次</button>}
+    {showInitialLoading ? <div className="studio-gallery-start-loading" role="status">正在读取作品…</div> : galleryCards || (searching
+      ? <div className="studio-empty" role="status">正在搜索作品…</div>
+      : galleryReadError || nextPageKey ? null
+      : expiredHistory ? <div className="studio-expired-empty" role="status"><h3>{search ? '没有匹配的过期作品' : '暂无过期作品'}</h3><p className="studio-muted">{search ? '试试其他关键词。' : '图片到期或清理后，任务记录会出现在这里。'}</p></div>
+      : <div className="studio-empty"><svg width="52" height="52" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m3 17 6-6 4 4 3-3 5 5M15 7h.01" /></svg><h2>{search || filter !== 'all' ? '没有匹配的任务' : '从一个想法开始'}</h2>{filter === 'completed' ? <p>{parent ? '目前没有匹配的可查看作品。' : '目前没有匹配的可查看作品。过期记录可在「已过期」中查看。'}</p> : (search || filter !== 'all') ? <p>试试其他筛选条件。</p> : <p>写下画面描述，或上传参考图。<br />生成结果会保存在这里。</p>}</div>)}
+    {!showInitialLoading && !searching && (visible.length > 0 || nextPageKey || galleryReadError) && <GalleryTail
+      pageKey={nextPageKey}
+      loading={history.phase !== 'idle'}
+      error={galleryReadError}
+      onLoadMore={history.loadMore}
+      onRetry={history.failure === 'append' ? history.retryMore : refreshGallery}
+    />}
     </section>
     <button className="studio-mobile-create" onClick={() => { composer.current?.showModal(); composer.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus() }}><span>{parent ? '继续修改这张图' : '描述想要的画面…'}</span><strong>展开 ↑</strong></button>
     {selectedDetail && <DetailModal key={selectedDetail.id} task={selectedDetail} api={api.client} cancel={cancel} close={() => setDetail(null)} edit={(index, image) => void edit(selectedDetail, index, image)} />}

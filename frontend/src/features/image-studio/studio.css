@@ -1,4 +1,5 @@
 /* Kimi creation rail, inside the existing Sub2 dashboard. See UPSTREAM.md. */
+html:has(.image-studio) { scrollbar-gutter: stable; }
 .image-studio {
   --studio-bg: #fff;
   --studio-panel: #fff;
@@ -97,6 +98,17 @@
 .studio-mode button { flex: 1; }
 .image-studio .studio-gallery-tabs { gap: 0; }
 .image-studio .studio-gallery-tabs button { min-height: 32px; padding: 5px 9px; font-size: 12px; }
+.studio-expired-note { padding: 4px 0 10px; }
+.studio-expired-list { border-block: 1px solid var(--studio-border); }
+.studio-expired-list li + li { border-top: 1px solid var(--studio-border); }
+.image-studio .studio-expired-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 10px; border: 0; background: transparent; text-align: left; }
+.image-studio .studio-expired-row:focus-visible { outline-offset: -2px; }
+.studio-expired-summary { display: grid; min-width: 0; gap: 2px; }
+.studio-expired-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.studio-expired-meta { display: flex; flex-wrap: wrap; gap: 0 10px; overflow-wrap: anywhere; }
+.studio-expired-meta time { white-space: nowrap; }
+.studio-expired-empty { display: grid; justify-items: center; gap: 6px; padding: 28px 12px; border-block: 1px solid var(--studio-border); text-align: center; }
+.studio-expired-empty h3 { font-size: 14px; font-weight: 600; }
 .studio-model-picker { display: grid; gap: 5px; min-width: 0; }
 .studio-field-label { font-size: 13px; font-weight: 500; }
 /* Model + parameters share one stable block: every slot has a fixed height regardless of the selected model. */
@@ -163,22 +175,27 @@
 .studio-detail-state { margin-top: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .studio-detail-error { margin-bottom: 10px; color: var(--studio-muted); font-size: 13px; overflow-wrap: anywhere; }
 .studio-detail-error summary { cursor: pointer; margin-bottom: 4px; }
-.image-studio .studio-source-grid { grid-template-columns: repeat(var(--studio-columns, 3), minmax(0, 1fr)); gap: 16px; align-items: start; }
-.studio-gallery-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.studio-grid-sentinel { height: 1px; width: 100%; }
+.image-studio .studio-source-grid { display: grid; gap: 16px; align-items: start; }
+.studio-gallery-column { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.studio-source-grid .task-card-wrapper { min-width: 0; }
+.studio-gallery-tail { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 68px; margin-block: 16px 0; border-top: 1px solid var(--studio-border); font-size: 12px; color: var(--studio-muted); text-align: center; overflow-anchor: none; }
+.image-studio .studio-gallery-tail button { min-width: 96px; }
+.image-studio .studio-gallery-tail button[aria-disabled="true"] { color: var(--studio-muted); background: var(--studio-panel); cursor: wait; }
+.studio-gallery-tail-error { color: var(--studio-danger); }
 .image-studio .studio-source-card { background: var(--studio-panel); border-color: var(--studio-border); color: var(--studio-text); box-shadow: none; transition: border-color .15s ease; }
 .image-studio .studio-source-card:hover { border-color: var(--studio-accent); }
 .image-studio .studio-source-card[data-status="error"] { border-color: var(--studio-danger); }
 .image-studio .studio-source-card > .flex { flex-direction: column; height: auto; }
 .image-studio .studio-source-card .studio-card-preview { width: 100%; min-width: 0; height: auto; aspect-ratio: 4 / 3; background: var(--studio-field); border-bottom: 1px solid var(--studio-border); }
-.image-studio .studio-source-card .studio-card-preview[data-has-image="true"] { aspect-ratio: auto; }
-.image-studio .studio-card-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.image-studio .studio-card-preview img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.image-studio .studio-card-preview[data-size-missing] img { object-fit: contain; }
 .image-studio .studio-card-preview .text-blue-400 { color: var(--studio-accent); }
 .image-studio .studio-card-status { top: 8px; left: 8px; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 500; line-height: 1.35; background: var(--studio-panel); color: var(--studio-muted); border: 1px solid var(--studio-border); }
 .image-studio [data-status="running"] .studio-card-status { background: var(--studio-accent-soft); color: var(--studio-accent); border-color: transparent; }
 .image-studio [data-status="error"] .studio-card-status { background: var(--studio-danger-bg); color: var(--studio-danger); border-color: transparent; }
 .image-studio [data-status="cancelled"] .text-yellow-400, .image-studio [data-status="cancelled"] .text-yellow-500 { color: var(--studio-muted); }
-.image-studio .studio-card-body { flex: 0 0 auto; height: auto; min-height: 72px; padding: 9px 10px 7px; gap: 6px; justify-content: space-between; }
+.image-studio .studio-card-body { flex: 0 0 auto; height: 84px; padding: 9px 10px 7px; gap: 6px; justify-content: space-between; }
+.studio-gallery-start-loading { display: grid; place-items: center; min-height: 160px; color: var(--studio-muted); font-size: 13px; }
 .studio-card-caption { line-height: 1.4; }
 .studio-card-caption > p:not(:first-child) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-card-caption > p:not(:first-child):not(.studio-muted) { color: var(--studio-danger); }
@@ -226,9 +243,9 @@
   .studio-model-check { align-self: center; }
   .image-studio .studio-tabs button { padding-inline: 10px; }
   .studio-empty { min-height: 400px; }
-  .image-studio .studio-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .studio-gallery-column { gap: 10px; }
-  .image-studio .studio-card-body { min-height: 68px; padding: 7px 8px 6px; gap: 5px; }
+  .image-studio .studio-source-grid, .studio-gallery-column { gap: 10px; }
+  .image-studio .studio-gallery-tail button { min-height: 44px; }
+  .image-studio .studio-card-body { height: 82px; padding: 7px 8px 6px; gap: 5px; }
   .image-studio .studio-source-card .line-clamp-3 { font-size: 11px; line-height: 1.4; }
   .image-studio .studio-source-card button { min-height: 32px; min-width: 32px; padding: 5px; }
   .image-studio .studio-mobile-create { display: flex; position: fixed; left: 12px; right: 12px; bottom: max(12px, var(--safe-area-bottom)); z-index: 20; justify-content: space-between; align-items: center; min-height: 48px; padding: 10px 14px; background: var(--studio-panel); border: 1px solid var(--studio-accent); border-radius: 12px; box-shadow: 0 8px 24px var(--studio-overlay); color: var(--studio-text); font-weight: 500; }
