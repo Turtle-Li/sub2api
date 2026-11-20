@@ -2024,6 +2024,8 @@ func TestGoodPutVideoReadsStayBoundToAValidKeyAndDedicatedGroup(t *testing.T) {
 		g := group
 		user := &service.User{ID: 7, Status: service.StatusActive, AllowedGroups: []int64{group.ID}}
 		switch credential {
+		case "public-owner":
+			g.IsExclusive = false
 		case "other-group":
 			g.ModelAllowlist.Models = []string{service.MuseVideoModel}
 		case "expired":
@@ -2042,6 +2044,7 @@ func TestGoodPutVideoReadsStayBoundToAValidKeyAndDedicatedGroup(t *testing.T) {
 		status int
 	}{
 		{"owner", http.StatusOK},
+		{"public-owner", http.StatusOK},
 		{"other-group", http.StatusTooManyRequests},
 		{"expired", http.StatusForbidden},
 		{"revoked-group", http.StatusForbidden},

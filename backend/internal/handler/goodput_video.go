@@ -32,6 +32,7 @@ type goodPutVideoDispatch struct {
 	id       string
 	request  *service.GoodPutVideoRequest
 	pending  *service.GrokVideoPendingBilling
+	durable  bool
 	account  *service.Account
 	key      *service.APIKey
 	subject  middleware.AuthSubject
@@ -39,31 +40,27 @@ type goodPutVideoDispatch struct {
 }
 
 func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.Context, opts goodPutVideoDispatch) {
-	nativeID := ""
-	if opts.pending != nil {
-		nativeID = opts.pending.UpstreamTaskID
+	if opts.request != nil {
+		task, err := h.gatewayService.SubmitGoodPutVideoJob(ctx, opts.key, opts.account, opts.request)
+		if err != nil {
+			h.writeGoodPutVideoError(c, opts.log, err)
+			return
+		}
+		model := opts.request.Info().Model
+		h.gatewayService.ReportOpenAIAccountScheduleResult(opts.account, model, true, nil)
+		c.Header("Cache-Control", "private, no-store")
+		c.JSON(http.StatusAccepted, task.Public(model))
+		return
 	}
-	task, err := h.gatewayService.ForwardGoodPutVideo(ctx, opts.account, opts.request, nativeID)
+	pending := opts.pending
+	task, err := h.gatewayService.GetGoodPutVideoTask(ctx, opts.account, pending.UpstreamTaskID)
 	if err != nil {
 		h.writeGoodPutVideoError(c, opts.log, err)
 		return
 	}
-	if opts.request == nil && task.ID() != opts.id {
+	if task.ID() != opts.id {
 		h.errorResponse(c, http.StatusBadGateway, "upstream_error", "GoodPut returned a mismatched video task")
 		return
-	}
-	pending := opts.pending
-	if opts.request != nil {
-		info := opts.request.Info()
-		pending = &service.GrokVideoPendingBilling{
-			Model: info.Model, BillingModel: info.Model, UpstreamModel: info.Model, OriginalModel: info.Model,
-			VideoResolution: info.Resolution, VideoDurationSeconds: info.DurationSeconds,
-			CreatedAt: service.GrokVideoPendingCreatedAtNow(), UpstreamTaskID: task.NativeID(),
-		}
-		if err := h.storeGoodPutVideoTask(ctx, opts, task.ID(), *pending); err != nil {
-			h.writeGoodPutVideoError(c, opts.log, err)
-			return
-		}
 	}
 	if task.Completed() {
 		if task.Seconds() != pending.VideoDurationSeconds {
@@ -71,6 +68,8 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "GoodPut reported an unexpected billable duration")
 			return
 		}
+	}
+	if task.Completed() && !opts.durable {
 		result := &service.OpenAIForwardResult{
 			ResponseID: task.ID(), Model: pending.Model, BillingModel: pending.BillingModel, UpstreamModel: pending.UpstreamModel,
 			VideoDurationSeconds: task.Seconds(), VideoResolution: pending.VideoResolution, VideoCount: 1,
@@ -92,24 +91,7 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 		}
 		return
 	}
-	status := http.StatusOK
-	if opts.endpoint == service.GoodPutVideoCreate {
-		status = http.StatusAccepted
-	}
-	c.JSON(status, task.Public(pending.Model))
-}
-
-func (h *OpenAIGatewayHandler) storeGoodPutVideoTask(ctx context.Context, opts goodPutVideoDispatch, taskID string, pending service.GrokVideoPendingBilling) error {
-	// The request can go away after the upstream accepts. Keep the receipt write bounded.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	defer cancel()
-	if err := h.gatewayService.StoreGrokVideoPendingBilling(ctx, taskID, opts.subject.UserID, opts.key.ID, pending); err != nil {
-		return &service.GoodPutVideoError{Status: 502, Code: "upstream_error", Message: "GoodPut accepted the task but its receipt could not be saved; do not resubmit automatically"}
-	}
-	if err := h.gatewayService.BindGrokMediaVideoRequestAccount(ctx, opts.key.GroupID, taskID, opts.subject.UserID, opts.key.ID, opts.account.ID); err != nil {
-		return &service.GoodPutVideoError{Status: 502, Code: "upstream_error", Message: "GoodPut accepted the task but its owner binding could not be saved; do not resubmit automatically"}
-	}
-	return nil
+	c.JSON(http.StatusOK, task.Public(pending.Model))
 }
 
 func (h *OpenAIGatewayHandler) writeGoodPutVideoError(c *gin.Context, log *zap.Logger, err error) {

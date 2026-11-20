@@ -35,7 +35,7 @@ func IsGoodPutVideoModel(model string) bool {
 
 func IsGoodPutVideoGroup(group *Group) bool {
 	if group == nil || group.Platform != PlatformOpenAI || group.IsSubscriptionType() ||
-		!group.IsExclusive || !group.ModelAllowlist.Enabled || len(group.ModelAllowlist.Models) == 0 {
+		!group.ModelAllowlist.Enabled || len(group.ModelAllowlist.Models) == 0 {
 		return false
 	}
 	for _, model := range group.ModelAllowlist.Models {

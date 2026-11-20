@@ -3,11 +3,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +18,39 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type goodPutVideoTestJobs struct {
+	service.UsageBillingRepository
+	job        service.GoodPutVideoJob
+	reserveErr error
+}
+
+func (r *goodPutVideoTestJobs) ReserveGoodPutVideoJob(_ context.Context, job service.GoodPutVideoJob, _ bool) error {
+	if r.reserveErr != nil {
+		return r.reserveErr
+	}
+	r.job = job
+	return nil
+}
+func (r *goodPutVideoTestJobs) AttachGoodPutVideoReceipt(_ context.Context, id, publicID, nativeID string) error {
+	if id != r.job.ID {
+		return errors.New("unexpected reservation id")
+	}
+	r.job.PublicID, r.job.NativeID = publicID, nativeID
+	return nil
+}
+func (r *goodPutVideoTestJobs) FindGoodPutVideoJob(_ context.Context, id string, userID, keyID, groupID int64) (*service.GoodPutVideoJob, error) {
+	if id == r.job.PublicID && userID == r.job.UserID && keyID == r.job.APIKeyID && groupID == r.job.GroupID {
+		return &r.job, nil
+	}
+	return nil, nil
+}
+func (*goodPutVideoTestJobs) ClaimGoodPutVideoJob(context.Context) (*service.GoodPutVideoJob, error) {
+	return nil, nil
+}
+func (*goodPutVideoTestJobs) FinishGoodPutVideoJob(context.Context, string, string) (bool, error) {
+	return true, nil
+}
 
 func goodPutVideoTestContext(t *testing.T, model, taskID string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
@@ -50,7 +85,14 @@ func goodPutVideoTestCatalog(model, price string) string {
 }
 
 func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
-	for _, model := range []string{service.GoodPutH3Model, service.GoodPutH3FastModel} {
+	for _, tc := range []struct {
+		model   string
+		seconds int
+	}{
+		{service.GoodPutH3Model, 15},
+		{service.GoodPutH3FastModel, 10},
+	} {
+		model, seconds := tc.model, strconv.Itoa(tc.seconds)
 		t.Run(model, func(t *testing.T) {
 			h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI, model)
 			nativeID := "video_" + strings.Repeat("provider_metadata_", 12)
@@ -76,11 +118,11 @@ func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 					require.Nil(t, req.GetBody)
 					body, err := io.ReadAll(req.Body)
 					require.NoError(t, err)
-					require.JSONEq(t, goodPutVideoTestPayload(model, "5"), string(body))
+					require.JSONEq(t, goodPutVideoTestPayload(model, seconds), string(body))
 					return response(`{"id":"` + nativeID + `","status":"queued"}`), nil
 				case "/v1/videos/" + nativeID:
 					statusCalls++
-					return response(`{"id":"` + nativeID + `","status":"` + state + `","usage":{"duration_seconds":5},"video_url":"https://private-storage.example/signed"}`), nil
+					return response(`{"id":"` + nativeID + `","status":"` + state + `","usage":{"duration_seconds":` + seconds + `},"video_url":"https://private-storage.example/signed"}`), nil
 				case "/v1/videos/" + nativeID + "/content":
 					downloads++
 					resp := response(mp4)
@@ -92,6 +134,10 @@ func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 				}
 			}
 			c, w := goodPutVideoTestContext(t, model, "")
+			c.Request.Body = io.NopCloser(strings.NewReader(goodPutVideoTestPayload(model, `"`+seconds+`"`)))
+			c.Request.ContentLength = int64(len(goodPutVideoTestPayload(model, `"`+seconds+`"`)))
+			key, _ := middleware.GetAPIKeyFromContext(c)
+			key.Group.IsExclusive = false
 			h.GoodPutVideoGeneration(c)
 			require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 			var receipt struct{ ID string }
@@ -101,8 +147,9 @@ func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 			require.Zero(t, len(bindings.usage))
 
 			c, w = goodPutVideoTestContext(t, model, receipt.ID)
-			key, _ := middleware.GetAPIKeyFromContext(c)
+			key, _ = middleware.GetAPIKeyFromContext(c)
 			key.ID++
+			key.Group.IsExclusive = false
 			h.GoodPutVideoStatus(c)
 			require.Equal(t, http.StatusNotFound, w.Code)
 			require.Zero(t, statusCalls)
@@ -115,22 +162,26 @@ func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 
 			state = "completed"
 			c, w = goodPutVideoTestContext(t, model, receipt.ID)
+			key, _ = middleware.GetAPIKeyFromContext(c)
+			key.Group.IsExclusive = false
 			h.GoodPutVideoStatus(c)
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.Contains(t, w.Body.String(), "/v1/videos/"+receipt.ID+"/content")
 			require.NotContains(t, w.Body.String(), "private-storage")
 			c, w = goodPutVideoTestContext(t, model, receipt.ID)
+			key, _ = middleware.GetAPIKeyFromContext(c)
+			key.Group.IsExclusive = false
 			h.GoodPutVideoContent(c)
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.Equal(t, mp4, w.Body.String())
 			require.Equal(t, 1, submits)
 			require.Equal(t, 1, downloads)
-			require.Len(t, bindings.usage, 1)
-			entry := bindings.usage[0]
-			require.Equal(t, service.StableGrokVideoBillingRequestID(receipt.ID), entry.RequestID)
-			require.Equal(t, model, entry.Model)
-			require.Equal(t, 5, *entry.VideoDurationSeconds)
-			require.InDelta(t, 0.75, entry.ActualCost, 0.000001)
+			// Reads must not charge a durable job; only the worker settles it.
+			require.Empty(t, bindings.usage)
+			require.Equal(t, receipt.ID, bindings.goodPut.job.PublicID)
+			require.Equal(t, model, bindings.goodPut.job.Model)
+			require.Equal(t, tc.seconds, bindings.goodPut.job.Seconds)
+			require.InDelta(t, 0.15*float64(tc.seconds), bindings.goodPut.job.HoldAmount, 0.000001)
 			slots.assertReleased(t)
 		})
 	}
@@ -162,4 +213,19 @@ func TestGoodPutVideoRejectsPriceIncreaseAndDoesNotReplay(t *testing.T) {
 			slots.assertReleased(t)
 		})
 	}
+}
+
+func TestGoodPutVideoInsufficientFundsStopsBeforePost(t *testing.T) {
+	const model = service.GoodPutH3Model
+	h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI, model)
+	bindings.goodPut.reserveErr = service.ErrGoodPutVideoFunds
+	upstream.call = func(req *http.Request, _ int64) (*http.Response, error) {
+		require.Equal(t, http.MethodGet, req.Method)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(goodPutVideoTestCatalog(model, "0.09")))}, nil
+	}
+	c, w := goodPutVideoTestContext(t, model, "")
+	h.GoodPutVideoGeneration(c)
+	require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	require.Equal(t, 1, upstream.calls)
+	slots.assertReleased(t)
 }

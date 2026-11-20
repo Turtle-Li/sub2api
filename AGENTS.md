@@ -65,9 +65,10 @@
 ## GoodPut H3 video
 
 - Read `docs/goodput-h3-video.md` before changing the H3 adapter or
-  provisioning a GoodPut account. Use a dedicated exclusive pilot group, exact
-  model IDs, same-key task ownership, and a verified cost ceiling. Do not
-  publish the group or replay an ambiguous paid request.
+  provisioning a GoodPut account. Scope public submissions to the approved
+  dedicated H3 wallet group. Keep exact model IDs, same-key task ownership,
+  background settlement and the verified cost ceiling. Never replay an
+  ambiguous paid request.
 
 ## Image Studio integration
 

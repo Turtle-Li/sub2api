@@ -126,6 +126,7 @@ type grokMediaSlotBindings struct {
 	billed  map[string]bool
 	pending map[string][]byte
 	usage   []*service.UsageLog
+	goodPut *goodPutVideoTestJobs
 }
 
 type grokMediaSlotUsage struct {
@@ -254,16 +255,21 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 		require.NoError(t, err)
 	}
 	var usage service.UsageLogRepository
+	var billingRepo service.UsageBillingRepository
 	var pricing *service.BillingService
 	var resolver *service.ModelPricingResolver
 	var deferred *service.DeferredService
 	if len(platforms) > 1 && service.IsGoodPutVideoModel(platforms[1]) {
+		bindings.goodPut = &goodPutVideoTestJobs{}
+		billingRepo = bindings.goodPut
+		cfg.Gateway.GoodPutVideoPublicGroupID = 24
 		usage = grokMediaSlotUsage{bindings: bindings}
 		pricing = service.NewBillingService(cfg, nil)
 		resolver = service.NewModelPricingResolver(nil, pricing)
 		deferred = service.NewDeferredService(repo, nil, 0)
 	}
-	gateway := service.NewOpenAIGatewayService(repo, usage, nil, nil, nil, nil, bindings, cfg, nil, concurrency, pricing, nil, nil, upstream, deferred, nil, provider, resolver, nil, nil, nil, nil)
+	gateway := service.NewOpenAIGatewayService(repo, usage, billingRepo, nil, nil, nil, bindings, cfg, nil, concurrency, pricing, nil, nil, upstream, deferred, nil, provider, resolver, nil, nil, nil, nil)
+	t.Cleanup(gateway.CloseOpenAIWSPool)
 	groupID := int64(24)
 	require.NoError(t, gateway.BindGrokMediaVideoRequestAccount(context.Background(), &groupID, "task", 10, 20, 1))
 	bindings.writes = 0

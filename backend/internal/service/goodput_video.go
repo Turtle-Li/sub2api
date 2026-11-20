@@ -26,8 +26,9 @@ const (
 )
 
 var (
-	goodPutNativeVideoID = regexp.MustCompile(`^video_[A-Za-z0-9_.~=-]{1,768}$`)
-	goodPutPublicVideoID = regexp.MustCompile(`^gpv_[0-9a-f]{32}$`)
+	errGoodPutVideoNotDispatched = errors.New("GoodPut video request was not dispatched")
+	goodPutNativeVideoID         = regexp.MustCompile(`^video_[A-Za-z0-9_.~=-]{1,768}$`)
+	goodPutPublicVideoID         = regexp.MustCompile(`^gpv_[0-9a-f]{32}$`)
 )
 
 func IsGoodPutVideoTaskID(id string) bool {
@@ -35,7 +36,10 @@ func IsGoodPutVideoTaskID(id string) bool {
 }
 
 func (s *OpenAIGatewayService) HasGoodPutVideoPrice(ctx context.Context, key *APIKey, model string) bool {
-	key = s.apiKeyWithFreshGroupMediaPricing(ctx, key)
+	return s.hasGoodPutVideoPrice(ctx, s.apiKeyWithFreshGroupMediaPricing(ctx, key), model)
+}
+
+func (s *OpenAIGatewayService) hasGoodPutVideoPrice(ctx context.Context, key *APIKey, model string) bool {
 	if key == nil || !IsGoodPutVideoGroup(key.Group) {
 		return false
 	}
@@ -61,9 +65,10 @@ func (s *OpenAIGatewayService) HasGoodPutVideoPrice(ctx context.Context, key *AP
 }
 
 type GoodPutVideoError struct {
-	Status  int
-	Code    string
-	Message string
+	Status             int
+	Code               string
+	Message            string
+	submissionRejected bool
 }
 
 func (e *GoodPutVideoError) Error() string { return e.Message }
@@ -98,29 +103,28 @@ func (t GoodPutVideoTask) Public(model string) gin.H {
 	return out
 }
 
-// ForwardGoodPutVideo reads the existing task or submits one new task. It never replays a submission.
-func (s *OpenAIGatewayService) ForwardGoodPutVideo(ctx context.Context, account *Account, create *GoodPutVideoRequest, nativeID string) (GoodPutVideoTask, error) {
-	method, target := http.MethodGet, goodPutVideoOrigin+"/v1/videos"
-	var body []byte
-	if create == nil {
-		if !goodPutNativeVideoID.MatchString(nativeID) {
-			return GoodPutVideoTask{}, &GoodPutVideoError{Status: 404, Code: "not_found_error", Message: "Video task not found"}
-		}
-		target += "/" + nativeID
-	} else {
-		method = http.MethodPost
-		if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGoodPutVideo) || account.GetModelMapping()[create.info.Model] != create.info.Model {
-			return GoodPutVideoTask{}, errors.New("GoodPut video account does not provide this model")
-		}
-		if err := s.checkGoodPutVideoCatalogPrice(ctx, account, create.info.Model); err != nil {
-			return GoodPutVideoTask{}, err
-		}
-		var err error
-		body, err = json.Marshal(create.payload)
-		if err != nil {
-			return GoodPutVideoTask{}, fmt.Errorf("encode GoodPut video request: %w", err)
-		}
+func (s *OpenAIGatewayService) GetGoodPutVideoTask(ctx context.Context, account *Account, nativeID string) (GoodPutVideoTask, error) {
+	if !goodPutNativeVideoID.MatchString(nativeID) {
+		return GoodPutVideoTask{}, &GoodPutVideoError{Status: 404, Code: "not_found_error", Message: "Video task not found"}
 	}
+	return s.sendGoodPutVideo(ctx, account, http.MethodGet, goodPutVideoOrigin+"/v1/videos/"+nativeID, nativeID, nil)
+}
+
+func (s *OpenAIGatewayService) prepareGoodPutVideoSubmission(ctx context.Context, account *Account, create *GoodPutVideoRequest) ([]byte, error) {
+	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGoodPutVideo) || account.GetModelMapping()[create.info.Model] != create.info.Model {
+		return nil, errors.New("GoodPut video account does not provide this model")
+	}
+	if err := s.checkGoodPutVideoCatalogPrice(ctx, account, create.info.Model); err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(create.payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode GoodPut video request: %w", err)
+	}
+	return body, nil
+}
+
+func (s *OpenAIGatewayService) sendGoodPutVideo(ctx context.Context, account *Account, method, target, nativeID string, body []byte) (GoodPutVideoTask, error) {
 	resp, err := s.doGoodPutVideoRequest(ctx, account, method, target, body)
 	if err != nil {
 		return GoodPutVideoTask{}, err
@@ -199,23 +203,23 @@ func (s *OpenAIGatewayService) WriteGoodPutVideoContent(ctx context.Context, c *
 
 func (s *OpenAIGatewayService) doGoodPutVideoRequest(ctx context.Context, account *Account, method, target string, body []byte) (*http.Response, error) {
 	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGoodPutVideo) {
-		return nil, errors.New("invalid GoodPut video account")
+		return nil, fmt.Errorf("invalid GoodPut video account: %w", errGoodPutVideoNotDispatched)
 	}
 	if _, err := s.validateUpstreamBaseURL(goodPutVideoOrigin); err != nil {
-		return nil, errors.New("GoodPut video origin is unavailable under the outbound URL policy")
+		return nil, fmt.Errorf("GoodPut video origin is unavailable under the outbound URL policy: %w", errGoodPutVideoNotDispatched)
 	}
 	proxy, err := ResolveAccountProxyURL(account)
 	if err != nil {
-		return nil, errors.New("GoodPut video account proxy is unavailable")
+		return nil, fmt.Errorf("GoodPut video account proxy is unavailable: %w", errGoodPutVideoNotDispatched)
 	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
-		return nil, errors.New("GoodPut video account credential is unavailable")
+		return nil, fmt.Errorf("GoodPut video account credential is unavailable: %w", errGoodPutVideoNotDispatched)
 	}
 	ctx = WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamPublicHostsOnly(ctx))
 	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 	if err != nil {
-		return nil, errors.New("cannot construct GoodPut video request")
+		return nil, fmt.Errorf("cannot construct GoodPut video request: %w", errGoodPutVideoNotDispatched)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if method == http.MethodPost {
@@ -236,17 +240,21 @@ func (s *OpenAIGatewayService) doGoodPutVideoRequest(ctx context.Context, accoun
 func classifyGoodPutVideoError(resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return &GoodPutVideoError{Status: resp.StatusCode, Code: "invalid_request_error", Message: "GoodPut rejected the video parameters or references"}
+		return &GoodPutVideoError{Status: resp.StatusCode, Code: "invalid_request_error", Message: "GoodPut rejected the video parameters or references", submissionRejected: true}
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return &GoodPutVideoError{Status: 502, Code: "upstream_error", Message: "GoodPut rejected account access", submissionRejected: true}
+	case http.StatusRequestEntityTooLarge:
+		return &GoodPutVideoError{Status: 413, Code: "invalid_request_error", Message: "GoodPut rejected the video request size", submissionRejected: true}
 	case http.StatusNotFound:
-		return &GoodPutVideoError{Status: 404, Code: "not_found_error", Message: "The task or model is unavailable from GoodPut"}
+		return &GoodPutVideoError{Status: 404, Code: "not_found_error", Message: "The task or model is unavailable from GoodPut", submissionRejected: true}
 	case http.StatusTooManyRequests:
 		var payload struct {
 			Error struct{ Code string } `json:"error"`
 		}
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(&payload); err == nil && payload.Error.Code == "credit_balance_exhausted" {
-			return &GoodPutVideoError{Status: 429, Code: "credit_balance_exhausted", Message: "The GoodPut account has insufficient balance"}
+			return &GoodPutVideoError{Status: 429, Code: "credit_balance_exhausted", Message: "The GoodPut account has insufficient balance", submissionRejected: true}
 		}
-		return &GoodPutVideoError{Status: 429, Code: "rate_limit_error", Message: "The GoodPut account is rate limited or has reached its quota"}
+		return &GoodPutVideoError{Status: 429, Code: "rate_limit_error", Message: "The GoodPut account is rate limited or has reached its quota", submissionRejected: true}
 	default:
 		return errors.New("GoodPut video upstream did not accept the request")
 	}

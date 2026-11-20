@@ -85,6 +85,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "GoodPut H3 is not available for this group")
 		return
 	}
+	if endpoint == service.GoodPutVideoCreate && !h.gatewayService.CanSubmitGoodPutVideo(apiKey.Group) {
+		h.errorResponse(c, http.StatusForbidden, "goodput_video_group_not_enabled", "GoodPut H3 submissions are not enabled for this public group")
+		return
+	}
 	if endpoint.IsMuseMedia() && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI || apiKey.Group.IsSubscriptionType()) {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Muse media requires an OpenAI wallet group")
 		return
@@ -114,6 +118,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	var museIdempotencyKey string
 	var goodPutRequest *service.GoodPutVideoRequest
 	var goodPutPending *service.GrokVideoPendingBilling
+	var goodPutJob *service.GoodPutVideoJob
 	switch {
 	case endpoint == service.GoodPutVideoCreate:
 		goodPutRequest, err = service.ParseGoodPutVideoRequest(contentType, body)
@@ -189,7 +194,13 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 	if endpoint.IsGoodPutVideo() && endpoint.IsTaskLookupRequest() {
 		if service.IsGoodPutVideoTaskID(requestID) {
-			goodPutPending, err = h.gatewayService.LoadGrokVideoPendingBilling(c.Request.Context(), requestID, subject.UserID, apiKey.ID)
+			goodPutJob, err = h.gatewayService.FindGoodPutVideoJob(c.Request.Context(), apiKey, requestID)
+			if err == nil && goodPutJob != nil {
+				goodPutPending = &service.GrokVideoPendingBilling{Model: goodPutJob.Model,
+					VideoDurationSeconds: goodPutJob.Seconds, UpstreamTaskID: goodPutJob.NativeID}
+			} else if err == nil {
+				goodPutPending, err = h.gatewayService.LoadGrokVideoPendingBilling(c.Request.Context(), requestID, subject.UserID, apiKey.ID)
+			}
 		}
 		if err != nil || goodPutPending == nil || !service.IsGoodPutVideoModel(goodPutPending.Model) || !apiKey.Group.ModelAllowlist.Allows(goodPutPending.Model) {
 			h.errorResponse(c, http.StatusNotFound, "not_found_error", "GoodPut video task not found")
@@ -318,9 +329,13 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	boundLookupAccountID := int64(0)
 	if endpoint.IsTaskLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
-		boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
-			c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
-		)
+		if goodPutJob != nil {
+			boundLookupAccountID = goodPutJob.AccountID
+		} else {
+			boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+				c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
+			)
+		}
 		if err != nil || boundLookupAccountID <= 0 {
 			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
 			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Media task not found")
@@ -518,7 +533,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		if endpoint.IsGoodPutVideo() {
 			h.forwardGoodPutVideo(requestCtx, c, goodPutVideoDispatch{
-				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending,
+				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending, durable: goodPutJob != nil,
 				account: account, key: apiKey, subject: subject, log: reqLog,
 			})
 			return
