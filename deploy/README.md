@@ -72,8 +72,11 @@ systemctl status sub2api-runtime-guard.timer --no-pager
 
 Run the manual `CI` workflow first when GitHub-hosted verification is desired,
 then explicitly dispatch `.github/workflows/sub2api-production-deploy.yml` from
-`main`. The workflow refuses other refs and aborts if `main` advances while the
-image is building. It requires the repository secrets
+`main`. The workflow builds the dispatch commit, rather than the branch tip
+when the runner starts. Pass `expected_commit` with the reviewed full SHA to
+fail before building if the dispatch captured a different commit. The workflow
+refuses other refs and aborts if `main` advances while the image is building.
+It requires the repository secrets
 `SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
 `SUB2API_DEPLOY_PORT`, `SUB2API_DEPLOY_USER`, and
 `SUB2API_DEPLOY_KNOWN_HOSTS`. The live configuration is
