@@ -704,6 +704,17 @@ run_guard_with_batch_image_cos >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
 assert_contains "${CASE_ROOT}/image-upscale-helper-calls.log" 'ready-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
+new_case local-active-image-aliyun-vault
+write_standard_dependencies
+write_container sub2api-upscale-vault true healthy false 0 sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  $'volume|sub2api_sub2api_data|/app/data|true\nvolume|sub2api_image_upscale_vault|/run/sub2api-upscale-vault|false' \
+  $'IMAGE_UPSCALE_ALIYUN_ENABLED=true\nIMAGE_UPSCALE_ENABLED=true\nIMAGE_UPSCALE_BASE_URL=https://hcmac-mini.tailfc4ed7.ts.net\nIMAGE_UPSCALE_API_KEY_VAULT_REF=vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key\nIMAGE_UPSCALE_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock\nBATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=vault://secret/data/test/sub2api-batch-image#access_key_id\nBATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=vault://secret/data/test/sub2api-batch-image#secret_access_key\nBATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock'
+run_guard_with_batch_image_cos >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_contains "${CASE_ROOT}/image-upscale-helper-calls.log" 'ready-aliyun-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
 new_case local-active-batch-image-delivery-env-override
 write_standard_dependencies
 write_container sub2api-upscale-vault true healthy false 0 sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -807,11 +818,12 @@ fi
 assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 
-for local_forbidden_environment_case in payment-private-key feishu-raw-webhook; do
+for local_forbidden_environment_case in payment-private-key feishu-raw-webhook aliyun-raw; do
   new_case "local-active-${local_forbidden_environment_case}-environment"
   write_standard_dependencies
   write_container sub2api-green true healthy false 0 sub2api:current
   case "$local_forbidden_environment_case" in
+    aliyun-raw) local_forbidden_environment='IMAGE_UPSCALE_ALIYUN_CREDENTIALS=' ;;
     payment-private-key) local_forbidden_environment='UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=' ;;
     feishu-raw-webhook) local_forbidden_environment='SUB2API_FEISHU_WEBHOOK_URL=https://example.invalid/webhook' ;;
   esac

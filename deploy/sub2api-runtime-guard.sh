@@ -509,6 +509,7 @@ if not isinstance(environment, list) or any(not isinstance(item, str) for item i
 for forbidden in (
     "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64",
     "IMAGE_UPSCALE_API_KEY",
+    "IMAGE_UPSCALE_ALIYUN_CREDENTIALS",
     "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID",
     "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY",
     "SUB2API_FEISHU_WEBHOOK_URL",
@@ -533,6 +534,9 @@ def enabled(name):
 
 payment = enabled("UNIFIED_PAYMENT_ENABLED")
 upscale = enabled("IMAGE_UPSCALE_ENABLED")
+aliyun = enabled("IMAGE_UPSCALE_ALIYUN_ENABLED")
+if aliyun == "true" and upscale != "true":
+    raise SystemExit(1)
 feishu = enabled("SUB2API_FEISHU_ENABLED")
 daypass = enabled("SHOP_DAYPASS_ENABLED")
 products = [item[len("SHOP_DAYPASS_PRODUCT_ID="):] for item in environment if item.startswith("SHOP_DAYPASS_PRODUCT_ID=")]
@@ -541,7 +545,7 @@ if "SHOP_DAYPASS_PRODUCT_ID" in environment or len(products) > 1:
 product = products[0] if products else "0"
 if not re.fullmatch(r"[0-9]+", product) or (daypass == "true" and not re.fullmatch(r"[1-9][0-9]*", product)):
     raise SystemExit(1)
-print(f"{payment}|{upscale}|{feishu}|{daypass}|{product}")
+print(f"{payment}|{upscale}|{feishu}|{daypass}|{product}|{aliyun}")
 '
 }
 
@@ -613,7 +617,7 @@ application_runtime_matches() {
   local container_name="$1" networks mounts environment environment_json feature_flags
   local network_count mount_count expected_mount_count unified_payment_enabled image_upscale_enabled feishu_enabled
   local batch_image_delivery_cos_configured vault_socket_required sidecar_image
-  local extra_feature_value unified_payment_mount_count image_upscale_mount_count
+  local aliyun_enabled ready_action=ready-auto extra_feature_value unified_payment_mount_count image_upscale_mount_count
   local key expected_value actual_value daypass_enabled daypass_product
   container_exists "$container_name" || return 1
   [ "$(container_field "$container_name" '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped ] || return 1
@@ -622,7 +626,8 @@ application_runtime_matches() {
   environment="$(docker inspect "$container_name" --format '{{range .Config.Env}}{{println .}}{{end}}')" || return 1
   environment_json="$(docker inspect "$container_name" --format '{{json .Config.Env}}')" || return 1
   feature_flags="$(runtime_feature_flags_from_environment "$environment_json")" || return 1
-  IFS='|' read -r unified_payment_enabled image_upscale_enabled feishu_enabled daypass_enabled daypass_product extra_feature_value <<<"$feature_flags"
+  IFS='|' read -r unified_payment_enabled image_upscale_enabled feishu_enabled daypass_enabled daypass_product aliyun_enabled extra_feature_value <<<"$feature_flags"
+  case "$aliyun_enabled" in true) ready_action=ready-aliyun-auto ;; false) ;; *) return 1 ;; esac
   [ -z "${extra_feature_value:-}" ] || return 1
   case "$unified_payment_enabled" in true|false) ;; *) return 1 ;; esac
   case "$image_upscale_enabled" in true|false) ;; *) return 1 ;; esac
@@ -701,7 +706,7 @@ application_runtime_matches() {
 	[ "$(realpath -e -- "$IMAGE_UPSCALE_VAULT_HELPER")" = "$IMAGE_UPSCALE_VAULT_HELPER" ] || return 1
 	sidecar_image="$(docker inspect sub2api-upscale-vault --format '{{.Config.Image}}' 2>/dev/null)" || return 1
 	SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" \
-		bash "$IMAGE_UPSCALE_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null || return 1
+		bash "$IMAGE_UPSCALE_VAULT_HELPER" "$ready_action" "$sidecar_image" >/dev/null || return 1
   elif [ "$DEPENDENCY_MODE" = local ] && [ "$DUAL_NODE_RUNTIME_ENABLED" = false ]; then
     image_upscale_mount_count="$(mount_target_count "$mounts" "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH")"
     case "$image_upscale_mount_count" in

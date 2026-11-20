@@ -36,7 +36,7 @@ case "$#" in
   *) die ;;
 esac
 case "$action" in
-  all|api|batch-cos|ready) ;;
+  all|api|aliyun|batch-cos|ready) ;;
   *) die ;;
 esac
 case "$image" in sub2api:prebuilt-*) ;; *) die ;; esac
@@ -67,14 +67,16 @@ validate_secret() {
   fi
 }
 
+aliyun_credentials="${IMAGE_UPSCALE_ALIYUN_CREDENTIALS-}"
 api_key="${IMAGE_UPSCALE_API_KEY-}"
 cos_access_key="${BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID-}"
 cos_secret_key="${BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY-}"
 cleanup() {
+  clear_secret aliyun_credentials
   clear_secret api_key
   clear_secret cos_access_key
   clear_secret cos_secret_key
-  unset IMAGE_UPSCALE_API_KEY BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY
+  unset IMAGE_UPSCALE_ALIYUN_CREDENTIALS IMAGE_UPSCALE_API_KEY BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY
 }
 trap cleanup EXIT
 
@@ -88,6 +90,10 @@ case "$action" in
   api)
     validate_secret api_key 512 true
     remote_action=load-api
+    ;;
+  aliyun)
+    validate_secret aliyun_credentials 512 false
+    remote_action=load-aliyun
     ;;
   batch-cos)
     validate_secret cos_access_key 256 false
@@ -112,6 +118,7 @@ ssh_options=(
 remote_command="sudo -n $REMOTE_HELPER $remote_action $image"
 ssh_without_secrets=(
   /usr/bin/env
+  -u IMAGE_UPSCALE_ALIYUN_CREDENTIALS
   -u IMAGE_UPSCALE_API_KEY
   -u BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID
   -u BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY
@@ -128,6 +135,10 @@ case "$action" in
     ;;
   api)
     printf '%s\n' "$api_key" | "${ssh_without_secrets[@]}"
+    printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_LOADED'
+    ;;
+  aliyun)
+    printf '%s\n' "$aliyun_credentials" | "${ssh_without_secrets[@]}"
     printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_LOADED'
     ;;
   batch-cos)
