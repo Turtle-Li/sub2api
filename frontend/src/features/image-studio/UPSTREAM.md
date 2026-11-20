@@ -190,10 +190,12 @@ stable fallback with an uncropped thumbnail. After a successful thumbnail read
 records the size, the next metadata refresh uses it. Loading, decoding or
 failing an image does not resize its frame.
 
-The client requests 24 items per page and history scope. The server cursor and
-batch-item continuation share a tail observer that prefetches within 400px of
-the viewport, plus one manual action. Only metadata
-loading controls the tail. Separately, card thumbnails prefetch within 640px of
+The client requests 24 metadata items per history scope, combines the replies,
+and mounts at most 24 cards per visible page. Extra metadata stays unmounted
+until the next scroll page; the heading does not show a transient card count.
+The server cursor, buffered metadata, and batch-item continuation share a tail
+observer that prefetches within 400px of the viewport, plus one manual action.
+Only metadata loading controls the tail. Separately, card thumbnails prefetch within 640px of
 the viewport, with visible cards taking precedence in a four-read queue. The
 limit leaves HTTP/1.1 connections available for metadata and originals. Scrolling
 away skips queued reads, not transfers that already started. A transient page

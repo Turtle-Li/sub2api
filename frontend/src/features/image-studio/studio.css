@@ -83,7 +83,6 @@ html:has(.image-studio) { scrollbar-gutter: stable; }
 .studio-toolbar { justify-content: flex-start; min-height: 32px; gap: 6px; margin-bottom: 10px; }
 .studio-gallery-heading { gap: 6px; flex-shrink: 0; }
 .studio-gallery-heading h2 { font-size: 14px; }
-.studio-gallery-count { color: var(--studio-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .studio-toolbar-actions { margin-left: auto; gap: 4px; order: 3; }
 .image-studio .studio-toolbar-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; min-width: 32px; padding: 6px; border-color: transparent; color: var(--studio-muted); }
 .image-studio .studio-toolbar-actions button:hover:not(:disabled), .image-studio .studio-toolbar-actions button[aria-pressed="true"] { color: var(--studio-accent); background: var(--studio-accent-soft); }

@@ -31,10 +31,11 @@ read errors retain a warning and the last display. Submission routes only from
 fresh successful discovery and still passes server authorization/pricing.
 Cached display never grants access or authorizes a generation POST.
 
-The first gallery page likewise publishes each available history channel as it
-returns, retaining independent cursors. Later page replay remains atomic to avoid
-shrinking already loaded content on refresh. Assets retain their original key
-ownership before a partial page is published.
+The November 9 gallery initially published each history channel as it returned.
+The current 24-card paging contract supersedes that behavior: the gallery waits
+for the scoped metadata replies before publishing each visible page and retains
+independent cursors and asset ownership. Thumbnail loads and the incremental
+model catalogue remain independent of this commit boundary.
 
 Catalogue HTTP responses use private revalidation with an ETag and Vary on
 Authorization/X-API-Key-ID. Authentication, current admission, prices and allowlists
