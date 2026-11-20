@@ -109,6 +109,11 @@ export const FeatureFlags = {
     mode: 'opt-out',
     label: 'Subscription',
   }),
+  videoStudio: defineFlag({
+    key: 'video_studio_enabled',
+    mode: 'opt-in',
+    label: 'Video Studio',
+  }),
   modelPlaza: defineFlag({
     key: 'model_plaza_enabled',
     mode: 'opt-in',

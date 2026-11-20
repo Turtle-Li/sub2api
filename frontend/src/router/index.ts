@@ -249,6 +249,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/user/ImageStudioView.vue'),
     meta: { requiresAuth: true, requiresAdmin: false, title: '生图工作台' }
   },
+  // The deployment switch hides entry/new submissions, not access to an owner's existing jobs.
+  {
+    path: '/video-studio',
+    name: 'VideoStudio',
+    component: () => import('@/views/user/VideoStudioView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: '视频工作台' }
+  },
   {
     path: '/batch-image',
     name: 'BatchImageGuide',

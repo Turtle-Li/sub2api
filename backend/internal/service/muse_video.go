@@ -75,13 +75,24 @@ func (t museNativeVideoTask) public(id string) gin.H {
 // ForwardMuseVideo calls the configured account only. A create error never
 // triggers failover: the native service may already have accepted the task.
 func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, id string, body []byte) (*OpenAIForwardResult, gin.H, error) {
-	if !endpoint.IsMuseVideo() || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityMuseVideo) {
-		return nil, nil, errors.New("the Muse video account is not configured")
-	}
-	base, proxy, token, err := s.museUpstream(ctx, account)
+	route, err := s.museVideoRoute(ctx, account, endpoint)
 	if err != nil {
 		return nil, nil, err
 	}
+	return s.forwardMuseVideo(ctx, c, account, endpoint, id, body, route)
+}
+
+type museVideoOrigin struct{ base, proxy, token string }
+
+func (s *OpenAIGatewayService) museVideoRoute(ctx context.Context, account *Account, endpoint GrokMediaEndpoint) (museVideoOrigin, error) {
+	if account == nil || !endpoint.IsMuseVideo() || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityMuseVideo) {
+		return museVideoOrigin{}, errors.New("the Muse video account is not configured")
+	}
+	base, proxy, token, err := s.museUpstream(ctx, account)
+	return museVideoOrigin{base, proxy, token}, err
+}
+func (s *OpenAIGatewayService) forwardMuseVideo(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, id string, body []byte, route museVideoOrigin) (*OpenAIForwardResult, gin.H, error) {
+	base, proxy, token := route.base, route.proxy, route.token
 	ctx, cancel := context.WithTimeout(WithHTTPUpstreamRedirectsDisabled(ctx), 120*time.Second)
 	defer cancel()
 	started := time.Now()
@@ -99,6 +110,11 @@ func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Cont
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if endpoint == MuseVideoCreate && resp.StatusCode == http.StatusConflict {
+			if q, ok := ctx.Value(videoStudioQuoteKey{}).(videoStudioQuote); ok && q.requestID != "" {
+				return nil, nil, errors.New("Muse submission receipt is uncertain")
+			}
+		}
 		return nil, nil, museUpstreamError(c, resp.StatusCode, endpoint.IsVideoLookupRequest())
 	}
 	raw, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
@@ -137,6 +153,7 @@ func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Cont
 	} else {
 		out := task.public(id)
 		if completed {
+			s.bindMuseStudioPoster(ctx, id, account, base, proxy, task.Result.Filename)
 			content := grokMediaContentProxyURL(c, id)
 			out["url"] = content
 			out["video"] = gin.H{"url": content}
@@ -149,7 +166,7 @@ func (s *OpenAIGatewayService) ForwardMuseVideo(ctx context.Context, c *gin.Cont
 	if completed {
 		result.VideoCount = 1
 	}
-	return result, nil, nil
+	return result, task.public(id), nil
 }
 
 func (s *OpenAIGatewayService) museUpstream(ctx context.Context, account *Account) (base, proxy, token string, err error) {
@@ -211,6 +228,9 @@ func museUpstreamError(c *gin.Context, status int, lookup bool) error {
 		writeGrokMediaErrorResponse(c, status, "invalid_request_error", "Muse Idempotency-Key was reused with a different request", "")
 	case status == http.StatusTooManyRequests:
 		writeGrokMediaErrorResponse(c, status, "rate_limit_error", "Muse is temporarily rate limited", "")
+	}
+	if !lookup && (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity || status == http.StatusTooManyRequests) {
+		return &museRejected{status}
 	}
 	return fmt.Errorf("upstream Muse returned HTTP %d", status)
 }

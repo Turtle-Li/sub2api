@@ -12,9 +12,33 @@ import {
   shouldMarkAdminUIRequest,
   shouldMarkUserUIRequest,
 } from './adminUIRequest'
-import { refreshAuthTokens } from './tokenRefresh'
+import { getStoredUserID, refreshAuthTokens } from './tokenRefresh'
 import { getAPIBaseURL } from './url'
 export { buildApiUrl, buildGatewayUrl } from './url'
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** A non-replayable mutation must receive its original 401, never a second POST. */
+    skipAuthReplay?: boolean
+    /** Optional owner fence for operations initiated in a particular signed-in workspace. */
+    sessionUserId?: number
+  }
+}
+
+function assertSessionOwner(config?: { sessionUserId?: number }) {
+  if (config?.sessionUserId !== undefined &&
+      (!localStorage.getItem('auth_token') || getStoredUserID() !== config.sessionUserId)) {
+    throw new axios.CanceledError('登录账号已变更，请重新打开工作台。')
+  }
+}
+
+/** The fetch adapter enforces this limit on streamed bytes, even without Content-Length. */
+export function boundedBlobConfig(maxBytes: number) {
+  return {
+    adapter: 'fetch', responseType: 'blob', maxContentLength: maxBytes,
+    fetchOptions: { redirect: 'error', cache: 'no-store' },
+  } as const
+}
 
 // ==================== Axios Instance Configuration ====================
 
@@ -40,6 +64,7 @@ const getUserTimezone = (): string => {
 
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    assertSessionOwner(config)
     // Attach token from localStorage
     const token = localStorage.getItem('auth_token')
     if (token && config.headers) {
@@ -87,6 +112,7 @@ const parseRetryAfterSeconds = (headers: unknown): number | undefined => {
 
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
+    assertSessionOwner(response.config)
     // Unwrap standard API response format { code, message, data }
     const apiResponse = response.data as ApiResponse<unknown>
     if (apiResponse && typeof apiResponse === 'object' && 'code' in apiResponse) {
@@ -115,6 +141,12 @@ apiClient.interceptors.response.use(
     }
 
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
+
+    assertSessionOwner(originalRequest)
+    if (originalRequest?.sessionUserId !== undefined && originalRequest.responseType === 'blob' && originalRequest.maxContentLength != null &&
+        error.code === 'ERR_BAD_RESPONSE' && error.message === `maxContentLength size of ${originalRequest.maxContentLength} exceeded`) {
+      return Promise.reject({ status: 413, code: 'MEDIA_TOO_LARGE', message: '文件超过工作台读取上限。' })
+    }
 
     // Handle common errors
     if (error.response) {
@@ -169,7 +201,7 @@ apiClient.interceptors.response.use(
 
       // 401: Try to refresh the token if we have a refresh token
       // This handles TOKEN_EXPIRED, INVALID_TOKEN, TOKEN_REVOKED, etc.
-      if (status === 401 && !originalRequest._retry) {
+      if (status === 401 && !originalRequest._retry && !originalRequest.skipAuthReplay) {
         const refreshToken = localStorage.getItem('refresh_token')
         const isAuthEndpoint =
           url.includes('/auth/login') || url.includes('/auth/register') || url.includes('/auth/refresh')

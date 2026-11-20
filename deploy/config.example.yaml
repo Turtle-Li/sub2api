@@ -241,6 +241,16 @@ security:
 # 网关配置
 # =============================================================================
 gateway:
+  # Login-only video workspace. Disabling new submissions leaves owned history and delivery readable.
+  video_studio_enabled: false
+  creative_canvas_enabled: false
+  # Optional exact Muse wallet group; zero discovers only an already granted dedicated Muse group.
+  video_studio_muse_group_id: 0
+  # Must match the existing explicitly approved goodput_video_public_group_id.
+  video_studio_h3_group_id: 0
+  # Studio-only opt-in for unrestricted logged-in users, including users with zero keys/grants.
+  # A zero/unconfigured group is NEVER shared. This does not grant access on /v1.
+  video_studio_share_configured_groups: false
   # Minimum max_output_tokens when converting Chat Completions or Anthropic requests to Responses (minimum 16, default 128)
   # Chat Completions 或 Anthropic 请求转换为 Responses 时的最小 max_output_tokens（最小 16，默认 128）
   min_output_tokens: 128

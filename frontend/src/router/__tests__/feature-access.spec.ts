@@ -29,6 +29,7 @@ const appStore = vi.hoisted(() => ({
     payment_entry_enabled?: boolean
     risk_control_enabled?: boolean
     subscription_enabled?: boolean
+    video_studio_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -288,6 +289,25 @@ describe('feature route guard', () => {
 
     expect(next).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith()
+  })
+
+  it('requires a login for video but preserves direct history access when new videos are disabled', async () => {
+    const route = routeFor('/video-studio')
+    expect(route.name).toBe('VideoStudio')
+    expect(route.meta).toMatchObject({ requiresAuth: true, requiresAdmin: false })
+    appStore.cachedPublicSettings = { video_studio_enabled: false }
+    appStore.publicSettingsLoaded = true
+    const history = runGuard(route.meta, route.path)
+    await history.navigation
+    expect(history.next).toHaveBeenCalledWith()
+    authStore.isAuthenticated = false
+    const guest = runGuard(route.meta, route.path)
+    await guest.navigation
+    expect(guest.next).toHaveBeenCalledWith({ path: '/login', query: { redirect: '/video-studio' } })
+    expect(routeFor('/image-studio').name).toBe('ImageStudio')
+    for (const path of ['/batch-image', '/docs/batch-image']) {
+      expect(routeFor(path).matched[0]?.redirect).toEqual({ name: 'ImageStudio' })
+    }
   })
 
   it('keeps order history reachable while the purchase entry is hidden', async () => {

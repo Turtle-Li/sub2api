@@ -154,7 +154,8 @@ it.each(['success', 'failed', 'expired'] as const)('opens a %s Vertex archive on
   vi.mocked(listKeys).mockResolvedValue([{ id: 42, name: 'fixture', group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false }])
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
-  await act(async () => root.render(<Studio userId={6} />))
+  const onVideo = vi.fn()
+  await act(async () => root.render(<Studio userId={6} onVideo={onVideo} />))
   if (outcome === 'expired') {
     await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === '已过期')!.click())
     await act(async () => host.querySelector<HTMLButtonElement>('.studio-expired-row')!.click())
@@ -165,12 +166,15 @@ it.each(['success', 'failed', 'expired'] as const)('opens a %s Vertex archive on
   const detail = host.querySelector('dialog[aria-label="任务详情"]')!
   const open = Array.from(detail.querySelectorAll('button')).find(button => button.textContent === '打开归档结果')
   expect(archivePreview).not.toHaveBeenCalled()
+  expect(detail.textContent).not.toContain('用这张图生成视频')
   if (outcome === 'expired') {
     expect(open).toBeUndefined()
     expect(detail.textContent).toContain('图片已过期')
   } else {
     await act(async () => open!.click())
     expect(archivePreview).toHaveBeenCalledOnce()
+    expect(detail.textContent).toContain('归档结果不支持直接带入')
+    expect(detail.textContent).not.toContain('用这张图生成视频')
     const download = Array.from(detail.querySelectorAll('button')).find(button => button.textContent === '下载图片')!
     expect(download.disabled).toBe(outcome === 'failed')
     if (outcome === 'failed') {
@@ -180,4 +184,30 @@ it.each(['success', 'failed', 'expired'] as const)('opens a %s Vertex archive on
   }
   expect(image).not.toHaveBeenCalled()
   expect(thumbnail).not.toHaveBeenCalled()
+})
+
+
+it('only offers video for the readable selected original; opening the draft does not upload or submit', async () => {
+  const task: StudioTask = { ...original, item: { ...original.item, image_count: 2 } }
+  const image = vi.fn().mockRejectedValueOnce({ status: 403 }).mockResolvedValueOnce(new Blob(['original'], { type: 'image/png' }))
+  const tasks = vi.fn().mockResolvedValue({ tasks: [task], nextCursor: null, itemContinuations: [] })
+  const submit = vi.fn(), onVideo = vi.fn(async () => {})
+  vi.mocked(studioAPI).mockReturnValue({ models: vi.fn(async () => []), image, tasks, submit, refreshPending: vi.fn(),
+    items: vi.fn(), thumbnail: vi.fn(), archivePreview: vi.fn(), cancel: vi.fn() })
+  vi.mocked(listKeys).mockResolvedValue([{ id: 43, name: 'own key', group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false }])
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
+  await act(async () => root.render(<Studio userId={7} onVideo={onVideo} />))
+  expect(image).not.toHaveBeenCalled()
+  await act(async () => host.querySelector<HTMLElement>('.studio-source-card')?.click())
+  const action = (label: string) => [...host.querySelectorAll('dialog.studio-detail button')].find(b => b.textContent === label)
+  expect(action('用这张图生成视频')).toBeUndefined()
+  expect(action('引用此图继续修改')).toBeDefined()
+  await act(async () => action('下一张')?.click())
+  expect(action('用这张图生成视频')).toBeDefined()
+  await act(async () => action('用这张图生成视频')?.click())
+  expect(onVideo).toHaveBeenCalledOnce()
+  expect(onVideo).toHaveBeenCalledWith({ route: 43, batchId: task.job.id, itemId: task.item.custom_id, index: 1 })
+  expect(image).toHaveBeenCalledTimes(2)
+  expect(submit).not.toHaveBeenCalled()
 })

@@ -3006,3 +3006,14 @@ func TestLoadSimpleModeAutoCreateDefaultGroups(t *testing.T) {
 		})
 	}
 }
+
+func TestVideoStudioIsOptIn(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.VideoStudioEnabled)
+	t.Setenv("GATEWAY_VIDEO_STUDIO_ENABLED", "true")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.VideoStudioEnabled)
+}

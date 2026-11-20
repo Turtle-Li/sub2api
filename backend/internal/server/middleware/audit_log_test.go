@@ -353,3 +353,7 @@ func TestAuditRecordsEveryMCPOAuthReadWithGrant(t *testing.T) {
 	require.Equal(t, "grant-1", logs[0].Extra["mcp_grant_id"])
 	require.Equal(t, "admin_list_users", logs[0].Extra["mcp_tool"])
 }
+
+func TestVideoStudioSubmitDoesNotAuditPromptOrImageBytes(t *testing.T) {
+	require.True(t, shouldOmitAuditRequestBody("POST /api/v1/video-studio/jobs"))
+}

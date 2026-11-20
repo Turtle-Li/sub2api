@@ -328,6 +328,8 @@ type DefaultSubscriptionSetting struct {
 }
 
 type PublicSettings struct {
+	VideoStudioEnabled                  bool `json:"video_studio_enabled"`
+	CreativeCanvasEnabled               bool `json:"creative_canvas_enabled"`
 	RegistrationEnabled                 bool
 	EmailVerifyEnabled                  bool
 	ForceEmailOnThirdPartySignup        bool

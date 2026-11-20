@@ -1,0 +1,6 @@
+Creative Canvas third-party notices
+
+Vue Flow (@xyflow/vue 2.0.2, xyflow/xyflow 29ab9e001c2ba320c9d84b00c729c745132d9145): MIT; see xyflow-MIT.txt. No commercial Pro example is included.
+VueUse (useManualRefHistory 10.11.1): MIT; see VueUse-MIT.txt.
+AIGCCanvasFlow (MaLunan/AIGCCanvasFlow c88c00c58c6fcf613d58c6674c46b4a11c1d9911): MIT; see AIGCCanvasFlow-MIT.txt. Reference for creating a connected node from a source card or an edge drop. The host supplies its own UI and asset rules.
+BeatDesign (BeatAPI/BeatDesign 796d89f0f451b436877836f91392152f43c3e270): Apache License 2.0; see BeatDesign-Apache-2.0.txt. src/core/beatcanvas/{upload-layout,generation-history}.ts are reused, with a separate reduced host type contract. No BeatAPI services, demo media, brands, or timeline code are included.

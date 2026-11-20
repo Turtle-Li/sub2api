@@ -750,6 +750,8 @@ const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
 const flagMCP = makeSidebarFlag(FeatureFlags.mcp)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
+const flagVideoStudio = makeSidebarFlag(FeatureFlags.videoStudio)
+const VideoStudioIcon = { render: () => h(Icon, { name: 'play' }) }
 
 // 用户侧栏与管理员的「我的账户」共享个人导航；模型状态统一从顶部进入。
 function buildSelfNavItems(withDashboard: boolean): NavItem[] {
@@ -760,6 +762,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   items.push(
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/image-studio', label: '生图工作台', icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
+    { path: '/video-studio', label: '视频工作台', icon: VideoStudioIcon, hideInSimpleMode: true, featureFlag: flagVideoStudio },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
