@@ -284,6 +284,7 @@ WITH dedup AS (
     END) AS platform,
     COALESCE(current_error.group_id, 0) AS group_id,
     COALESCE(NULLIF(TRIM(current_error.requested_model), ''), NULLIF(TRIM(current_error.model), ''), 'unknown') AS model,
+    CASE WHEN g.platform = 'openai' THEN channel_monitor_openai_fault_v1(current_error) END AS openai_fault,
     current_error.user_id, current_error.error_type, current_error.error_owner, COALESCE(current_error.status_code, 0) AS status_code,
     COALESCE(current_error.upstream_status_code, 0) AS upstream_status_code,
     lower(CONCAT_WS(' ', current_error.error_type, current_error.error_source, current_error.error_message, current_error.upstream_error_message, current_error.upstream_error_detail, current_error.error_body)) AS text,
@@ -326,11 +327,14 @@ WITH dedup AS (
   FROM dedup
   WHERE bucket_start >= $1 AND bucket_start < $2
 ), metric_rows AS (
-  INSERT INTO channel_monitor_v2_metrics_1m (bucket_start, platform, group_id, model, error_requests, upstream_affected_requests, upstream_attempt_count, computed_at)
-  SELECT bucket_start, platform, group_id, model, COUNT(*), COUNT(*) FILTER (WHERE upstream_affected), SUM(upstream_attempts), NOW()
+  INSERT INTO channel_monitor_v2_metrics_1m (bucket_start, platform, group_id, model, error_requests, openai_fault_requests, upstream_affected_requests, upstream_attempt_count, computed_at)
+  SELECT bucket_start, platform, group_id, model, COUNT(*),
+    CASE WHEN COUNT(openai_fault) > 0 THEN COUNT(*) FILTER (WHERE openai_fault) END,
+    COUNT(*) FILTER (WHERE upstream_affected), SUM(upstream_attempts), NOW()
   FROM classified GROUP BY 1,2,3,4
   ON CONFLICT (bucket_start, platform, group_id, model) DO UPDATE SET
-    error_requests = EXCLUDED.error_requests, upstream_affected_requests = EXCLUDED.upstream_affected_requests,
+    error_requests = EXCLUDED.error_requests, openai_fault_requests = EXCLUDED.openai_fault_requests,
+    upstream_affected_requests = EXCLUDED.upstream_affected_requests,
     upstream_attempt_count = EXCLUDED.upstream_attempt_count, computed_at = NOW()
 ), user_rows AS (
   INSERT INTO channel_monitor_v2_user_metrics_1m (bucket_start, platform, group_id, model, user_id, error_requests, computed_at)

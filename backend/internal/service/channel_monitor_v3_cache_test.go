@@ -13,7 +13,7 @@ func TestChannelMonitorV3CacheQueriesCompleteHours(t *testing.T) {
 	r := &monitorV3RepoFake{config: monitorV3Config()}
 	s := NewChannelMonitorV3Service(r, nil)
 	s.now = func() time.Time { return now }
-	_, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+	_, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, now.Truncate(time.Hour).Add(-24*time.Hour), r.cacheFrom)
 	require.Equal(t, now.Truncate(time.Hour), r.cacheTo)
@@ -29,7 +29,7 @@ func TestChannelMonitorV3CacheUsesIndependentRealRequestPool(t *testing.T) {
 	// A cheap check group has no customer traffic of its own.
 	s := NewChannelMonitorV3Service(r, nil)
 	s.now = func() time.Time { return now }
-	out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Nil(t, out[4].RequestSuccessRate)
 	require.Nil(t, out[4].TTFTP50Ms)
@@ -63,7 +63,7 @@ func TestChannelMonitorV3CachePublicationGuards(t *testing.T) {
 			r := &monitorV3RepoFake{config: monitorV3Config(), requestCache: map[int64][]ChannelMonitorV3RequestCache{4: {tc.fact}}}
 			s := NewChannelMonitorV3Service(r, nil)
 			s.now = func() time.Time { return now }
-			out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+			out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 			require.NoError(t, err)
 			require.Equal(t, tc.state, out[4].CacheSampleState)
 			require.Equal(t, tc.want, out[4].CachePeakHourRate)
@@ -95,14 +95,14 @@ func TestChannelMonitorV3CacheBestCompleteHourAndExpiry(t *testing.T) {
 	}}}
 	s := NewChannelMonitorV3Service(r, nil)
 	s.now = func() time.Time { return now }
-	out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.InDelta(t, 98.0, *out[4].CachePeakHourRate, 1e-9)
 	require.Equal(t, end.Add(-2*time.Hour), *out[4].CacheHourStart)
 	// Advancing the window clears the old high when there is no new evidence.
 	r.requestCache[4] = []ChannelMonitorV3RequestCache{fact(end.Add(-2*time.Hour), 20, 98)}
 	s.now = func() time.Time { return now.Add(24 * time.Hour) }
-	out, err = s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err = s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Nil(t, out[4].CachePeakHourRate)
 	require.Equal(t, "none", out[4].CacheSampleState)
@@ -118,7 +118,7 @@ func TestChannelMonitorV3CacheMinimumAppliesToEachHour(t *testing.T) {
 	}}}
 	s := NewChannelMonitorV3Service(r, nil)
 	s.now = func() time.Time { return now }
-	out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "insufficient", out[4].CacheSampleState)
 	require.Nil(t, out[4].CachePeakHourRate)

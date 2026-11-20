@@ -30,6 +30,8 @@
   enabled source; followers remain disabled for execution. Preserve own request
   failures and never inherit cache or timing measurements. Public cards omit
   check frequency and source identities; these details belong in the admin editor.
+  Public OpenAI cards score final account/gateway/upstream faults, not caller or
+  download errors or slow TTFT. Do not change the diagnostic ignore list to tune them.
 
 ## WorkBuddy Hunyuan image batches
 

@@ -20,7 +20,10 @@ func (r *channelMonitorV3Repository) SlotFacts(ctx context.Context, groupIDs []i
 	}
 	args := []any{pq.Array(groupIDs), from, to, fmt.Sprintf("%d seconds", int(interval.Seconds()))}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT m.group_id, m.model, `+fmt.Sprintf(channelMonitorV3SlotSQL, "m")+`, SUM(m.success_requests), SUM(m.error_requests), SUM(m.input_tokens), SUM(m.cache_creation_tokens), SUM(m.cache_read_tokens)
+		SELECT m.group_id, m.model, `+fmt.Sprintf(channelMonitorV3SlotSQL, "m")+`, SUM(m.success_requests), SUM(m.error_requests), SUM(m.input_tokens), SUM(m.cache_creation_tokens), SUM(m.cache_read_tokens),
+		       COALESCE(SUM(m.openai_fault_requests) FILTER (WHERE m.openai_fault_requests BETWEEN 0 AND m.error_requests), 0),
+		       BOOL_OR(CASE WHEN m.openai_fault_requests IS NULL THEN m.error_requests > 0
+		                    ELSE m.openai_fault_requests NOT BETWEEN 0 AND m.error_requests END)
 		FROM channel_monitor_v2_metrics_1m m
 		WHERE m.group_id = ANY($1) AND m.bucket_start >= $2 AND m.bucket_start < $3
 		GROUP BY 1, 2, 3`, args...)
@@ -29,7 +32,7 @@ func (r *channelMonitorV3Repository) SlotFacts(ctx context.Context, groupIDs []i
 	}
 	if err := scanChannelMonitorV3Rows(rows, func(rows *sql.Rows) error {
 		var f service.ChannelMonitorV3Fact
-		if err := rows.Scan(&f.GroupID, &f.Model, &f.Slot, &f.Success, &f.Errors, &f.InputTokens, &f.CacheCreationTokens, &f.CacheReadTokens); err != nil {
+		if err := rows.Scan(&f.GroupID, &f.Model, &f.Slot, &f.Success, &f.Errors, &f.InputTokens, &f.CacheCreationTokens, &f.CacheReadTokens, &f.OpenAIFaults, &f.OpenAICoverageMissing); err != nil {
 			return err
 		}
 		facts.Metrics = append(facts.Metrics, f)

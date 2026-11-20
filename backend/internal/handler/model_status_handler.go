@@ -34,11 +34,7 @@ func (h *ModelPlazaHandler) GetStatus(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	ids := make([]int64, 0, len(groups))
-	for _, group := range groups {
-		ids = append(ids, group.ID)
-	}
-	statuses, err := h.monitorService.PlazaStatuses(c.Request.Context(), ids, !authed)
+	statuses, err := h.monitorService.PlazaStatuses(c.Request.Context(), groups, !authed)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

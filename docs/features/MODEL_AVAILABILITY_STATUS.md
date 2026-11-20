@@ -91,6 +91,11 @@ from one transaction snapshot. The recent overlap rechecks late writes even
 when usage and its terminal error fall in different minutes. Older aggregates
 are refreshed only by the existing collector when it recomputes their range.
 
+The public OpenAI group cards use a separate final-fault count rather than the
+diagnostic category exclusions or latency color. See **GPT request availability**
+in `MODEL_AVAILABILITY_GROUPS.md` for scope, missing coverage, bounded backfill
+and application rollback. The component/incident monitor retains the rules above.
+
 ## Delivery plan
 
 | Task | Owner / allowed writes | Dependencies | Acceptance and evidence |

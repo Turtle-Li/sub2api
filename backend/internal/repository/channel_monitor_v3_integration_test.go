@@ -134,7 +134,7 @@ func TestChannelMonitorV3RepositoryReadsPassiveFacts(t *testing.T) {
 	}
 	metric := `INSERT INTO channel_monitor_v2_metrics_1m (bucket_start, platform, group_id, model, success_requests, error_requests) VALUES ($1, 'openai', $2, $3, $4, $5)`
 	exec(metric, base, group.ID, "gpt-5.5", 10, 1)
-	exec(`UPDATE channel_monitor_v2_metrics_1m SET input_tokens=10, cache_creation_tokens=10, cache_read_tokens=80 WHERE group_id=$1 AND bucket_start=$2 AND model='gpt-5.5'`, group.ID, base)
+	exec(`UPDATE channel_monitor_v2_metrics_1m SET openai_fault_requests=1, input_tokens=10, cache_creation_tokens=10, cache_read_tokens=80 WHERE group_id=$1 AND bucket_start=$2 AND model='gpt-5.5'`, group.ID, base)
 	exec(metric, base.Add(4*time.Minute), group.ID, "gpt-5.5", 5, 4)
 	exec(metric, base.Add(4*time.Minute), group.ID, "gpt-5.5-mini", 2, 0)
 	exec(metric, base.Add(5*time.Minute), group.ID, "gpt-5.5", 7, 0)
@@ -153,9 +153,13 @@ func TestChannelMonitorV3RepositoryReadsPassiveFacts(t *testing.T) {
 	for _, f := range facts.Metrics {
 		require.Equal(t, group.ID, f.GroupID, "other groups are not read")
 		if f.Model == "gpt-5.5" && f.Slot.Equal(base) {
+			require.EqualValues(t, 1, f.OpenAIFaults)
+			require.True(t, f.OpenAICoverageMissing, "a classified minute cannot fill another minute's missing error attribution")
 			require.EqualValues(t, 10, f.InputTokens)
 			require.EqualValues(t, 10, f.CacheCreationTokens)
 			require.EqualValues(t, 80, f.CacheReadTokens)
+		} else {
+			require.False(t, f.OpenAICoverageMissing, "a legacy success-only minute has no errors to attribute")
 		}
 		key := f.Slot.UTC().Format("15:04") + " " + f.Model
 		value := sums[key]

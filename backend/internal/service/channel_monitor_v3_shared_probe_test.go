@@ -45,7 +45,7 @@ func sharedProbeFixture() (*sharedProbeRepoFake, *ChannelMonitorV3Service, time.
 
 func TestChannelMonitorV3SharedProbeUsesOneRealCheck(t *testing.T) {
 	r, s, _ := sharedProbeFixture()
-	out, err := s.PlazaStatuses(context.Background(), []int64{4, 5}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformDeepseek}, {ID: 5, Platform: PlatformKimi}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "shared_probe", out[5].Source)
 	require.Equal(t, ChannelMonitorV3StatusOperational, out[5].Status)
@@ -61,7 +61,7 @@ func TestChannelMonitorV3SharedProbeNeverBorrowsCacheOrLatency(t *testing.T) {
 		4: {{HourStart: now.Truncate(time.Hour).Add(-time.Hour), Requests: 30, InputTokens: 3, CacheReadTokens: 97}},
 		5: {{HourStart: now.Truncate(time.Hour).Add(-time.Hour), Requests: 30, InputTokens: 20, CacheReadTokens: 80}},
 	}
-	out, err := s.PlazaStatuses(context.Background(), []int64{4, 5}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformDeepseek}, {ID: 5, Platform: PlatformKimi}}, false)
 	require.NoError(t, err)
 	require.InDelta(t, 80.0, *out[5].CachePeakHourRate, 1e-9)
 	require.Nil(t, out[5].ProbeCacheReadRate)
@@ -76,7 +76,7 @@ func TestChannelMonitorV3SharedProbePreservesOwnFreshFailure(t *testing.T) {
 	through := now.Add(-time.Minute)
 	r.through = &through
 	r.slotFacts.Metrics = []ChannelMonitorV3Fact{{GroupID: 5, Slot: now.Truncate(ChannelMonitorV3ProbeInterval).Add(-ChannelMonitorV3ProbeInterval), Errors: 1}}
-	out, err := s.PlazaStatuses(context.Background(), []int64{4, 5}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformDeepseek}, {ID: 5, Platform: PlatformKimi}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "requests", out[5].Source)
 	require.Equal(t, "errors_observed", out[5].Status, "a newer success on another model must not clear this model's failure")
@@ -85,7 +85,7 @@ func TestChannelMonitorV3SharedProbePreservesOwnFreshFailure(t *testing.T) {
 func TestChannelMonitorV3SharedProbePropagatesSourceFailure(t *testing.T) {
 	r, s, _ := sharedProbeFixture()
 	r.results[0].Outcome = "failure"
-	out, err := s.PlazaStatuses(context.Background(), []int64{4, 5}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformDeepseek}, {ID: 5, Platform: PlatformKimi}}, false)
 	require.NoError(t, err)
 	require.Equal(t, ChannelMonitorV3StatusDown, out[5].Status)
 	require.Equal(t, "shared_probe", out[5].Source)
@@ -129,7 +129,7 @@ func TestChannelMonitorV3SharedProbeRetainsRevokedBindingWithoutBlockingSave(t *
 	input.Groups = append([]ChannelMonitorV3GroupProbeTarget(nil), input.Groups...)
 	input.Groups[1].DisplayName = "Renamed"
 	require.NoError(t, s.validateGroupProbes(context.Background(), &input))
-	out, err := s.PlazaStatuses(context.Background(), []int64{4, 5}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformDeepseek}, {ID: 5, Platform: PlatformKimi}}, false)
 	require.NoError(t, err)
 	require.False(t, out[5].ProbeEnabled)
 	require.Equal(t, ChannelMonitorV3StatusUnknown, out[5].Status)
@@ -160,7 +160,7 @@ func TestChannelMonitorV3SharedProbeFailsClosed(t *testing.T) {
 	for _, name := range []string{"different pool", "empty pool", "pool read error", "paused source", "removed source", "chain", "source not visible", "stale"} {
 		t.Run(name, func(t *testing.T) {
 			r, s, _ := sharedProbeFixture()
-			ids := []int64{4, 5}
+			groups := []Group{{ID: 4, Platform: PlatformDeepseek}, {ID: 5, Platform: PlatformKimi}}
 			switch name {
 			case "different pool":
 				r.pools[5] = []int64{247}
@@ -176,11 +176,11 @@ func TestChannelMonitorV3SharedProbeFailsClosed(t *testing.T) {
 			case "chain":
 				r.config.GroupProbe.Groups[0].SourceGroupID = 5
 			case "source not visible":
-				ids = []int64{5}
+				groups = []Group{{ID: 5, Platform: PlatformKimi}}
 			case "stale":
 				s.now = func() time.Time { return r.results[0].Slot.Add(20 * time.Minute) }
 			}
-			out, err := s.PlazaStatuses(context.Background(), ids, false)
+			out, err := s.PlazaStatuses(context.Background(), groups, false)
 			require.NoError(t, err)
 			require.Equal(t, ChannelMonitorV3StatusUnknown, out[5].Status)
 			require.Nil(t, out[5].ProbeSuccessRate)
