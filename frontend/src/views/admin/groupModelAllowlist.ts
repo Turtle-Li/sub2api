@@ -12,6 +12,7 @@ export interface ModelAllowlistState {
   enabled: boolean
   savedModels: string[]
   items: ModelAllowlistItem[]
+  accountModels: Set<string> | null
 }
 
 // 自定义条目校验错误码，由视图映射为 i18n 提示。
@@ -19,11 +20,10 @@ export type ModelAllowlistAddError = 'empty' | 'duplicate'
 
 export const createModelAllowlistState = (
   config?: Partial<ModelAllowlistConfig> | null,
-): ModelAllowlistState => ({
-  enabled: config?.enabled ?? false,
-  savedModels: normalizeModels(config?.models ?? []),
-  items: [],
-})
+): ModelAllowlistState => {
+  const savedModels = normalizeModels(config?.models ?? [])
+  return { enabled: config?.enabled ?? false, savedModels, items: savedModels.map(id => ({ id, selected: true })), accountModels: null }
+}
 
 export const hydrateModelAllowlistState = (
   config: Partial<ModelAllowlistConfig> | null | undefined,
@@ -39,30 +39,25 @@ export const setModelAllowlistCandidates = (
   candidates: string[],
 ) => {
   const normalizedCandidates = normalizeModels(candidates)
+  const accountModels = new Set(normalizedCandidates)
   const currentSelected = new Set(
     state.items.filter(item => item.selected).map(item => item.id),
   )
-  const currentKnown = new Set(state.items.map(item => item.id))
   const savedSelected = new Set(state.savedModels)
-  const hasExistingItems = state.items.length > 0
+  const selectDefaults = state.items.length === 0 && state.savedModels.length === 0
   const selectionOrder = normalizeModels([
-    ...state.items.map(item => item.id),
+    ...state.items.filter(item => item.selected || accountModels.has(item.id) || savedSelected.has(item.id)).map(item => item.id),
     ...state.savedModels,
     ...normalizedCandidates,
   ])
 
-  state.items = selectionOrder.map(id => {
-    const selected = hasExistingItems
-      ? currentSelected.has(id)
-      : state.savedModels.length > 0
-        ? savedSelected.has(id)
-        : normalizedCandidates.includes(id)
+  state.accountModels = accountModels
+  state.items = selectionOrder.map(id => ({ id, selected: selectDefaults || currentSelected.has(id) }))
+}
 
-    return {
-      id,
-      selected: selected && (currentKnown.has(id) || savedSelected.has(id) || state.savedModels.length === 0),
-    }
-  })
+export const selectOnlyAccountModels = (state: ModelAllowlistState) => {
+  if (!state.accountModels?.size) return
+  for (const item of state.items) item.selected = state.accountModels.has(item.id)
 }
 
 export const toggleModelAllowlistItem = (

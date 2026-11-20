@@ -776,6 +776,7 @@
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 {{ t("admin.groups.modelAllowlist.hint") }}
+                <template v-if="createForm.platform === 'anthropic'">{{ t('admin.groups.modelAllowlist.claudeHint') }}</template>
               </p>
             </div>
             <Toggle v-model="createModelAllowlistState.enabled" />
@@ -823,7 +824,7 @@
                 v-else-if="createModelAllowlistState.items.length === 0"
                 class="text-xs text-gray-500 dark:text-gray-400"
               >
-                {{ t("admin.groups.modelAllowlist.empty") }}
+                {{ t("admin.groups.modelAllowlist.emptyCreate") }}
               </p>
               <div
                 v-for="(item, index) in createModelAllowlistState.items"
@@ -832,6 +833,7 @@
               >
                 <input
                   v-model="item.selected"
+                  :aria-label="item.id"
                   type="checkbox"
                   class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
@@ -2446,6 +2448,7 @@
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 {{ t("admin.groups.modelAllowlist.hint") }}
+                <template v-if="editForm.platform === 'anthropic'">{{ t('admin.groups.modelAllowlist.claudeHint') }}</template>
               </p>
             </div>
             <Toggle v-model="editModelAllowlistState.enabled" />
@@ -2466,7 +2469,13 @@
                   })
                 }}
               </span>
-              <div class="flex items-center gap-1.5">
+              <div class="flex flex-wrap items-center justify-end gap-1.5">
+                <button
+                  v-if="editModelAllowlistState.accountModels?.size"
+                  type="button"
+                  class="rounded px-2 py-1 font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
+                  @click="selectOnlyAccountModels(editModelAllowlistState)"
+                >{{ t('admin.groups.modelAllowlist.selectAccountModels') }}</button>
                 <button
                   type="button"
                   class="rounded px-2 py-1 font-medium text-primary-600 transition-colors hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
@@ -2489,6 +2498,10 @@
               <p v-if="editModelAllowlistLoading" class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t("admin.groups.modelAllowlist.loading") }}
               </p>
+              <p v-else-if="editModelAllowlistLoadFailed" role="alert" class="text-xs text-red-700 dark:text-red-300">
+                {{ t('admin.groups.modelAllowlist.loadFailed') }}
+                <button v-if="editingGroup" type="button" class="underline" @click="loadModelAllowlistCandidates('edit', editingGroup.id, editForm.platform)">{{ t('common.retry') }}</button>
+              </p>
               <p
                 v-else-if="editModelAllowlistState.items.length === 0"
                 class="text-xs text-gray-500 dark:text-gray-400"
@@ -2502,6 +2515,7 @@
               >
                 <input
                   v-model="item.selected"
+                  :aria-label="item.id"
                   type="checkbox"
                   class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
@@ -2512,6 +2526,9 @@
                     class="ml-1 rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
                   >
                     {{ t("admin.groups.modelAllowlist.wildcardTag") }}
+                  </span>
+                  <span v-else-if="editModelAllowlistState.accountModels && !editModelAllowlistState.accountModels.has(item.id)" class="ml-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.groups.modelAllowlist.notInAccountCatalog') }}
                   </span>
                 </span>
                 <button
@@ -4404,6 +4421,7 @@ import {
   invertModelAllowlistSelection,
   moveModelAllowlistItem,
   selectAllModelAllowlistItems,
+  selectOnlyAccountModels,
   setModelAllowlistCandidates,
 } from "./groupModelAllowlist";
 import { createModelAllowlistCandidatesTracker } from "./modelAllowlistCandidates";
@@ -4954,6 +4972,7 @@ const createModelAllowlistState = reactive(createInitialModelAllowlistState());
 const editModelAllowlistState = reactive(createInitialModelAllowlistState());
 const createModelAllowlistLoading = ref(false);
 const editModelAllowlistLoading = ref(false);
+const editModelAllowlistLoadFailed = ref(false);
 type ReasoningEffortPolicyFieldsExpose = {
   validate: () => boolean;
   resetValidation: () => void;
@@ -5292,6 +5311,7 @@ const resetModelAllowlistState = (
   state.enabled = fresh.enabled;
   state.savedModels = fresh.savedModels;
   state.items = fresh.items;
+  state.accountModels = fresh.accountModels;
 };
 
 const loadModelAllowlistCandidates = async (
@@ -5304,6 +5324,12 @@ const loadModelAllowlistCandidates = async (
   const requestID = modelAllowlistCandidatesTracker.next(request);
   const state = mode === "create" ? createModelAllowlistState : editModelAllowlistState;
   const loadingRef = mode === "create" ? createModelAllowlistLoading : editModelAllowlistLoading;
+  if (groupID === 0) {
+    setModelAllowlistCandidates(state, []);
+    loadingRef.value = false;
+    return;
+  }
+  editModelAllowlistLoadFailed.value = false;
   loadingRef.value = true;
   try {
     const models = await adminAPI.groups.getModelAllowlistCandidates(groupID, platform);
@@ -5315,6 +5341,8 @@ const loadModelAllowlistCandidates = async (
     if (!modelAllowlistCandidatesTracker.isCurrent(requestID, request)) {
       return;
     }
+    editModelAllowlistLoadFailed.value = true;
+    state.accountModels = null;
     console.error("Error loading group models list candidates:", error);
   } finally {
     if (modelAllowlistCandidatesTracker.isCurrent(requestID, request)) {

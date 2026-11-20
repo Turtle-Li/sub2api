@@ -104,7 +104,7 @@ export async function getById(id: number): Promise<AdminGroup> {
 
 /**
  * Get candidate models for the group model allowlist.
- * id=0 returns platform default models for create flow.
+ * An unsaved group (id=0) has no bound accounts or suggested models.
  */
 export async function getModelAllowlistCandidates(
   id: number,

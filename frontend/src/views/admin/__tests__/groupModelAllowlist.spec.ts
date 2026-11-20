@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   addCustomModelAllowlistItem,
-  createModelAllowlistState,
   type ModelAllowlistAddError,
 } from "../groupModelAllowlist";
 
@@ -13,11 +12,22 @@ import {
   invertModelAllowlistSelection,
   moveModelAllowlistItem,
   selectAllModelAllowlistItems,
+  selectOnlyAccountModels,
   setModelAllowlistCandidates,
   toggleModelAllowlistItem,
 } from "../groupModelAllowlist";
 
 describe("groupModelAllowlist", () => {
+  it('keeps historical rules separate until the admin selects only account models', () => {
+    const state = createModelAllowlistState({ enabled: true, models: ['claude-old', 'kimi-*'] });
+    expect(state.accountModels).toBeNull();
+    addCustomModelAllowlistItem(state, 'manual');
+    setModelAllowlistCandidates(state, ['kimi-k3', 'fast']);
+    expect([...state.accountModels!]).toEqual(['kimi-k3', 'fast']);
+    expect(buildModelAllowlistConfig(state).models).toEqual(['claude-old', 'kimi-*', 'manual']);
+    selectOnlyAccountModels(state);
+    expect(buildModelAllowlistConfig(state).models).toEqual(['kimi-k3', 'fast']);
+  });
   it("selects all default candidates for a new disabled config", () => {
     const state = createModelAllowlistState();
 
@@ -149,12 +159,12 @@ describe("addCustomModelAllowlistItem", () => {
     expect(addCustomModelAllowlistItem(state(), "   ")).toBe<ModelAllowlistAddError>("empty");
   });
 
-  it("accepts wildcards at any position", () => {
+  it("appends wildcards at any position without losing the existing selection", () => {
     const s = state();
     expect(addCustomModelAllowlistItem(s, "gpt-*-5.4")).toBeNull();
     expect(addCustomModelAllowlistItem(s, "*codex")).toBeNull();
     expect(addCustomModelAllowlistItem(s, "gpt-*-codex-*")).toBeNull();
-    expect(buildModelAllowlistConfig(s).models).toEqual(["gpt-*-5.4", "*codex", "gpt-*-codex-*"]);
+    expect(buildModelAllowlistConfig(s).models).toEqual(["gpt-5.4", "gpt-*-5.4", "*codex", "gpt-*-codex-*"]);
   });
 
   it("rejects duplicates case-insensitively", () => {
