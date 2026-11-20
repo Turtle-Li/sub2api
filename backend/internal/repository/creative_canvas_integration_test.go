@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -79,6 +80,19 @@ func TestCreativeCanvasJWTPostgresJourney(t *testing.T) {
 	require.Equal(t, 400, call("POST", "", me, map[string]any{"title": "mine", "user_id": other.ID}).Code)
 	b := board(call("POST", "", me, map[string]string{"title": "镜头实验"}))
 	id := "/" + b.ID
+	requestWith := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PUT", "/boards"+id, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+me)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w
+	}
+	require.Equal(t, 400, requestWith(`{"revision":1,"title":"镜头","document":{"viewport":{"x":0,"y":0,"zoom":1},"nodes":[{"id":"`+uuid.NewString()+`","kind":"note","x":0,"y":0,"url":"https://example.invalid/private"}],"edges":[]}}`).Code)
+	require.Equal(t, 400, requestWith(`{"title":"x","revision":1,"document":{}} {}`).Code)
+	require.Equal(t, 413, requestWith(`{"title":"`+strings.Repeat("x", service.CanvasBodyLimit+1)+`"}`).Code)
+	require.Equal(t, 409, call("DELETE", id+"?revision=2", me, nil).Code)
+
 	im, a, z := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	imageGroup := mustCreateGroup(t, client, &service.Group{Name: "Canvas Images " + uuid.NewString()})
 	src := service.CanvasImage{Route: 0, Batch: "board_" + uuid.NewString(), Item: "cover", Index: 1}
@@ -104,6 +118,13 @@ func TestCreativeCanvasJWTPostgresJourney(t *testing.T) {
 	require.Equal(t, 422, save(d, 1).Code)
 	wrong = src
 	wrong.Route = 91
+	require.Equal(t, 422, save(d, 1).Code)
+	archive := src
+	archive.Batch = "archive_" + uuid.NewString()
+	batch(u.ID, archive)
+	_, e := db.ExecContext(ctx, `UPDATE batch_image_items SET provider_source_object='cos-jsonl:v1:1' WHERE job_id=$1`, archive.Batch)
+	require.NoError(t, e)
+	d.Nodes[0].Image = &archive
 	require.Equal(t, 422, save(d, 1).Code)
 	d.Nodes[0].Image = &src
 	b = board(save(d, 1))
@@ -137,7 +158,7 @@ func TestCreativeCanvasJWTPostgresJourney(t *testing.T) {
 	d.Nodes[0].Image = &otherSource
 	require.Equal(t, 400, save(d, 2).Code)
 	d.Nodes[0].Image = &src
-	_, e := db.ExecContext(ctx, `UPDATE batch_image_jobs SET output_expires_at=now()-interval '1 minute' WHERE batch_id=$1`, src.Batch)
+	_, e = db.ExecContext(ctx, `UPDATE batch_image_jobs SET output_expires_at=now()-interval '1 minute' WHERE batch_id=$1`, src.Batch)
 	require.NoError(t, e)
 	d.Nodes[0].X = 95
 	b = board(save(d, 2))
@@ -254,6 +275,9 @@ func TestCreativeCanvasSimultaneousReceiptsStayOnTheirBranches(t *testing.T) {
 	require.Equal(t, s1, again.Document.Nodes[0].PinnedID)
 	require.True(t, again.Assets[b.Document.Nodes[2].ID].Available)
 	require.Len(t, again.Attempts, 3)
+	// A recorded association is not permission to submit from an out-of-date tab.
+	require.ErrorIs(t, store.Bind(ctx, u.ID, b.ID, a, s1, 2), service.ErrCanvasConflict)
+	require.NoError(t, store.Bind(ctx, u.ID, b.ID, a, s1, again.Revision))
 	require.NoError(t, store.Remove(ctx, u.ID, b.ID, 3))
 	_, err = keys.VideoStudioStore().FindVideoStudioJob(ctx, u.ID, s3)
 	require.NoError(t, err)

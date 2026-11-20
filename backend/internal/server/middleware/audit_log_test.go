@@ -357,3 +357,11 @@ func TestAuditRecordsEveryMCPOAuthReadWithGrant(t *testing.T) {
 func TestVideoStudioSubmitDoesNotAuditPromptOrImageBytes(t *testing.T) {
 	require.True(t, shouldOmitAuditRequestBody("POST /api/v1/video-studio/jobs"))
 }
+
+func TestCreativeCanvasPrivateLayoutDoesNotEnterAuditBody(t *testing.T) {
+	for _, key := range []string{"POST /api/v1/creative-canvases", "PUT /api/v1/creative-canvases/:id", "POST /api/v1/creative-canvases/:id/nodes/:node/attempts"} {
+		if !shouldOmitAuditRequestBody(key) {
+			t.Errorf("unexpected audit of private input: %s", key)
+		}
+	}
+}

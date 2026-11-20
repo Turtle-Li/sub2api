@@ -210,6 +210,9 @@ func (r *creativeCanvasRepository) Bind(ctx context.Context, u int64, id, node, 
 	if err != nil {
 		return err
 	}
+	if b.Revision != revision {
+		return service.ErrCanvasConflict
+	}
 	if !slices.ContainsFunc(b.Document.Nodes, func(n service.CanvasNode) bool { return n.ID == node && n.Kind == "video-draft" }) {
 		return service.ErrCanvasNotFound
 	}
@@ -223,9 +226,6 @@ func (r *creativeCanvasRepository) Bind(ctx context.Context, u int64, id, node, 
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
-	}
-	if b.Revision != revision {
-		return service.ErrCanvasConflict
 	}
 	var count, nodeCount int
 	var claimed bool
@@ -266,20 +266,21 @@ func (r *creativeCanvasRepository) ResolveImages(ctx context.Context, u int64, i
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT p.route,p."batchId",p."itemId",p.index FROM jsonb_to_recordset($2::jsonb) AS p(route bigint,"batchId" text,"itemId" text,index int)
+	rows, err := r.db.QueryContext(ctx, `SELECT p.route,p."batchId",p."itemId",p.index,i.provider_source_object FROM jsonb_to_recordset($2::jsonb) AS p(route bigint,"batchId" text,"itemId" text,index int)
  JOIN batch_image_jobs j ON j.batch_id=p."batchId" AND j.user_id=$1 AND j.api_key_id=p.route
  JOIN batch_image_items i ON i.job_id=j.batch_id AND i.custom_id=p."itemId"
- WHERE j.user_deleted_at IS NULL AND j.output_deleted_at IS NULL AND (j.output_expires_at IS NULL OR j.output_expires_at>now()) AND j.status='completed' AND ((i.status='success' AND p.index>=0 AND p.index<i.image_count) OR (i.status='result_available' AND p.index=0))`, u, string(raw))
+ WHERE j.user_deleted_at IS NULL AND j.output_deleted_at IS NULL AND (j.output_expires_at IS NULL OR j.output_expires_at>now()) AND j.status='completed' AND i.status='success' AND p.index>=0 AND p.index<i.image_count`, u, string(raw))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var s service.CanvasImage
-		if err = rows.Scan(&s.Route, &s.Batch, &s.Item, &s.Index); err != nil {
+		var source *string
+		if err = rows.Scan(&s.Route, &s.Batch, &s.Item, &s.Index, &source); err != nil {
 			return nil, err
 		}
-		out[s] = true
+		out[s] = !service.IsArchivedBatchImageItem(&service.BatchImageItem{ProviderSourceObject: source})
 	}
 	return out, rows.Err()
 }
