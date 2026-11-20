@@ -3528,8 +3528,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					cyberMarked && !h.cyberPolicyLogOnly(c, apiKey),
 					turnErr,
 				)
+				// A terminal CPR error only carries a result if the relay already
+				// supplied real usage or a completed image before failing.
+				cprTerminalFailure := errors.Is(turnErr, service.ErrOpenAIWSCPRUnavailable)
 				if turnErr != nil {
-					if result == nil || result.ImageCount <= 0 {
+					if result == nil || (!cprTerminalFailure && result.ImageCount <= 0) {
 						return
 					}
 					// cyber 命中时该 turn 的用量已由 recordCyberPolicyIfMarked(forwardErrored=true)
@@ -3537,11 +3540,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					if service.GetOpsCyberPolicy(c) != nil {
 						return
 					}
-					reqLog.Warn("openai.websocket_partial_error_with_image_result",
-						zap.Int64("account_id", account.ID),
-						zap.Int("image_count", result.ImageCount),
-						zap.Error(turnErr),
-					)
+					if result.ImageCount > 0 {
+						reqLog.Warn("openai.websocket_partial_error_with_image_result",
+							zap.Int64("account_id", account.ID),
+							zap.Int("image_count", result.ImageCount),
+							zap.Error(turnErr),
+						)
+					}
 				}
 				if result == nil {
 					return
@@ -3553,17 +3558,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					zap.String("turn_upstream_model", turnUpstreamModel),
 					zap.String("billing_model", result.BillingModel),
 				)
-				// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-				if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
-					h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
-				} else {
-					h.gatewayService.RefreshCPRQuotaSnapshotAsync(account)
+				if !cprTerminalFailure { // The proxy error path reports the CPR failure once.
+					// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
+					if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
+						h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
+					} else {
+						h.gatewayService.RefreshCPRQuotaSnapshotAsync(account)
+					}
+					scheduleModel := turnUpstreamModel
+					if scheduleModel == "" {
+						scheduleModel = turnRequestedModel
+					}
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
 				}
-				scheduleModel := turnUpstreamModel
-				if scheduleModel == "" {
-					scheduleModel = turnRequestedModel
-				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)

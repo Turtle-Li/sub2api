@@ -1152,6 +1152,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
 			}
+			cprFailureID := ""
 			if eventType == "error" {
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
@@ -1267,12 +1268,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					lease.MarkBroken()
 					return nil, s.newOpenAIWSRateLimitFailoverError(account, lease.HandshakeHeaders(), upstreamMessage, errMsgRaw)
 				}
+				if errCodeRaw == "upstream_unavailable" {
+					// The submitted turn must not be replayed, even if the client goes
+					// away while we are delivering this error.
+					wroteDownstream = true
+					cprFailureID = openAIWSCPRUnavailableRequestID(account, upstreamMessage)
+				}
 			}
 			isTokenEvent := isOpenAIWSTokenEvent(eventType)
 			if isTokenEvent {
 				tokenEventCount++
 			}
-			isTerminalEvent := isOpenAIWSTerminalEvent(eventType)
+			isTerminalEvent := cprFailureID != "" || isOpenAIWSTerminalEvent(eventType)
 			if isTerminalEvent {
 				terminalEventCount++
 			}
@@ -1310,7 +1317,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 				if err := writeClientMessage(clientMessage); err != nil {
-					if isOpenAIWSClientDisconnectError(err) {
+					if cprFailureID != "" || isOpenAIWSClientDisconnectError(err) {
 						clientDisconnected = true
 						closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)
 						logOpenAIWSModeInfo(
@@ -1328,13 +1335,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 							wroteDownstream,
 						)
 					}
-				} else if openAIWSIngressEventStartsUnsafeOutput(eventType, upstreamMessage) {
+				} else if cprFailureID != "" || openAIWSIngressEventStartsUnsafeOutput(eventType, upstreamMessage) {
 					wroteDownstream = true
 					markOpenAIWSClientVisibleFailure(c, eventType, upstreamMessage)
 				}
 			}
 			if isTerminalEvent {
-				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
+				terminalEvent := eventType
+				var terminalErr error
+				if cprFailureID != "" {
+					if !openAIUsageHasTokens(&usage) && imageCounter.Count() == 0 {
+						return nil, ErrOpenAIWSCPRUnavailable
+					}
+					if responseID == "" {
+						responseID = cprFailureID
+					}
+					terminalErr = ErrOpenAIWSCPRUnavailable
+				} else {
+					terminalEvent = s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
+				}
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
 				if clientDisconnected {
 					lease.MarkBroken()
@@ -1395,7 +1414,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					result.ImageOutputSizes = imageCounter.Sizes()
 					result.BillingModel = imageBillingModel
 				}
-				return result, nil
+				return result, terminalErr
 			}
 		}
 	}
@@ -2134,6 +2153,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			if isOpenAIWSSessionPreempted(ctx) {
+				// A verified CPR terminal can arrive as preemption closes the client.
+				// Keep its observed usage without changing who owns the close frame.
+				if result != nil && errors.Is(relayErr, ErrOpenAIWSCPRUnavailable) && hooks != nil && hooks.AfterTurn != nil {
+					hooks.AfterTurn(turn, result, relayErr)
+				}
 				sessionLease.MarkBroken()
 				return errOpenAIWSSessionPreempted
 			}
@@ -2165,7 +2189,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				finalErr = unwrapped
 			}
 			if hooks != nil && hooks.AfterTurn != nil {
-				hooks.AfterTurn(turn, nil, finalErr)
+				hooks.AfterTurn(turn, result, finalErr)
 			}
 			resetSessionLease(true)
 			return finalErr
