@@ -374,7 +374,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 提示缓存 TTL 优先级：客户端（逐块 ttl / X-Cache-TTL 头）> 账号 override > 全局 1h 注入。
 	// 客户端已经写死的块永远不覆盖；这里只给没有 ttl 的块补默认值。
-	if defaultTTL := s.resolveDefaultCacheTTL(ctx, account, clientCacheTTL); defaultTTL != "" {
+	if defaultTTL := s.resolveDefaultCacheTTL(ctx, account, clientCacheTTL, body); defaultTTL != "" {
 		if err := replaceBody(applyDefaultCacheTTL(body, defaultTTL)); err != nil {
 			return nil, err
 		}

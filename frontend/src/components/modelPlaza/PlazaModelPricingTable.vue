@@ -9,7 +9,20 @@
       </thead>
       <tbody>
         <tr v-for="{ model, quotes } in compactRows" :key="`${model.platform}:${model.name}`" class="border-b border-gray-100 last:border-0 dark:border-dark-700/60">
-          <th scope="row" class="whitespace-nowrap px-3 py-3 align-top font-medium text-gray-900 dark:text-white sm:px-5">{{ model.name }}</th>
+          <th scope="row" class="px-3 py-3 align-top sm:px-5">
+            <span class="inline-flex min-w-0 items-center gap-1">
+              <span class="min-w-0 break-words font-medium text-gray-900 dark:text-white">{{ model.name }}</span>
+              <button
+                type="button"
+                class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                :title="t('modelPlaza.table.copyModelId', { model: model.name })"
+                :aria-label="t('modelPlaza.table.copyModelId', { model: model.name })"
+                @click="copyToClipboard(model.name)"
+              >
+                <Icon name="copy" size="sm" aria-hidden="true" />
+              </button>
+            </span>
+          </th>
           <td class="px-3 py-3 text-right align-top text-gray-900 dark:text-white sm:px-5">
             <div v-for="(quote, index) in quotes" :key="index" class="flex flex-wrap items-baseline justify-end gap-x-2">
               <span v-if="quote.label" class="text-xs text-gray-600 dark:text-dark-300">{{ quote.label }}</span>
@@ -87,7 +100,18 @@
           <!-- 模型名 + 非 token 计费模式徽章;分时时段行额外标注时段 -->
           <td class="border-r border-gray-100 py-2.5 pl-5 pr-4 align-middle dark:border-dark-700/60">
             <div class="flex flex-wrap items-center gap-1.5">
-              <span class="whitespace-nowrap font-medium text-gray-900 dark:text-white">{{ m.name }}</span>
+              <span class="inline-flex min-w-0 items-center gap-1">
+                <span class="min-w-0 break-words font-medium text-gray-900 dark:text-white">{{ m.name }}</span>
+                <button
+                  type="button"
+                  class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                  :title="t('modelPlaza.table.copyModelId', { model: m.name })"
+                  :aria-label="t('modelPlaza.table.copyModelId', { model: m.name })"
+                  @click="copyToClipboard(m.name)"
+                >
+                  <Icon name="copy" size="sm" aria-hidden="true" />
+                </button>
+              </span>
               <!-- 时段徽章紧跟模型名,其余徽章排在后面,空间不足时先换行的是它们 -->
               <span
                 v-if="period"
@@ -342,6 +366,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import Icon from '@/components/icons/Icon.vue'
+import { useClipboard } from '@/composables/useClipboard'
 import { formatScaled, resolveIntervalPrices } from '@/utils/pricing'
 import {
   convertUSDPriceForSettlement,
@@ -400,6 +426,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const { copyToClipboard } = useClipboard()
 const appStore = useAppStore()
 const sitePricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
 const pricingCurrency = computed(() => {

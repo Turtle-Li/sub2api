@@ -142,7 +142,7 @@ func bodyCacheTTL(body []byte) (bool, string) {
 
 // resolveDefaultCacheTTL 决定本次请求要注入的默认 TTL（仅用于没有自带 ttl 的块）。
 // 返回空串表示不做任何注入。
-func (s *GatewayService) resolveDefaultCacheTTL(ctx context.Context, account *Account, client ClientCacheTTL) string {
+func (s *GatewayService) resolveDefaultCacheTTL(ctx context.Context, account *Account, client ClientCacheTTL, body []byte) string {
 	if preferred := client.Preferred(); preferred != "" {
 		return preferred
 	}
@@ -150,6 +150,9 @@ func (s *GatewayService) resolveDefaultCacheTTL(ctx context.Context, account *Ac
 		return account.GetCacheTTLOverrideTarget()
 	}
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
+		if !client.Present() && isClaudeCodeCompactionRequest(body) {
+			return cacheTTLTarget5m
+		}
 		return cacheTTLTarget1h
 	}
 	return ""

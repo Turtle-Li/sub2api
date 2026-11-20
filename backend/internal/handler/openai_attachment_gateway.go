@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	attachmentgateway "github.com/Wei-Shaw/sub2api/internal/service/attachment_gateway"
@@ -420,9 +421,9 @@ func responsesAttachmentBudgetMessage(violation *responsesAttachmentBudgetViolat
 	case "inline_attachment_count":
 		return fmt.Sprintf("Too many inline attachments after optimization; limit is %d.", violation.Limit)
 	case "inline_attachment_bytes":
-		return fmt.Sprintf("Inline attachment payload remains too large after optimization; limit is %s.", formatBodyLimit(int64(violation.Limit)))
+		return fmt.Sprintf("Inline attachment payload remains too large after optimization; limit is %s.", pkghttputil.FormatBodyLimit(int64(violation.Limit)))
 	case "forward_body_bytes":
-		return fmt.Sprintf("Request body remains too large after attachment optimization; limit is %s.", formatBodyLimit(int64(violation.Limit)))
+		return fmt.Sprintf("Request body remains too large after attachment optimization; limit is %s.", pkghttputil.FormatBodyLimit(int64(violation.Limit)))
 	default:
 		return "Attachment request exceeds the configured budget."
 	}

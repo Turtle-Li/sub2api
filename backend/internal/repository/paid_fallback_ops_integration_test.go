@@ -82,7 +82,7 @@ func TestPaidFallbackAccountMarkerHTTPPreservesExtra(t *testing.T) {
 	account := mustCreateAccount(t, client, &service.Account{Name: uuid.NewString(), Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey,
 		Extra: map[string]any{"quota_limit": 3.0, "privacy_mode": true, "max_sessions": 2.0}})
 	t.Cleanup(func() { require.NoError(t, client.Account.DeleteOneID(account.ID).Exec(context.Background())) })
-	svc := service.NewAdminService(nil, nil, nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewAdminService(nil, nil, nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler := admin.NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.PUT("/admin/accounts/:id/paid-fallback", handler.SetPaidFallback)

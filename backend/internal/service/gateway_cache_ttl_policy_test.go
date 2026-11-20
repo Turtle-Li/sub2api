@@ -192,34 +192,55 @@ func TestResolveDefaultCacheTTLPrecedence(t *testing.T) {
 	// 1. 客户端请求头最高，压过账号与全局。
 	svc := newTTLTestGateway(t, true)
 	require.Equal(t, cacheTTLTarget5m,
-		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget1h), ClientCacheTTL{HeaderTTL: cacheTTLTarget5m}))
+		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget1h), ClientCacheTTL{HeaderTTL: cacheTTLTarget5m}, nil))
 
 	// 2. 客户端只给了请求体 ttl 时，同样压过账号与全局。
 	svc = newTTLTestGateway(t, true)
 	require.Equal(t, cacheTTLTarget5m,
-		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget1h), ClientCacheTTL{BodyHasExplicit: true, BodyTTL: cacheTTLTarget5m}))
+		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget1h), ClientCacheTTL{BodyHasExplicit: true, BodyTTL: cacheTTLTarget5m}, nil))
 
 	// 3. 无客户端声明时，账号 override 高于全局开关。
 	svc = newTTLTestGateway(t, true)
 	require.Equal(t, cacheTTLTarget5m,
-		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget5m), ClientCacheTTL{}))
+		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget5m), ClientCacheTTL{}, nil))
 
 	// 4. 只有全局开关时用 1h。
 	svc = newTTLTestGateway(t, true)
-	require.Equal(t, cacheTTLTarget1h, svc.resolveDefaultCacheTTL(ctx, oauth, ClientCacheTTL{}))
+	require.Equal(t, cacheTTLTarget1h, svc.resolveDefaultCacheTTL(ctx, oauth, ClientCacheTTL{}, nil))
 
 	// 5. 全局关闭且无账号 override 时不注入。
 	offSvc := newTTLTestGateway(t, false)
-	require.Empty(t, offSvc.resolveDefaultCacheTTL(ctx, oauth, ClientCacheTTL{}))
+	require.Empty(t, offSvc.resolveDefaultCacheTTL(ctx, oauth, ClientCacheTTL{}, nil))
 
 	// 6. 非 OAuth 账号不吃全局开关。
 	svc = newTTLTestGateway(t, true)
-	require.Empty(t, svc.resolveDefaultCacheTTL(ctx, &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}, ClientCacheTTL{}))
+	require.Empty(t, svc.resolveDefaultCacheTTL(ctx, &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}, ClientCacheTTL{}, nil))
 
 	// 7. 请求体 ttl 混合时无法推断意图，回落到账号设置。
 	svc = newTTLTestGateway(t, true)
 	require.Equal(t, cacheTTLTarget1h,
-		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget1h), ClientCacheTTL{BodyHasExplicit: true}))
+		svc.resolveDefaultCacheTTL(ctx, withAccount(cacheTTLTarget1h), ClientCacheTTL{BodyHasExplicit: true}, nil))
+}
+
+func TestResolveDefaultCacheTTLCompactionOnlyChangesGlobalDefault(t *testing.T) {
+	ctx := context.Background()
+	oauth := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	prompt := compactionTestJSONString(t, testCompactPrompt)
+	body := compactionTestBody(t, prompt, "")
+	clientBody := compactionTestBody(t, prompt, cacheTTLTarget1h)
+	svc := newTTLTestGateway(t, true)
+
+	ttl := svc.resolveDefaultCacheTTL(ctx, oauth, ResolveClientCacheTTL(nil, body), body)
+	requireCompactionTestTTLs(t, applyDefaultCacheTTL(body, ttl), cacheTTLTarget5m)
+	require.Equal(t, cacheTTLTarget1h, svc.resolveDefaultCacheTTL(ctx, oauth, ClientCacheTTL{HeaderTTL: cacheTTLTarget1h}, body))
+	require.Equal(t, cacheTTLTarget1h, svc.resolveDefaultCacheTTL(ctx, oauth, ResolveClientCacheTTL(nil, clientBody), clientBody))
+
+	withAccountOverride := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth, Extra: map[string]any{
+		"cache_ttl_override_enabled": true,
+		"cache_ttl_override_target":  cacheTTLTarget1h,
+	}}
+	require.Equal(t, cacheTTLTarget1h, svc.resolveDefaultCacheTTL(ctx, withAccountOverride, ClientCacheTTL{}, body))
+	require.Empty(t, newTTLTestGateway(t, false).resolveDefaultCacheTTL(ctx, oauth, ClientCacheTTL{}, body))
 }
 
 func TestResolveCacheTTLUsageOverrideSkipsClientTTL(t *testing.T) {
@@ -251,7 +272,7 @@ func TestClientFiveMinutesSurvivesTTLOrderNormalization(t *testing.T) {
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 	client := ClientCacheTTL{HeaderTTL: cacheTTLTarget5m}
 
-	body := applyDefaultCacheTTL([]byte(ttlMixedBody), svc.resolveDefaultCacheTTL(context.Background(), account, client))
+	body := applyDefaultCacheTTL([]byte(ttlMixedBody), svc.resolveDefaultCacheTTL(context.Background(), account, client, []byte(ttlMixedBody)))
 	body = normalizeCacheControlTTLOrder(body)
 
 	_, messages, tools, system := collectCacheControlPaths(body)
