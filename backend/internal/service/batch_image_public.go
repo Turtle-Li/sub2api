@@ -45,6 +45,7 @@ const batchImageSafetyBlockedPublicMessage = "Image generation was blocked by th
 
 type BatchImageAccountSelectionRepository interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
+	GetByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	ListSchedulableByPlatform(ctx context.Context, platform string) ([]Account, error)
 	ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error)
 }
@@ -95,9 +96,11 @@ type BatchImageSharedReferenceInput struct {
 }
 
 type BatchImageOwner struct {
-	UserID   int64
-	APIKeyID int64
-	GroupID  *int64
+	UserID           int64
+	APIKeyID         int64
+	GroupID          *int64
+	StudioWallet     bool
+	StudioAccountIDs []int64
 }
 
 type BatchImagePublicService struct {
@@ -145,6 +148,7 @@ type BatchImagePublicBatch struct {
 	SubmittedAt     *int64                 `json:"submitted_at"`
 	SettledAt       *int64                 `json:"settled_at"`
 	DownloadedAt    *int64                 `json:"downloaded_at,omitempty"`
+	OutputExpiresAt *int64                 `json:"output_expires_at,omitempty"`
 	OutputDeletedAt *int64                 `json:"output_deleted_at,omitempty"`
 	Error           *BatchImagePublicError `json:"error"`
 }
@@ -280,9 +284,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
-	// Submit and ListModels share the same group-level batch permission. Submit
-	// additionally requires the group's platform to match the model family.
-	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID, normalized.Model); err != nil {
+	if err := s.ensureBatchImageOwnerGroup(ctx, owner, normalized.Model); err != nil {
 		return nil, err
 	}
 	requestHash := hashBatchImageIdempotencyRequest(normalized, taskNameProvided)
@@ -327,6 +329,10 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	apiKeyID := owner.APIKeyID
+	var studioGroupID *int64
+	if owner.StudioWallet {
+		studioGroupID = owner.GroupID
+	}
 	accountID := account.ID
 	holdID := BatchImageHoldRequestID(batchID)
 	holdAmount := pricingSnapshot.HoldAmount
@@ -334,6 +340,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		BatchID:                 batchID,
 		UserID:                  owner.UserID,
 		APIKeyID:                &apiKeyID,
+		StudioGroupID:           studioGroupID,
 		AccountID:               &accountID,
 		Provider:                provider.Name(),
 		Model:                   normalized.Model,
@@ -854,7 +861,7 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		return nil, ErrBatchImageSettlementPricingMissing
 	}
 	s = s.catalogueRequest()
-	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID); err != nil {
+	if err := s.ensureBatchImageOwnerGroup(ctx, owner, ""); err != nil {
 		return nil, err
 	}
 
@@ -866,8 +873,12 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 	if err != nil {
 		return nil, err
 	}
+	listAccounts, err := s.batchImageAccountsForOwner(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
 	for _, providerName := range batchImageProviderSelectionOrder("") {
-		if groupPlatform != "" && batchImageProviderPlatform(providerName) != groupPlatform {
+		if !owner.StudioWallet && groupPlatform != "" && batchImageProviderPlatform(providerName) != groupPlatform {
 			continue
 		}
 		provider, ok := s.ProviderRegistry.Get(providerName)
@@ -877,7 +888,7 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		platform := batchImageProviderPlatform(providerName)
 		accounts, loaded := accountsByPlatform[platform]
 		if !loaded {
-			accounts, err = s.listCandidateAccounts(ctx, owner.GroupID, platform)
+			accounts, err = listAccounts(platform)
 			if err != nil {
 				return nil, err
 			}
@@ -947,12 +958,20 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		}
 		sort.Strings(models)
 		for _, model := range models {
+			prices := pricesByProvider[providerName][model]
+			caps := s.modelCapabilities(model)
+			if owner.StudioWallet {
+				caps = s.imageStudioWalletCapabilities(model, prices)
+				if len(caps.ImageSizes) == 0 {
+					continue
+				}
+			}
 			out = append(out, BatchImagePublicModel{
 				ID:           model,
 				Object:       "image.batch.model",
 				Provider:     providerName,
-				Capabilities: s.modelCapabilities(model),
-				Prices:       pricesByProvider[providerName][model],
+				Capabilities: caps,
+				Prices:       prices,
 			})
 		}
 	}
@@ -1775,13 +1794,17 @@ func maxBatchImageReferenceImagesForModel(model string) int {
 }
 
 func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, owner BatchImageOwner, requestedProvider, model string) (BatchImageProvider, *Account, error) {
+	listAccounts, err := s.batchImageAccountsForOwner(ctx, owner)
+	if err != nil {
+		return nil, nil, err
+	}
 	providers := batchImageProviderSelectionOrder(requestedProvider, model)
 	for _, providerName := range providers {
 		provider, ok := s.ProviderRegistry.Get(providerName)
 		if !ok || provider == nil || !batchImageProviderSubmissionAvailable(provider) {
 			continue
 		}
-		accounts, err := s.listCandidateAccounts(ctx, owner.GroupID, batchImageProviderPlatform(providerName))
+		accounts, err := listAccounts(batchImageProviderPlatform(providerName))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1885,7 +1908,8 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if err != nil || group == nil {
 			return nil, ErrBatchImageSettlementPricingMissing
 		}
-		if !group.AllowBatchImageGeneration {
+		if (!owner.StudioWallet && !group.AllowBatchImageGeneration) ||
+			(owner.StudioWallet && (!isImageStudioWalletGroup(group) || !group.ModelAllowlist.Allows(req.Model))) {
 			return nil, ErrBatchImageGroupDisabled
 		}
 		groupDefaultMultiplier := group.RateMultiplier
@@ -1916,13 +1940,21 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if group.BatchImageHoldMultiplier >= 0 {
 			holdMultiplier = group.BatchImageHoldMultiplier
 		}
-		if configuredUnit := group.GetImagePrice(req.ImageSize); configuredUnit != nil && *configuredUnit >= 0 {
-			unit = *configuredUnit
-		}
-		if modelUnit, configured, err := batchImageNativeModelPrice(group, req, provider); err != nil {
-			return nil, err
-		} else if configured {
-			unit = modelUnit
+		if owner.StudioWallet {
+			unit, err = imageStudioWalletUnitPrice(group, req.Model, req.ImageSize)
+			if err != nil {
+				return nil, err
+			}
+			discountMultiplier = 1
+		} else {
+			if configuredUnit := group.GetImagePrice(req.ImageSize); configuredUnit != nil && *configuredUnit >= 0 {
+				unit = *configuredUnit
+			}
+			if modelUnit, configured, err := batchImageNativeModelPrice(group, req, provider); err != nil {
+				return nil, err
+			} else if configured {
+				unit = modelUnit
+			}
 		}
 	}
 	if unit < 0 {
@@ -1973,7 +2005,7 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 	if resolver, ok := s.Pricing.(*BatchImageModelPricingResolver); ok && resolver.Resolver != nil {
 		policy := resolver.Resolver.billingService.currentCurrencyPolicy()
 		currency = policy.SettlementCurrency
-		if currency == "CNY" && !batchImageUsesOpenAIWalletPricing(provider, group) {
+		if currency == "CNY" && !owner.StudioWallet && !batchImageUsesOpenAIWalletPricing(provider, group) {
 			unit *= policy.USDToCNYRate
 		}
 	}
@@ -2125,6 +2157,7 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 		SubmittedAt:     batchImageUnixPtr(job.SubmittedAt),
 		SettledAt:       batchImageUnixPtr(job.SettledAt),
 		DownloadedAt:    batchImageUnixPtr(job.DownloadedAt),
+		OutputExpiresAt: batchImageUnixPtr(job.OutputExpiresAt),
 		OutputDeletedAt: batchImageUnixPtr(job.OutputDeletedAt),
 		Error:           publicError,
 	}
@@ -2265,17 +2298,18 @@ func batchImageModelPlatform(model string) (string, bool) {
 	return "", false
 }
 
+var openAIImageBatchModels = [...]string{
+	"gpt-image-2",
+	"gpt-image-2.5-flare",
+	"gpt-image-2.5-flare-2026-09-08",
+	"gpt-image-2.5-sunburst",
+	"gpt-image-2.5-sunburst-2026-09-08",
+	"gpt-image-2.6-flare",
+	"gpt-image-2.6-sunburst",
+}
+
 func isOpenAIImageBatchModel(model string) bool {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gpt-image-2",
-		"gpt-image-2.5-flare",
-		"gpt-image-2.5-flare-2026-09-08",
-		"gpt-image-2.5-sunburst",
-		"gpt-image-2.5-sunburst-2026-09-08":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(openAIImageBatchModels[:], strings.ToLower(strings.TrimSpace(model)))
 }
 
 func batchImageModelsFromAccountMapping(account *Account) []string {
@@ -2339,17 +2373,12 @@ func batchImageAccountSupportsProviderModel(providerName string, account *Accoun
 }
 
 func defaultBatchImageModelCandidates() []string {
-	return []string{
-		"gpt-image-2",
-		"gpt-image-2.5-flare",
-		"gpt-image-2.5-flare-2026-09-08",
-		"gpt-image-2.5-sunburst",
-		"gpt-image-2.5-sunburst-2026-09-08",
+	return append(openAIImageBatchModels[:],
 		"gemini-2.5-flash-image",
 		"gemini-3-pro-image",
 		"gemini-3.1-flash-image",
 		"gemini-3.1-flash-lite-image",
-	}
+	)
 }
 
 func batchImageGCSRef(provider, ref string) string {

@@ -514,6 +514,7 @@ export default {
           cpu: 'CPU Usage (%)',
           memory: 'Memory Usage (%)',
           queueDepth: 'Concurrency Queue Depth',
+          goodPutVideoIncident: 'GoodPut H3 Task Incident',
           groupAvailableAccounts: 'Group Available Accounts',
           groupAvailableRatio: 'Group Available Ratio (%)',
           groupRateLimitRatio: 'Group Rate Limit Ratio (%)',
@@ -533,6 +534,7 @@ export default {
           cpu: 'Current instance CPU usage (0-100).',
           memory: 'Current instance memory usage (0-100).',
           queueDepth: 'Concurrency queue depth within the window (queued requests).',
+          goodPutVideoIncident: 'Alerts per task and incident type: missing receipt, unverified usage, settlement overdue by the selected window, or an unresolved download failure.',
           groupAvailableAccounts: 'Number of available accounts in the selected group (requires group_id).',
           groupAvailableRatio: 'Available account ratio in the selected group (0-100, requires group_id).',
           groupRateLimitRatio: 'Rate-limited account ratio in the selected group (0-100, requires group_id).',
@@ -581,6 +583,7 @@ export default {
           operatorRequired: 'Operator is required',
           thresholdRequired: 'Threshold must be a number',
           windowRange: 'Window must be one of: 1, 5, 60 minutes',
+          goodPutWindowRange: 'Settlement window must be one of: 1, 5, 15, 60 minutes',
           sustainedRange: 'Sustained must be between 1 and 1440 samples',
           cooldownRange: 'Cooldown must be between 0 and 1440 minutes'
         }

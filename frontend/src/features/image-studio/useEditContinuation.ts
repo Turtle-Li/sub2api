@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { taskPending, type StudioTask } from './api'
+import { taskDisplay, taskPending, type StudioTask } from './api'
 
 interface Options {
   tasks: StudioTask[]
@@ -32,7 +32,7 @@ export function useEditContinuation(options: Options) {
     if (!pending || pending.version !== version.current || options.signal.aborted) return
     const outputs = options.tasks.filter(task => task.job.id === pending.jobId)
     if (!outputs.length || outputs.some(taskPending)) return
-    const output = outputs.find(task => task.job.status === 'completed' && !task.job.fail_count && ['succeeded', 'success', 'completed'].includes(task.item.status) && task.item.image_count > 0)
+    const output = outputs.find(task => !task.job.fail_count && taskDisplay(task).canViewOutput)
     if (!output || outputs.some(task => task.item.status === 'failed')) { setPending(null); return }
     let active = true
     void callbacks.current.load(output).then(image => {

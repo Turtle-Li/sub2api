@@ -5,6 +5,7 @@ import requests
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 from . import wan, seedream, seedream_model_policy as policy
+from .bounded import TemporarySubmitRejection
 from .types import Credential, ProviderPhaseContractError
 from .capabilities import model_capabilities
 from .wan_policy import validate_body as validate_wan
@@ -122,6 +123,8 @@ def execute(request: Request, session):
             mime, content = client.image(urls[0])
             return {'state':'completed','task_id':request.task_id,'images':[{'mime_type':mime,'b64_json':base64.b64encode(content).decode('ascii')}],'usage':{'image_count':1}}
         return {'state':'accepted' if status in {'PENDING','RUNNING'} else 'completed','task_id':request.task_id,'task_status':status}
+    except TemporarySubmitRejection as exc:
+        return {**error('rejected', 'temporary_submit_rejection'), 'retry_after_seconds': exc.retry_after_seconds}
     except (seedream.SeedreamProviderPhaseError,wan.WanProviderPhaseError) as exc:
         unknown = exc.outcome_unknown or (request.operation == 'submit' and (getattr(exc,'submission_diagnostic_category',None) is not None or exc.code == 'WAN_RESPONSE_INVALID'))
         # Source error codes can incorporate upstream strings: never emit them.

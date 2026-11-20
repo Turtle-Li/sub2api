@@ -13,6 +13,7 @@ vi.mock('./ImageGroupSettings.vue', () => ({ default: { template: '<div />' } })
 vi.mock('./ImageGroupModels.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./ImageGroupAccounts.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./ImageModelDirectory.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('./ImageStudioWalletGroup.vue', () => ({ default: { template: '<div />' } }))
 
 beforeEach(() => vi.restoreAllMocks())
 

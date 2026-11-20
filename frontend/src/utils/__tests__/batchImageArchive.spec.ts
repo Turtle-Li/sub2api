@@ -102,7 +102,7 @@ describe('batch image private archive', () => {
       'target',
     )
     expect(preview.status).toBe('success')
-    expect(preview.image?.type).toBe('image/png')
+    expect(preview.images.map(image => image.type)).toEqual(['image/png'])
     vi.restoreAllMocks()
   })
 

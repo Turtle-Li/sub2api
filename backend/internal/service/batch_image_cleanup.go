@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	defaultBatchImageInputRetentionAfterTerminal  = 24 * time.Hour
-	defaultBatchImageOutputRetentionAfterTerminal = 72 * time.Hour
-	defaultBatchImageCleanupInterval              = 30 * time.Minute
-	defaultBatchImageCleanupBatchSize             = 100
+	defaultBatchImageInputRetentionAfterTerminal = 24 * time.Hour
+	defaultBatchImageCleanupInterval             = 30 * time.Minute
+	defaultBatchImageCleanupBatchSize            = 100
 )
 
 type BatchImageCleanupService struct {

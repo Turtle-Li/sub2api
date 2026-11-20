@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -314,7 +315,7 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 				return resumable.Resume(ctx, a, r)
 			}
 		}
-		result, executeErr := execute(itemCtx, account, OpenAIImageBatchItemRequest{
+		request := OpenAIImageBatchItemRequest{
 			StateKey:         attemptKey + ".upstream",
 			BatchID:          batchID,
 			CustomID:         item.CustomID,
@@ -324,47 +325,78 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 			AspectRatio:      manifest.Input.AspectRatio,
 			ImageSize:        manifest.Input.ImageSize,
 			ReferenceImages:  item.ReferenceImages,
-		}, func() error {
-			// This hook is the upstream-attempt linearization point. Check before
-			// and after the durable attempt marker so an acknowledged cancel can
-			// fence the next item without replaying an ambiguous request.
-			cancelled, cancelErr := p.cancelRequested(ctx, batchID)
+		}
+		canSubmit := func() error {
+			if err := itemCtx.Err(); err != nil {
+				return err
+			}
+			cancelled, cancelErr := p.cancelRequested(itemCtx, batchID)
 			if cancelErr != nil {
 				return cancelErr
 			}
 			if cancelled {
 				return errBatchImageOpenAICancelled
 			}
-			marker := []byte(time.Now().UTC().Format(time.RFC3339Nano))
-			claimed, claimErr := p.store.PutIfAbsent(ctx, attemptKey, "text/plain", bytes.NewReader(marker), int64(len(marker)))
-			if claimErr != nil {
-				return ErrBatchImageProviderStorageUnavailable.WithCause(claimErr)
-			}
-			if !claimed {
-				return errBatchImageOpenAIAttemptAlreadyClaimed
-			}
-			cancelled, cancelErr = p.cancelRequested(ctx, batchID)
-			if cancelErr != nil || cancelled {
-				if deleteErr := p.store.Delete(ctx, []string{attemptKey}); deleteErr != nil {
-					return ErrBatchImageProviderStorageUnavailable.WithCause(deleteErr)
+			return itemCtx.Err()
+		}
+		var result *OpenAIImageBatchItemResult
+		var executeErr error
+		for attempt := 0; ; attempt++ {
+			result, executeErr = execute(itemCtx, account, request, func() error {
+				if err := canSubmit(); err != nil {
+					return err
 				}
-				if cancelErr != nil {
-					return cancelErr
+				if attempt > 0 {
+					// The original claim stays in place, even during backoff. A
+					// replacement worker can reconcile it, but cannot submit.
+					slog.InfoContext(itemCtx, "batch_image.upstream_submit_retry", "batch_id", batchID, "provider", p.Name(), "model", request.Model, "retry", attempt)
+					return nil
 				}
-				return errBatchImageOpenAICancelled
+				marker := []byte(time.Now().UTC().Format(time.RFC3339Nano))
+				claimed, claimErr := p.store.PutIfAbsent(itemCtx, attemptKey, "text/plain", bytes.NewReader(marker), int64(len(marker)))
+				if claimErr != nil {
+					return ErrBatchImageProviderStorageUnavailable.WithCause(claimErr)
+				}
+				if !claimed {
+					return errBatchImageOpenAIAttemptAlreadyClaimed
+				}
+				if err := canSubmit(); err != nil {
+					if deleteErr := p.store.Delete(ctx, []string{attemptKey}); deleteErr != nil {
+						return ErrBatchImageProviderStorageUnavailable.WithCause(deleteErr)
+					}
+					return err
+				}
+				started = true
+				return nil
+			})
+			if !started || previouslyStarted || result != nil {
+				break
 			}
-			started = true
-			return nil
-		})
+			delay, retry := batchImageSubmitRetryDelay(itemCtx, attempt, executeErr)
+			if !retry {
+				break
+			}
+			if executeErr = sleepWithContext(itemCtx, delay); executeErr != nil {
+				break
+			}
+			if executeErr = canSubmit(); executeErr != nil {
+				break
+			}
+		}
 		itemTimedOut := errors.Is(executeErr, context.DeadlineExceeded) && ctx.Err() == nil
 		cancelItem()
+		// A parent cancellation means the worker lost its lease or is shutting
+		// down. Leave durable state for the new owner to reconcile.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if errors.Is(executeErr, errImageBatchItemPending) {
 			return batchImageOpenAIRunningStatus(2 * time.Second), nil
 		}
 		if errors.Is(executeErr, errBatchImageOpenAIAccountBusy) && !started {
 			return batchImageOpenAIRunningStatus(batchImageOpenAIAccountBusyDelay), nil
 		}
-		if errors.Is(executeErr, errBatchImageOpenAICancelled) && !started {
+		if errors.Is(executeErr, errBatchImageOpenAICancelled) {
 			return &BatchProviderStatus{RawState: "CANCELLED", InternalState: BatchProviderStateCancelled, Done: true}, nil
 		}
 		if errors.Is(executeErr, errBatchImageOpenAIAttemptAlreadyClaimed) && !started {
@@ -377,12 +409,6 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		if executeErr != nil && !started {
 			return nil, executeErr
 		}
-		// A parent cancellation means the worker lost its lease or is shutting
-		// down. Do not mutate durable item state after that ownership boundary.
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
 		var line []byte
 		if itemTimedOut {
 			line = batchImageOpenAIFailureLine(item.CustomID, "PROVIDER_ITEM_TIMEOUT", "the upstream image request exceeded its per-item execution deadline")

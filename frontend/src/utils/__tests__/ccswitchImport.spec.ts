@@ -21,7 +21,7 @@ function decodeBase64Utf8(value: string): string {
 
 describe('ccswitchImport utils', () => {
   it('defaults OpenAI CC Switch imports to the current Codex model', () => {
-    expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe('gpt-5.6-terra')
+    expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe('gpt-6.2-sol')
   })
 
   it('defaults Grok Build imports to the current Grok model', () => {
@@ -34,6 +34,29 @@ describe('ccswitchImport utils', () => {
     apiKey: 'sk-test',
     usageScript: 'return true'
   }
+
+  it('puts the configured Codex model in the URL and TOML without changing the endpoint', () => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput, platform: 'openai', clientType: 'claude', codexModel: ' gpt-6.1-sol '
+    }))
+    expect(params.get('model')).toBe('gpt-6.1-sol')
+    expect(params.get('endpoint')).toBe(baseInput.baseUrl)
+    const settings = JSON.parse(decodeBase64Utf8(params.get('config') || ''))
+    expect(settings.config).toContain('model = "gpt-6.1-sol"')
+    expect(settings.config).toContain(`base_url = "${baseInput.baseUrl}/v1"`)
+    expect(settings.config).toContain('supports_websockets = true')
+  })
+
+  it('uses Sol for a blank override and does not apply Codex settings to Grok', () => {
+    const blank = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput, platform: 'openai', clientType: 'claude', codexModel: ' '
+    }))
+    expect(blank.get('model')).toBe('gpt-6.2-sol')
+    const grok = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput, platform: 'grok', clientType: 'claude', codexModel: 'gpt-6.1-sol'
+    }))
+    expect(grok.get('model')).toBe('grok-4.5')
+  })
 
   it('adds the Codex model parameter for OpenAI imports', () => {
     const params = paramsFromDeeplink(

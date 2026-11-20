@@ -2109,7 +2109,8 @@ const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
     clientType,
     providerName,
     apiKey: row.key,
-    usageScript
+    usageScript,
+    codexModel: (publicSettings.value ?? appStore.cachedPublicSettings)?.ccswitch_codex_model
   })
 
   try {

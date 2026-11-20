@@ -119,6 +119,10 @@ func TestBatchImageDownloadService_OpenItemContent(t *testing.T) {
 		{name: "output_deleted", id: "imgbatch_download", item: "cover/../001", mutate: func(r *fakeBatchImageRepository) {
 			r.jobs["imgbatch_download"].Status = BatchImageJobStatusOutputDeleted
 		}, want: ErrBatchImageOutputDeleted},
+		{name: "expired_before_cleanup", id: "imgbatch_download", item: "cover/../001", mutate: func(r *fakeBatchImageRepository) {
+			expired := time.Now().Add(-time.Minute)
+			r.jobs["imgbatch_download"].OutputExpiresAt = &expired
+		}, want: ErrBatchImageOutputDeleted},
 		{name: "missing_item", id: "imgbatch_download", item: "missing", want: ErrBatchImageItemNotFound},
 		{name: "failed_item", id: "imgbatch_download", item: "bad", want: ErrBatchImageItemFailed},
 		{name: "out_of_range", id: "imgbatch_download", item: "cover/../001", index: 2, want: ErrBatchImageItemImageIndexOutOfRange},

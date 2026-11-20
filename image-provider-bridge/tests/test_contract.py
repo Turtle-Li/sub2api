@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import subprocess
 import sys
@@ -66,6 +67,39 @@ def test_http_rejection_redacts_upstream(provider):
     out=execute(Request.parse(payload(provider)),session)
     assert out['state']=='rejected'
     assert 'ARK_SECRET' not in json.dumps(out)
+
+@pytest.mark.parametrize('provider,status,body,category', [
+    ('wan', 429, {'code': 'Throttling.RateQuota'}, 'temporary_submit_rejection'),
+    ('seedream', 429, {'error': {'code': 'ModelAccountIpmRateLimitExceeded'}}, 'temporary_submit_rejection'),
+    ('seedream', 429, {'error': {'code': 'QuotaExceeded'}}, 'provider_error'),
+    ('wan', 429, {'code': 'Throttling.AllocationQuota'}, 'provider_error'),
+    ('wan', 500, {'code': 'Throttling.RateQuota'}, 'provider_error'),
+    ('wan', 429, {'code': 'Throttling.RateQuota', 'output': {'task_id': 'task-123456'}}, 'provider_error'),
+    ('seedream', 429, {'error': {'code': 'ModelAccountIpmRateLimitExceeded'}, 'data': [{}]}, 'provider_error'),
+])
+def test_module_reports_temporary_submit_rejection_without_resending(monkeypatch, capsys, provider, status, body, category):
+    from sub2_image_bridge.__main__ import main
+
+    body = {**body, 'message': 'private-upstream-detail'}
+    response = Response(body, status, content=json.dumps(body).encode())
+    response.headers['Retry-After'] = '3'
+    calls = []
+
+    def request(self, method, url, **kwargs):
+        calls.append((method, url))
+        return response
+
+    monkeypatch.setattr(requests.Session, 'request', request)
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(payload(provider)).encode())))
+    main()
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert len(calls) == 1 and calls[0][0].upper() == 'POST'
+    assert response.closed and not output.err
+    assert result['category'] == category
+    assert result['state'] == ('outcome_unknown' if status == 500 else 'rejected')
+    assert result.get('retry_after_seconds') == (3 if category == 'temporary_submit_rejection' else None)
+    assert 'private-upstream-detail' not in output.out
 
 def test_wan_submit_and_existing_task_operations():
     request=payload('wan')

@@ -599,6 +599,7 @@ func (r *fakeBatchImageRepository) CreateBatchImageJob(_ context.Context, params
 		BatchID:                 params.BatchID,
 		UserID:                  params.UserID,
 		APIKeyID:                params.APIKeyID,
+		StudioGroupID:           params.StudioGroupID,
 		AccountID:               params.AccountID,
 		Status:                  params.Status,
 		Provider:                params.Provider,
@@ -874,6 +875,9 @@ func (r *fakeBatchImageRepository) MarkBatchImageJobSettled(_ context.Context, p
 	}
 	now := time.Now()
 	job.Status = BatchImageJobStatusCompleted
+	if params.Now != nil {
+		now = *params.Now
+	}
 	job.ActualCost = &params.ActualCost
 	job.ManifestHash = &params.ManifestHash
 	job.SettledAt = &now

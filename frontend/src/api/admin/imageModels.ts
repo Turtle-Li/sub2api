@@ -16,6 +16,23 @@ export async function getImageModels(groupId: number): Promise<ImageModelCatalog
   return data
 }
 
+const walletGroupRoute = '/admin/image-studio/wallet-group'
+
+export interface ImageStudioWalletConfig {
+  group_id: number
+  account_ids: number[]
+}
+
+export async function getImageStudioWalletGroup(signal?: AbortSignal): Promise<ImageStudioWalletConfig> {
+  const { data } = await apiClient.get<ImageStudioWalletConfig>(walletGroupRoute, { signal })
+  return data
+}
+
+export async function setImageStudioWalletGroup(config: ImageStudioWalletConfig, expected: ImageStudioWalletConfig): Promise<ImageStudioWalletConfig> {
+  const { data } = await apiClient.put<ImageStudioWalletConfig>(walletGroupRoute, { config, expected })
+  return data
+}
+
 export async function setWorkBuddyImagePolicy(accountId: number, accepted: boolean): Promise<boolean> {
   const { data } = await apiClient.patch<{ native_retry_accepted: boolean }>(
     `/admin/accounts/${accountId}/workbuddy-image-policy`, { native_retry_accepted: accepted },

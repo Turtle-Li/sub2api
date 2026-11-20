@@ -20,6 +20,37 @@ func newBatchImageRepositoryWithSQL(sqlq batchImageSQLExecutor) *batchImageRepos
 	return &batchImageRepository{sql: sqlq}
 }
 
+func TestImageStudioWalletRepositoryKeepsKeyAndUserIsolation(t *testing.T) {
+	ctx := t.Context()
+	tx := testTx(t)
+	repo := newBatchImageRepositoryWithSQL(tx)
+	user, wallet, group, key := int64(101), service.ImageStudioWalletOwnerSlot, int64(45), int64(222)
+	marker := batchImageTestID(t, "wallet-marker")
+	params := service.CreateBatchImageJobParams{
+		BatchID: batchImageTestID(t, "wallet"), UserID: user, APIKeyID: &wallet, StudioGroupID: &group,
+		Provider: service.BatchImageProviderOpenAI, Model: "gpt-image-2.6-sunburst", ImageSize: "1K", ItemCount: 1, IdempotencyKey: &marker,
+	}
+	saved, err := repo.CreateBatchImageJob(ctx, params)
+	require.NoError(t, err)
+	require.Equal(t, &group, saved.StudioGroupID)
+	other := params
+	other.BatchID, other.APIKeyID, other.StudioGroupID = batchImageTestID(t, "legacy"), &key, nil
+	_, err = repo.CreateBatchImageJob(ctx, other)
+	require.NoError(t, err, "the legacy key has an independent idempotency namespace")
+	got, err := repo.GetBatchImageJobByIdempotencyKey(ctx, user, wallet, marker)
+	require.NoError(t, err)
+	require.Equal(t, params.BatchID, got.BatchID)
+	_, err = repo.GetBatchImageJobByBatchIDForOwner(ctx, user, key, params.BatchID)
+	require.ErrorIs(t, err, service.ErrBatchImageJobNotFound)
+	_, err = repo.GetBatchImageJobByBatchIDForOwner(ctx, user+1, wallet, params.BatchID)
+	require.ErrorIs(t, err, service.ErrBatchImageJobNotFound)
+	_, err = repo.GetBatchImageJobByBatchIDForOwner(ctx, user, wallet, other.BatchID)
+	require.ErrorIs(t, err, service.ErrBatchImageJobNotFound)
+	params.BatchID = batchImageTestID(t, "wallet-duplicate")
+	_, err = repo.CreateBatchImageJob(ctx, params)
+	require.ErrorIs(t, err, service.ErrBatchImageJobExists)
+}
+
 func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)

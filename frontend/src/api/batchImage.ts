@@ -68,6 +68,7 @@ export interface BatchImageJob {
   submitted_at: number | null
   settled_at: number | null
   downloaded_at?: number | null
+  output_expires_at?: number | null
   output_deleted_at?: number | null
 }
 

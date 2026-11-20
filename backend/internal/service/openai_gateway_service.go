@@ -480,6 +480,8 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	stopDurableVideo func()
+
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository
@@ -628,6 +630,7 @@ func NewOpenAIGatewayService(
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}
 	svc.logOpenAIWSModeBootstrap()
+	svc.startDurableVideoReconciliation()
 	return svc
 }
 
@@ -749,6 +752,9 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	if s == nil {
 		return
+	}
+	if s.stopDurableVideo != nil {
+		s.stopDurableVideo()
 	}
 	s.openaiCompatSessionResponses.Close()
 	s.openaiCompatAnthropicDigestSessions.Close()

@@ -27,6 +27,8 @@ const (
 	RunModeSimple   = "simple"
 )
 
+const DefaultBatchImageOutputRetentionHours = 15 * 24
+
 // 使用量记录队列溢出策略
 const (
 	UsageRecordOverflowPolicyDrop   = "drop"
@@ -1243,6 +1245,8 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
+	GoodPutVideoPublicGroupID int64 `mapstructure:"goodput_video_public_group_id"`
+
 	// MinOutputTokens is the minimum max_output_tokens used when
 	// converting Chat Completions or Anthropic requests to Responses.
 	MinOutputTokens int `mapstructure:"min_output_tokens"`
@@ -2372,6 +2376,7 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
+	viper.SetDefault("gateway.goodput_video_public_group_id", 0)
 	viper.SetDefault("gateway.min_output_tokens", 128)
 	viper.SetDefault("simple_mode.auto_create_default_groups", true)
 	viper.SetDefault("simple_mode_key_rate_limit_enabled", false)
@@ -2599,7 +2604,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.max_download_duration_seconds", 600)
 	viper.SetDefault("batch_image.max_download_concurrency_per_user", 1)
 	viper.SetDefault("batch_image.input_retention_after_terminal_hours", 24)
-	viper.SetDefault("batch_image.output_retention_after_terminal_hours", 72)
+	viper.SetDefault("batch_image.output_retention_after_terminal_hours", DefaultBatchImageOutputRetentionHours)
 	viper.SetDefault("batch_image.output_retention_max_days", 7)
 	viper.SetDefault("batch_image.cleanup_interval_minutes", 30)
 	viper.SetDefault("batch_image.cleanup_batch_size", 100)

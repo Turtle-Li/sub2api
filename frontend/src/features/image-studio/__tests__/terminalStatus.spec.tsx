@@ -23,4 +23,20 @@ describe('terminal batch / unfinished item display projection', () => {
  it('never promotes an unfinished item to success merely because the job completed', () => {
    expect(taskDisplay(record('completed', 'pending')).label).toBe('排队中')
  })
+ it('separates cleaned output from a failure in the same batch', () => {
+   const task = record('output_deleted', 'succeeded')
+   const cleaned = { ...task, item: { ...task.item, image_count: 1 } }
+   const failed = { ...task, item: { ...task.item, status: 'failed', error: { code: 'RESULT_DELIVERY_FAILED', message: 'result delivery error' } } }
+   expect(taskDisplay(cleaned)).toMatchObject({ status: 'output_deleted', label: '图片已清理' })
+   expect(taskDisplay(failed)).toMatchObject({ status: 'failed', message: '生成结果未能交付到作品库。' })
+   const html = renderToStaticMarkup(<TaskCard record={cleaned} api={{} as ReturnType<typeof studioAPI>} onOpen={vi.fn()} onEditOutputs={vi.fn()} />)
+   expect(html).toContain('图片已清理')
+   expect(html).toContain('disabled="" aria-label="继续改图"')
+ })
+ it('keeps the failure reason when an undelivered archive has passed its deadline', () => {
+   const task = record('failed', 'result_available')
+   expect(taskDisplay({ ...task, job: { ...task.job, output_expires_at: 1 } })).toMatchObject({
+     status: 'failed', label: '任务失败', message: 'provider unavailable', canOpenArchive: false,
+   })
+ })
 })

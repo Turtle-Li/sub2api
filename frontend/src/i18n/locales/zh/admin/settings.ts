@@ -744,6 +744,8 @@ export default {
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"、"导入到 CC Switch"和回调地址建议，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
+        ccswitchCodexModel: 'CC Switch 默认 Codex 模型',
+        ccswitchCodexModelHint: '仅影响 OpenAI 分组新生成的 CC Switch 导入配置。留空使用 {model}，请填写分组支持的模型 ID。',
         tablePreferencesTitle: '通用表格设置',
         tablePreferencesDescription: '设置后台与用户侧表格组件的默认分页行为',
         tableDefaultPageSize: '默认每页条数',

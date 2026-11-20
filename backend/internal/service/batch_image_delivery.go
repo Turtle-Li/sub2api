@@ -351,17 +351,35 @@ func (s *BatchImageDeliveryService) pumpRequest(ctx context.Context, method, pat
 	if err != nil || len(raw) > batchImagePumpControlMaxBytes {
 		return nil, 0, ErrBatchImageDeliveryFailed
 	}
-	if response.StatusCode == http.StatusNotFound {
-		return &batchImagePumpStatus{}, response.StatusCode, nil
-	}
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusAccepted {
-		return nil, response.StatusCode, ErrBatchImageDeliveryFailed
+		var rejection struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(raw, &rejection); err != nil {
+			rejection.Code = ""
+		}
+		if method == http.MethodGet && response.StatusCode == http.StatusNotFound && rejection.Code == "NOT_FOUND" {
+			return &batchImagePumpStatus{}, response.StatusCode, nil
+		}
+		return nil, response.StatusCode, batchImagePumpRejection(method, response.StatusCode, rejection.Code)
 	}
 	var parsed batchImagePumpStatus
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, response.StatusCode, ErrBatchImageDeliveryFailed
 	}
 	return &parsed, response.StatusCode, nil
+}
+
+func batchImagePumpRejection(method string, status int, code string) error {
+	// The job's terminal error is user-visible. Never record a response body,
+	// storage path, URL, or arbitrary edge/provider code.
+	switch code {
+	case "SOURCE_PATH_NOT_ALLOWED", "DESTINATION_KEY_NOT_ALLOWED", "DESTINATION_PATH_NOT_ALLOWED", "URL_NOT_ALLOWED",
+		"INVALID_SIGNATURE", "EXPIRED_SIGNATURE", "SECRET_NOT_CONFIGURED", "WORKFLOW_UNAVAILABLE", "REPLAY_GUARD_UNAVAILABLE":
+		return fmt.Errorf("%w: archive %s HTTP %d (%s)", ErrBatchImageDeliveryFailed, method, status, code)
+	default:
+		return fmt.Errorf("%w: archive %s HTTP %d", ErrBatchImageDeliveryFailed, method, status)
+	}
 }
 
 func signBatchImagePumpRequest(secret, method, path, timestamp, nonce string, body []byte) string {

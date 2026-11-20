@@ -162,9 +162,6 @@ func (s *BatchImageDownloadService) thumbnailJob(ctx context.Context, owner Batc
 	if job.UserDeletedAt != nil {
 		return nil, ErrBatchImageJobNotFound
 	}
-	if job.OutputDeletedAt != nil || (job.OutputExpiresAt != nil && !job.OutputExpiresAt.After(time.Now())) {
-		return nil, ErrBatchImageOutputDeleted
-	}
 	return job, nil
 }
 

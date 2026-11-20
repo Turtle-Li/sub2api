@@ -118,6 +118,24 @@ func (c *UsageBillingLaneCombiner) ReleaseBatchImageBalance(ctx context.Context,
 	return c.repo.ReleaseBatchImageBalance(ctx, cmd)
 }
 
+func (c *UsageBillingLaneCombiner) goodPutVideoJobs() GoodPutVideoJobRepository {
+	if c == nil {
+		return nil
+	}
+	// Reservations and settlement are already atomic; only ordinary Apply is coalesced.
+	repo, _ := c.repo.(GoodPutVideoJobRepository)
+	return repo
+}
+
+func (c *UsageBillingLaneCombiner) HiAPIVideoJobs() DurableVideoJobRepository {
+	if c != nil {
+		if provider, ok := c.repo.(hiAPIVideoLedgerProvider); ok {
+			return provider.HiAPIVideoJobs()
+		}
+	}
+	return nil
+}
+
 // Stop 拒收新命令（之后的 Apply 直接调用底层仓储），并等待所有通道结算完已排队的命令。可重复调用。
 func (c *UsageBillingLaneCombiner) Stop() {
 	if c == nil {

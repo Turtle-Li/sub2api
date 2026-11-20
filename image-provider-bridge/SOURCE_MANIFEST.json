@@ -120,6 +120,7 @@
     "Seedream image field optional; absent image counted as zero references; upper bound and exact remaining fields retained",
     "Credentials omit VSO lease/cost fields; endpoint/key/timeout checks retained at CLI boundary",
     "Bounded Session buffering and conservative malformed-response classification added outside original clients",
+    "Bounded Session reports a redacted temporary_submit_rejection for known unaccepted 429 submissions; original HTTP clients still send once",
     "Neutral Seedream n=1 validator removes unreachable multi-output fields/options branches; exact remaining allowed-field sets reject sequential_image_generation_options"
   ]
 }

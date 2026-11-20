@@ -35,12 +35,14 @@ type bridgeModel struct {
 	Sizes []bridgeSize `json:"sizes"`
 }
 type bridgeResponse struct {
-	State      string        `json:"state"`
-	Provider   string        `json:"provider"`
-	Models     []bridgeModel `json:"models"`
-	TaskID     string        `json:"task_id"`
-	TaskStatus string        `json:"task_status"`
-	Images     []struct {
+	State             string        `json:"state"`
+	Category          string        `json:"category"`
+	RetryAfterSeconds int           `json:"retry_after_seconds"`
+	Provider          string        `json:"provider"`
+	Models            []bridgeModel `json:"models"`
+	TaskID            string        `json:"task_id"`
+	TaskStatus        string        `json:"task_status"`
+	Images            []struct {
 		MimeType string `json:"mime_type"`
 		Base64   string `json:"b64_json"`
 	} `json:"images"`

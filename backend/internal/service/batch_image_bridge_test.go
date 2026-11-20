@@ -34,6 +34,9 @@ if os.environ.get('BRIDGE_EXPECT_PROXY'):
 if r['operation']=='submit':
  assert r['parameters']['size'] in ['2048*2048','2048x2048']
  if r['prompt']=='die':sys.exit(9)
+ if r['prompt']=='throttle-once':
+  with open(os.environ['BRIDGE_TEST_LOG']) as f:attempt=f.read().count('submit\n')
+  if attempt==1:print(json.dumps({'state':'rejected','category':'temporary_submit_rejection','retry_after_seconds':0}));sys.exit()
  if p=='wan':print(json.dumps({'state':'accepted','task_id':'task-123'}));sys.exit()
 print(json.dumps({'state':'completed','images':[{'mime_type':'image/png','b64_json':os.environ['BRIDGE_TEST_PNG']}]}))
 `
@@ -56,7 +59,7 @@ print(json.dumps({'state':'completed','images':[{'mime_type':'image/png','b64_js
 }
 func TestImageBridgeSequentialRecovery(t *testing.T) {
 	for _, provider := range []string{BatchImageProviderWan, BatchImageProviderSeedream} {
-		for _, prompt := range []string{"image", "die"} {
+		for _, prompt := range []string{"image", "die", "throttle-once"} {
 			t.Run(provider+"/"+prompt, func(t *testing.T) {
 				p, a, log := bridgeFixture(t, provider)
 				var model string
@@ -79,9 +82,13 @@ func TestImageBridgeSequentialRecovery(t *testing.T) {
 				}
 				operations, err := os.ReadFile(log)
 				require.NoError(t, err)
-				require.Equal(t, 1, strings.Count(string(operations), "submit\n"))
-				if prompt == "image" && provider == BatchImageProviderWan {
-					require.Contains(t, string(operations), "collect\n")
+				wantSubmits := 1
+				if prompt == "throttle-once" {
+					wantSubmits = 2
+				}
+				require.Equal(t, wantSubmits, strings.Count(string(operations), "submit\n"))
+				if prompt != "die" && provider == BatchImageProviderWan {
+					require.Equal(t, 1, strings.Count(string(operations), "collect\n"))
 				}
 				body, _, _, err := p.store.Open(t.Context(), p.outputKey(job.BatchID))
 				require.NoError(t, err)

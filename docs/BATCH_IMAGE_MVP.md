@@ -206,6 +206,31 @@ balance hold; cancellation reconciliation never calls `Submit`. Except for the d
 inconclusive provider evidence fail closed with the generic public cancel error and do not expose
 provider identifiers or raw responses.
 
+### Bounded upstream submission retries
+
+An item can make two extra submission attempts, on the same account, only
+after a complete response explicitly rejects it for temporary throttling or
+capacity. The OpenAI API-key Images path recognizes structured rate/capacity
+codes; Wan and Seedream recognize documented native 429 codes through the
+bridge. Bare HTTP status, text messages and the generic gateway failover flag
+are not evidence of rejection. Authentication, exhausted quota, validation,
+unstructured 5xx, interrupted responses, invalid output and missing receipts
+never trigger another generation. OAuth Images, Muse, WorkBuddy and Google
+batch creation retain their existing provider contracts.
+
+Provider references: [OpenAI rate limits](https://developers.openai.com/api/docs/guides/rate-limits),
+[DashScope errors](https://help.aliyun.com/zh/model-studio/error-code),
+[Ark errors](https://console.volcengine.com/ark/region%3Acn-beijing/docs/error-codes).
+
+Backoff starts at 500 ms then 1 s, plus jitter. A longer valid `Retry-After`
+wins; a wait over 10 s or beyond the item deadline suppresses the retry rather
+than sending early. No account slot is held during the wait. Every retry
+reacquires its slot and rechecks lease context and durable cancellation before
+sending. The original conditional attempt marker stays in place: a replacement
+worker may use an existing task receipt, never spend the retry budget again.
+Results still use one item object and the existing batch reserve and settlement;
+only delivered images are charged. Result-storage retries do not submit upstream.
+
 For Vertex jobs with private-COS delivery enabled, `indexing` includes a durable delivery gate:
 
 ```text
@@ -280,8 +305,8 @@ Exact production pricing is resolved through model pricing configuration and is 
 Defaults:
 
 - Input retention after terminal status: 24 hours.
-- Output retention after terminal status: 72 hours.
-- Maximum output retention: 7 days.
+- Successfully settled outputs: 360 hours (15 days) from settlement for new jobs. Existing stored deadlines are not changed.
+- The legacy `output_retention_max_days` configuration field does not cap the persisted settlement deadline.
 - Cleanup interval: 30 minutes.
 - Cleanup batch size: 100.
 
@@ -291,7 +316,9 @@ Manual output deletion:
 DELETE /v1/images/batches/{id}/outputs
 ```
 
-After output cleanup, downloads return `410 Gone` with `BATCH_IMAGE_OUTPUT_DELETED`.
+At the recorded output deadline, or after earlier output cleanup, downloads and thumbnails return
+`410 Gone` with `BATCH_IMAGE_OUTPUT_DELETED`. New COS archive URLs cannot outlive that deadline.
+Physical object deletion is asynchronous; the input retention policy is independent.
 
 Cleanup never accepts user-supplied provider paths. Provider cleanup must use server-generated refs and prefix-safe deletion.
 
@@ -462,8 +489,8 @@ batch_image:
   max_download_concurrency_per_user: 1
 
   input_retention_after_terminal_hours: 24
-  output_retention_after_terminal_hours: 72
-  output_retention_max_days: 7
+  output_retention_after_terminal_hours: 360
+  output_retention_max_days: 7 # legacy field; not a cap on the settlement deadline
   cleanup_interval_minutes: 30
   cleanup_batch_size: 100
 

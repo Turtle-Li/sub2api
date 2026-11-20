@@ -110,6 +110,14 @@ func buildContentModerationInput(c *gin.Context, apiKey *service.APIKey, subject
 		if apiKey.Group != nil {
 			input.GroupName = apiKey.Group.Name
 		}
+	} else if wallet, ok := batchImageStudioWalletContext(c); ok && wallet.group != nil {
+		input.UserEmail = c.GetString(middleware2.ContextKeyAuthEmail)
+		input.GroupID = wallet.owner.GroupID
+		input.GroupName = wallet.group.Name
+		input.Provider = wallet.group.Platform
+		if strings.HasPrefix(model, "gemini-") {
+			input.Provider = service.PlatformGemini
+		}
 	}
 	if input.Endpoint == "" && c.Request != nil && c.Request.URL != nil {
 		input.Endpoint = c.Request.URL.Path

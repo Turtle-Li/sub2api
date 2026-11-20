@@ -134,6 +134,14 @@ func RegisterGatewayRoutes(
 	}
 	videoGenerationHandler := func(c *gin.Context) {
 		if key, ok := middleware.GetAPIKeyFromContext(c); ok && key != nil && key.Group != nil && key.Group.Platform == service.PlatformOpenAI {
+			if service.IsHiAPIVideoGroup(key.Group) {
+				h.OpenAIGateway.HiAPIVideoGeneration(c)
+				return
+			}
+			if service.IsGoodPutVideoGroup(key.Group) {
+				h.OpenAIGateway.GoodPutVideoGeneration(c)
+				return
+			}
 			h.OpenAIGateway.MuseVideoGeneration(c)
 			return
 		}
@@ -153,6 +161,14 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoStatusHandler := func(c *gin.Context) {
+		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsHiAPIVideoTaskID(c.Param("request_id")) {
+			h.OpenAIGateway.HiAPIVideoStatus(c)
+			return
+		}
+		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsGoodPutVideoTaskID(c.Param("request_id")) {
+			h.OpenAIGateway.GoodPutVideoStatus(c)
+			return
+		}
 		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsMuseVideoTaskID(c.Param("request_id")) {
 			h.OpenAIGateway.MuseVideoStatus(c)
 			return
@@ -173,6 +189,14 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoContentHandler := func(c *gin.Context) {
+		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsHiAPIVideoTaskID(c.Param("request_id")) {
+			h.OpenAIGateway.HiAPIVideoContent(c)
+			return
+		}
+		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsGoodPutVideoTaskID(c.Param("request_id")) {
+			h.OpenAIGateway.GoodPutVideoContent(c)
+			return
+		}
 		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsMuseVideoTaskID(c.Param("request_id")) {
 			h.OpenAIGateway.MuseVideoContent(c)
 			return
@@ -238,7 +262,7 @@ func RegisterGatewayRoutes(
 	gateway.Use(opsErrorLogger)
 	gateway.Use(endpointNorm)
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))
-	gateway.Use(museMediaCompressedBodyLimit)
+	gateway.Use(gatewayMediaBodyLimits)
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
 	gateway.Use(groupModelAllowlist)
 	gateway.Use(compositeTarget)
@@ -427,7 +451,7 @@ func RegisterGatewayRoutes(
 	// 根路径别名共用中间件链：白名单准入在 apiKeyAuth 之后、compositeTarget
 	// 之前，避免逐条路由手工维护链导致漏挂。
 	rootRoute := func(method, path string, limit gin.HandlerFunc, handler gin.HandlerFunc) {
-		r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), museMediaCompressedBodyLimit, groupModelAllowlist, compositeTarget, requireGroupAnthropic, handler)
+		r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), gatewayMediaBodyLimits, groupModelAllowlist, compositeTarget, requireGroupAnthropic, handler)
 	}
 	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
 		rootRoute(http.MethodPost, prefix+"/contents/generations/tasks", bodyLimit, h.OpenAIGateway.SeedanceTasks)
@@ -599,18 +623,24 @@ func groupExplicitlyAllowsMuse(group *service.Group, model string) bool {
 		slices.Contains(group.ModelAllowlist.Models, model)
 }
 
-func museMediaCompressedBodyLimit(c *gin.Context) {
-	if c.Request.Method == http.MethodPost && c.GetHeader("Content-Encoding") != "" {
+func gatewayMediaBodyLimits(c *gin.Context) {
+	if c.Request.Method == http.MethodPost {
 		key, ok := middleware.GetAPIKeyFromContext(c)
 		if ok && key != nil {
-			var model string
+			var museModel string
 			switch strings.TrimPrefix(c.FullPath(), "/v1") {
 			case "/images/generations", "/images/edits", "/images/generations/async", "/images/edits/async", "/images/tasks":
-				model = service.MuseImageModel
+				museModel = service.MuseImageModel
 			case "/videos", "/videos/generations":
-				model = service.MuseVideoModel
+				museModel = service.MuseVideoModel
+				if service.IsHiAPIVideoGroup(key.Group) {
+					c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.HiAPIVideoRequestMaxBytes)
+				}
+				if service.IsGoodPutVideoGroup(key.Group) {
+					c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.GoodPutVideoRequestMaxBytes)
+				}
 			}
-			if model != "" && groupExplicitlyAllowsMuse(key.Group, model) {
+			if c.GetHeader("Content-Encoding") != "" && museModel != "" && groupExplicitlyAllowsMuse(key.Group, museModel) {
 				c.Request = pkghttputil.WithDecompressedRequestLimit(c.Request, service.MuseMediaRequestMaxBytes)
 			}
 		}

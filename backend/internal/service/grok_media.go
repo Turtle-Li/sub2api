@@ -41,7 +41,7 @@ func (e GrokMediaEndpoint) RequiresRequestBody() bool {
 }
 
 func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
-	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete || e == MuseVideoStatus || e == MuseVideoContent
+	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete || e == MuseVideoStatus || e == MuseVideoContent || e == GoodPutVideoStatus || e == GoodPutVideoContent || e == HiAPIVideoStatus || e == HiAPIVideoContent
 }
 
 func (e GrokMediaEndpoint) IsTaskLookupRequest() bool {
@@ -49,7 +49,7 @@ func (e GrokMediaEndpoint) IsTaskLookupRequest() bool {
 }
 
 func (e GrokMediaEndpoint) IsGenerationRequest() bool {
-	if e == SeedanceEndpointCreate || e == MuseVideoCreate {
+	if e == SeedanceEndpointCreate || e == MuseVideoCreate || e == GoodPutVideoCreate || e == HiAPIVideoCreate {
 		return true
 	}
 	switch e {
@@ -390,6 +390,7 @@ type GrokVideoPendingBilling struct {
 	VideoResolution      string `json:"video_resolution,omitempty"`
 	VideoDurationSeconds int    `json:"video_duration_seconds,omitempty"`
 	OriginalModel        string `json:"original_model,omitempty"`
+	UpstreamTaskID       string `json:"upstream_task_id,omitempty"`
 	// CreatedAt is when the gateway accepted the async create (RFC3339Nano UTC).
 	// duration_ms for deferred billing is measured from this instant until the
 	// first official done+video.url observation (status poll or content download),

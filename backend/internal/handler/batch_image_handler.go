@@ -78,7 +78,8 @@ func (h *BatchImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, req *
 		return true
 	}
 	apiKey, ok := middleware.GetAPIKeyFromContext(c)
-	if !ok || apiKey == nil {
+	wallet, isWallet := batchImageStudioWalletContext(c)
+	if (!isWallet || wallet.group == nil) && (!ok || apiKey == nil) {
 		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
 		return false
 	}
@@ -101,8 +102,13 @@ func (h *BatchImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, req *
 		batchImageError(c, infraerrors.New(http.StatusBadRequest, "INVALID_BATCH_PROMPT", "batch prompts are invalid"))
 		return false
 	}
-	reqLog := requestLogger(c, "handler.batch_image.security_audit",
-		zap.Int64("user_id", subject.UserID), zap.Int64("api_key_id", apiKey.ID), zap.String("model", req.Model))
+	fields := []zap.Field{zap.Int64("user_id", subject.UserID), zap.String("model", req.Model)}
+	if isWallet {
+		fields = append(fields, zap.Int64p("studio_group_id", wallet.owner.GroupID))
+	} else {
+		fields = append(fields, zap.Int64("api_key_id", apiKey.ID))
+	}
+	reqLog := requestLogger(c, "handler.batch_image.security_audit", fields...)
 	decision := h.openAI.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, req.Model, body)
 	if decision != nil && !decision.AllowNextStage {
 		h.openAI.openAISecurityAuditError(c, decision)
@@ -162,6 +168,8 @@ func (h *BatchImageHandler) Models(c *gin.Context) {
 	// 分组级模型白名单：ListModels 已按分组账号枚举，这里再按白名单过滤一次。
 	if apiKey, ok := middleware.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil {
 		got.Data = filterBatchImageModelsByAllowlist(got.Data, apiKey.Group.ModelAllowlist)
+	} else if wallet, ok := batchImageStudioWalletContext(c); ok && wallet.group != nil {
+		got.Data = filterBatchImageModelsByAllowlist(got.Data, wallet.group.ModelAllowlist)
 	}
 	body, err := json.Marshal(got)
 	if err != nil {
@@ -363,6 +371,9 @@ func (h *BatchImageHandler) DeleteOutputs(c *gin.Context) {
 }
 
 func batchImageOwnerFromContext(c *gin.Context) (service.BatchImageOwner, bool) {
+	if wallet, ok := batchImageStudioWalletContext(c); ok {
+		return wallet.owner, true
+	}
 	apiKey, ok := middleware.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil || apiKey.ID <= 0 || apiKey.UserID <= 0 {
 		return service.BatchImageOwner{}, false

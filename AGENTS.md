@@ -64,6 +64,21 @@
   contract, exact mapping, one-reference limit, resumable receipt and billing rules.
   Reuse the original sequential batch lifecycle; never retry an ambiguous POST.
 
+## GoodPut H3 video
+
+- Read `docs/goodput-h3-video.md` before changing the H3 adapter or
+  provisioning a GoodPut account. Scope public submissions to the approved
+  dedicated H3 wallet group. Keep exact model IDs, same-key task ownership,
+  background settlement and the verified cost ceiling. Never replay an
+  ambiguous paid request.
+
+## HiAPI Seedance video
+
+- Read `docs/hiapi-seedance-video.md` before changing routing, scope or billing.
+  Keep the exact Mini model and exclusive wallet group isolated from Ark and
+  H3. Settle successful tasks independently of reads and never replay an
+  uncertain paid submission. Drain HiAPI holds before rollback.
+
 ## Image Studio integration
 
 - For group-based image administration, read
@@ -500,8 +515,9 @@
   CNY settlement contracts, fixed egress and Grok relay policy, exact-N
   image behavior, OpenCode union, and manual release controls. Risk-control
   allowlisted requests are log-only but still retain `FullPrompt` audit
-  evidence; CC Switch keeps WebSocket settings and the local
-  `gpt-5.6-terra` default while adopting upstream URL normalization.
+  evidence; preserve CC Switch's WebSocket settings and URL normalization.
+  The editable OpenAI/Codex import default and its upstream references are in
+  `docs/features/CC_SWITCH_CODEX_IMPORT_DEFAULT.md`.
 
 - Read `docs/operations/OPENAI_PROXY_TIMEZONE_REWRITE_20260916.md` before
   changing proxy exit geolocation, OpenAI/Codex developer context rewriting,

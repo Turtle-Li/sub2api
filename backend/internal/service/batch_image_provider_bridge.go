@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -93,6 +94,10 @@ func (e *bridgeImageExecutor) Execute(ctx context.Context, a *Account, r OpenAII
 	response, err := e.call(ctx, a, req, before)
 	if err != nil {
 		return nil, err
+	}
+	if response.State == "rejected" && response.Category == "temporary_submit_rejection" &&
+		response.TaskID == "" && len(response.Images) == 0 && response.RetryAfterSeconds >= 0 && response.RetryAfterSeconds <= 86400 {
+		return nil, &batchImageTemporarySubmitRejection{retryAfter: time.Duration(response.RetryAfterSeconds) * time.Second}
 	}
 	if e.provider == BatchImageProviderWan {
 		if response.State != "accepted" || !bridgeTaskID.MatchString(response.TaskID) {

@@ -32,6 +32,24 @@ func stubMemoryLimit(t *testing.T, limit uint64) {
 	t.Cleanup(func() { detectMemoryLimitBytes = original })
 }
 
+func TestBatchImageRetentionDefaultsAndOverride(t *testing.T) {
+	t.Run("only output retention changes", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("BATCH_IMAGE_OUTPUT_RETENTION_AFTER_TERMINAL_HOURS", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 360, cfg.BatchImage.OutputRetentionAfterTerminalHours)
+		require.Equal(t, 24, cfg.BatchImage.InputRetentionAfterTerminalHours)
+	})
+	t.Run("explicit output override stays authoritative", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("BATCH_IMAGE_OUTPUT_RETENTION_AFTER_TERMINAL_HOURS", "72")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 72, cfg.BatchImage.OutputRetentionAfterTerminalHours)
+	})
+}
+
 func TestAutoRequestBodyMemoryBudget(t *testing.T) {
 	require.Equal(t, int64(1<<30), autoRequestBodyMemoryBudget(0))
 	require.Equal(t, int64(1<<30), autoRequestBodyMemoryBudget(2<<30))

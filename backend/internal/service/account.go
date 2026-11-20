@@ -1991,6 +1991,12 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	if a == nil {
 		return false
 	}
+	if capability == OpenAIEndpointCapabilityHiAPIVideo {
+		return a.supportsHiAPIVideo()
+	}
+	if capability != "" && a.supportsHiAPIVideo() {
+		return false
+	}
 	if capability == OpenAIEndpointCapabilityMuseVideo || capability == OpenAIEndpointCapabilityMuseImage {
 		model := MuseVideoModel
 		if capability == OpenAIEndpointCapabilityMuseImage {
@@ -2000,6 +2006,9 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	}
 	if a.IsMuseMediaOnly() {
 		return false
+	}
+	if capability == OpenAIEndpointCapabilityGoodPutVideo {
+		return a.supportsGoodPutVideo()
 	}
 	if capability == OpenAIEndpointCapabilitySeedance {
 		configured, _ := a.openAIEndpointCapabilitySet()

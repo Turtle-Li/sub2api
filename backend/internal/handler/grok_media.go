@@ -60,6 +60,14 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		platform = service.PlatformOpenAI
 		noAccountCode, noAccountMessage = "seedance_no_eligible_account", "No eligible Seedance accounts"
 	}
+	if endpoint.IsGoodPutVideo() {
+		platform = service.PlatformOpenAI
+		noAccountCode, noAccountMessage = "goodput_video_no_eligible_account", "No eligible GoodPut H3 account"
+	}
+	if endpoint.IsHiAPIVideo() {
+		platform = service.PlatformOpenAI
+		noAccountCode, noAccountMessage = "hiapi_video_no_eligible_account", "No eligible HiAPI video account"
+	}
 	if endpoint.IsMuseVideo() {
 		platform = service.PlatformOpenAI
 		noAccountCode, noAccountMessage = "muse_video_no_eligible_account", "No eligible Muse video accounts"
@@ -75,6 +83,22 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		return
+	}
+	if endpoint.IsGoodPutVideo() && !service.IsGoodPutVideoGroup(apiKey.Group) {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "GoodPut H3 is not available for this group")
+		return
+	}
+	if endpoint == service.GoodPutVideoCreate && !h.gatewayService.CanSubmitGoodPutVideo(apiKey.Group) {
+		h.errorResponse(c, http.StatusForbidden, "goodput_video_group_not_enabled", "GoodPut H3 submissions are not enabled for this public group")
+		return
+	}
+	if endpoint.IsHiAPIVideo() && !service.IsHiAPIVideoGroup(apiKey.Group) {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "HiAPI video is not available for this group")
+		return
+	}
+	if endpoint == service.HiAPIVideoCreate && !apiKey.Group.IsExclusive {
+		h.errorResponse(c, http.StatusForbidden, "hiapi_video_group_not_enabled", "HiAPI video requires an exclusive wallet group")
 		return
 	}
 	if endpoint.IsMuseMedia() && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI || apiKey.Group.IsSubscriptionType()) {
@@ -104,7 +128,30 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	var requestInfo service.GrokMediaRequestInfo
 	var museRequest *service.MuseMediaRequest
 	var museIdempotencyKey string
+	var goodPutRequest *service.GoodPutVideoRequest
+	var goodPutPending *service.GrokVideoPendingBilling
+	var goodPutJob *service.DurableVideoJob
+	var hiAPIRequest *service.HiAPIVideoRequest
+	var hiAPIJob *service.DurableVideoJob
 	switch {
+	case endpoint == service.HiAPIVideoCreate:
+		hiAPIRequest, err = service.ParseHiAPIVideoRequest(contentType, body)
+		if err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		requestInfo = hiAPIRequest.Info()
+	case endpoint == service.GoodPutVideoCreate:
+		goodPutRequest, err = service.ParseGoodPutVideoRequest(contentType, body)
+		if err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		requestInfo = goodPutRequest.Info()
+		if !apiKey.Group.ModelAllowlist.Allows(requestInfo.Model) {
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "GoodPut model is not available for this group")
+			return
+		}
 	case endpoint == service.SeedanceEndpointCreate:
 		requestInfo, err = service.ParseSeedanceRequest(body)
 		if err != nil {
@@ -166,6 +213,34 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
+	if endpoint.IsGoodPutVideo() && endpoint.IsTaskLookupRequest() {
+		if service.IsGoodPutVideoTaskID(requestID) {
+			goodPutJob, err = h.gatewayService.FindGoodPutVideoJob(c.Request.Context(), apiKey, requestID)
+			if err == nil && goodPutJob != nil {
+				goodPutPending = &service.GrokVideoPendingBilling{Model: goodPutJob.Model,
+					VideoDurationSeconds: goodPutJob.Seconds, UpstreamTaskID: goodPutJob.NativeID}
+			} else if err == nil {
+				goodPutPending, err = h.gatewayService.LoadGrokVideoPendingBilling(c.Request.Context(), requestID, subject.UserID, apiKey.ID)
+			}
+		}
+		if err != nil || goodPutPending == nil || !service.IsGoodPutVideoModel(goodPutPending.Model) || !apiKey.Group.ModelAllowlist.Allows(goodPutPending.Model) {
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "GoodPut video task not found")
+			return
+		}
+		requestInfo.Model = goodPutPending.Model
+	}
+	if endpoint.IsHiAPIVideo() && endpoint.IsTaskLookupRequest() {
+		hiAPIJob, err = h.gatewayService.FindHiAPIVideoJob(c.Request.Context(), apiKey, requestID)
+		if err != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "HiAPI video status is unavailable")
+			return
+		}
+		if hiAPIJob == nil || hiAPIJob.Model != service.HiAPISeedanceMiniModel {
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "HiAPI video task not found")
+			return
+		}
+		requestInfo.Model = hiAPIJob.Model
+	}
 	requestModel := requestInfo.Model
 	routingModel := service.NormalizeGrokMediaModelForEndpoint(endpoint, requestModel, requestInfo.HasInputImage())
 	if endpoint.IsGenerationRequest() && strings.TrimSpace(requestModel) == "" {
@@ -184,6 +259,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	if endpoint.IsGenerationRequest() {
 		if !service.GroupAllowsImageGeneration(apiKey.Group) {
 			h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
+			return
+		}
+		if endpoint == service.GoodPutVideoCreate && !h.gatewayService.HasGoodPutVideoPrice(c.Request.Context(), apiKey, requestModel) {
+			h.errorResponse(c, http.StatusServiceUnavailable, "goodput_video_price_unavailable", "GoodPut H3 video pricing is not configured for this group")
 			return
 		}
 		if endpoint == service.MuseVideoCreate && !h.gatewayService.HasMuseVideoPrice(c.Request.Context(), apiKey) {
@@ -227,9 +306,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		defer userReleaseFunc()
 	}
 
-	// Muse reads can only access an accepted task bound to this key. Completion
-	// may use up the wallet or key quota before the client downloads the file.
-	if !endpoint.IsMuseMedia() || endpoint.IsGenerationRequest() {
+	// Bound Muse/GoodPut tasks can still be read after the wallet or key quota is used up.
+	if !(endpoint.IsMuseMedia() || endpoint.IsGoodPutVideo() || endpoint.IsHiAPIVideo()) || endpoint.IsGenerationRequest() {
 		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 			reqLog.Info("grok_media.billing_eligibility_check_failed", zap.Error(err))
 			status, code, message, retryAfter := billingErrorDetails(err)
@@ -284,9 +362,15 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	boundLookupAccountID := int64(0)
 	if endpoint.IsTaskLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
-		boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
-			c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
-		)
+		if goodPutJob != nil {
+			boundLookupAccountID = goodPutJob.AccountID
+		} else if hiAPIJob != nil {
+			boundLookupAccountID = hiAPIJob.AccountID
+		} else {
+			boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+				c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
+			)
+		}
 		if err != nil || boundLookupAccountID <= 0 {
 			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
 			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Media task not found")
@@ -315,7 +399,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	mediaEligibilityRejected := false
 	switchCount := 0
 	videoCreateStartedAt := ""
-	if isGrokVideoCreateEndpoint(endpoint) {
+	if isGrokVideoCreateEndpoint(endpoint) && !endpoint.IsGoodPutVideo() {
 		videoCreateStartedAt = service.GrokVideoPendingCreatedAtNow()
 	}
 	maxAccountSwitches := h.maxAccountSwitches
@@ -439,7 +523,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		)
 
 		account := selection.Account
-		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() && !endpoint.IsMuseMedia() {
+		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() && !endpoint.IsMuseMedia() && !endpoint.IsGoodPutVideo() && !endpoint.IsHiAPIVideo() {
 			eligible, eligibilityReason, eligibilityErr := h.ensureGrokMediaAccountEligibility(requestCtx, account)
 			if !eligible {
 				releaseAccount()
@@ -486,6 +570,17 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+		if endpoint.IsGoodPutVideo() {
+			h.forwardGoodPutVideo(requestCtx, c, goodPutVideoDispatch{
+				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending, job: goodPutJob,
+				account: account, key: apiKey, subject: subject, log: reqLog,
+			})
+			return
+		}
+		if endpoint.IsHiAPIVideo() {
+			h.forwardHiAPIVideo(requestCtx, c, endpoint, apiKey, account, hiAPIRequest, hiAPIJob, reqLog)
+			return
+		}
 		if endpoint.IsMuseImage() {
 			h.forwardMuseImage(c, requestCtx, endpoint, requestID, museIdempotencyKey, body, museRequest, apiKey, subject, account, reqLog, releaseAccount, releaseMuseMedia)
 			return
@@ -674,6 +769,12 @@ func (h *OpenAIGatewayHandler) ensureGrokMediaAccountEligibility(ctx context.Con
 }
 
 func grokMediaRequiredCapability(endpoint service.GrokMediaEndpoint) service.OpenAIEndpointCapability {
+	if endpoint.IsHiAPIVideo() {
+		return service.OpenAIEndpointCapabilityHiAPIVideo
+	}
+	if endpoint.IsGoodPutVideo() {
+		return service.OpenAIEndpointCapabilityGoodPutVideo
+	}
 	if endpoint.IsMuseImage() {
 		return service.OpenAIEndpointCapabilityMuseImage
 	}
@@ -701,7 +802,7 @@ func grokMediaScheduleModel(account *service.Account, routingModel string, resul
 
 func isGrokVideoCreateEndpoint(endpoint service.GrokMediaEndpoint) bool {
 	switch endpoint {
-	case service.SeedanceEndpointCreate, service.MuseVideoCreate, service.GrokMediaEndpointVideosGenerations,
+	case service.SeedanceEndpointCreate, service.MuseVideoCreate, service.GoodPutVideoCreate, service.GrokMediaEndpointVideosGenerations,
 		service.GrokMediaEndpointVideosEdits,
 		service.GrokMediaEndpointVideosExtensions:
 		return true

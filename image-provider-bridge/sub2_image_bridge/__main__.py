@@ -17,7 +17,7 @@ def main():
         response = error('rejected','invalid_request')
     else:
         try:
-            with BoundedSession() as session:
+            with BoundedSession(submit_provider=request.provider if request.operation == 'submit' else '') as session:
                 response = execute(request,session)
         except (ValueError,TypeError,UnicodeError,RecursionError):
             response = error('outcome_unknown','invalid_provider_response')

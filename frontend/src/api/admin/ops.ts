@@ -784,6 +784,7 @@ export type MetricType =
   | 'network_bandwidth_utilization_percent'
   | 'network_saturation_suspected'
   | 'concurrency_queue_depth'
+  | 'goodput_video_incident'
   | 'group_available_accounts'
   | 'group_available_ratio'
   | 'group_rate_limit_ratio'

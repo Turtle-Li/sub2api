@@ -53,6 +53,8 @@ type MetricGroup = 'system' | 'group' | 'account'
 
 const BANDWIDTH_UTILIZATION_METRIC: MetricType = 'bandwidth_utilization'
 const LEGACY_BANDWIDTH_UTILIZATION_METRIC: MetricType = 'network_bandwidth_utilization_percent'
+const GOODPUT_VIDEO_INCIDENT_METRIC: MetricType = 'goodput_video_incident'
+const isGoodPutIncident = computed(() => draft.value?.metric_type === GOODPUT_VIDEO_INCIDENT_METRIC)
 
 interface MetricDefinition {
   type: MetricType
@@ -209,6 +211,14 @@ const metricDefinitions = computed(() => {
       recommendedOperator: '>',
       recommendedThreshold: 10
     },
+    {
+      type: GOODPUT_VIDEO_INCIDENT_METRIC,
+      group: 'system',
+      label: t('admin.ops.alertRules.metrics.goodPutVideoIncident'),
+      description: t('admin.ops.alertRules.metricDescriptions.goodPutVideoIncident'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
 
     // Group-level metrics (requires group_id filter)
     {
@@ -344,7 +354,7 @@ const severityOptions = computed(() => {
 })
 
 const windowOptions = computed(() => {
-  const windows = [1, 5, 60]
+  const windows = isGoodPutIncident.value ? [1, 5, 15, 60] : [1, 5, 60]
   return windows.map((m) => ({ value: m, label: `${m}m` }))
 })
 
@@ -396,8 +406,8 @@ const editorValidation = computed(() => {
   if (!r.operator) errors.push(t('admin.ops.alertRules.validation.operatorRequired'))
   if (!(typeof r.threshold === 'number' && Number.isFinite(r.threshold)))
     errors.push(t('admin.ops.alertRules.validation.thresholdRequired'))
-  if (!(typeof r.window_minutes === 'number' && Number.isFinite(r.window_minutes) && [1, 5, 60].includes(r.window_minutes))) {
-    errors.push(t('admin.ops.alertRules.validation.windowRange'))
+  if (!windowOptions.value.some((option) => option.value === r.window_minutes)) {
+    errors.push(t(isGoodPutIncident.value ? 'admin.ops.alertRules.validation.goodPutWindowRange' : 'admin.ops.alertRules.validation.windowRange'))
   }
   if (!(typeof r.sustained_minutes === 'number' && Number.isInteger(r.sustained_minutes) && r.sustained_minutes >= 1 && r.sustained_minutes <= 1440)) {
     errors.push(t('admin.ops.alertRules.validation.sustainedRange'))
@@ -624,7 +634,7 @@ function cancelDelete() {
             </div>
           </div>
 
-          <div>
+          <div v-if="!isGoodPutIncident">
             <label class="input-label">{{ t('admin.ops.alertRules.form.operator') }}</label>
             <Select v-model="draft!.operator" :options="operatorOptions" />
           </div>
@@ -646,7 +656,7 @@ function cancelDelete() {
             </p>
           </div>
 
-          <div>
+          <div v-if="!isGoodPutIncident">
             <label class="input-label">{{ t('admin.ops.alertRules.form.threshold') }}</label>
             <input v-model.number="draft!.threshold" class="input" type="number" />
           </div>
@@ -661,12 +671,12 @@ function cancelDelete() {
             <Select v-model="draft!.window_minutes" :options="windowOptions" />
           </div>
 
-          <div>
+          <div v-if="!isGoodPutIncident">
             <label class="input-label">{{ t('admin.ops.alertRules.form.sustained') }}</label>
             <input v-model.number="draft!.sustained_minutes" class="input" type="number" min="1" max="1440" />
           </div>
 
-          <div>
+          <div v-if="!isGoodPutIncident">
             <label class="input-label">{{ t('admin.ops.alertRules.form.cooldown') }}</label>
             <input v-model.number="draft!.cooldown_minutes" class="input" type="number" min="0" max="1440" />
           </div>

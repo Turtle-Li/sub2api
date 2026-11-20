@@ -1,5 +1,5 @@
 import type { BatchImageModel } from '@/api/batchImage'
-import type { StudioKey } from './api'
+import { studioWalletRoute, type StudioKey, type StudioWalletMode } from './api'
 
 // Display metadata only. Fresh key admission and submission pricing stay server-owned.
 const prefix = 'image-studio:directory:v1:'
@@ -56,18 +56,24 @@ function write(user: number | undefined, part: string, value: unknown) {
   } catch { /* Storage may be blocked or full; network discovery remains available. */ }
 }
 export const cachedStudioKeys = (user: number): StudioKey[] | undefined => read(user, 'keys', validKeys)
-export function cacheStudioKeys(user: number, keys: readonly StudioKey[]) {
+export const cachedStudioWalletMode = (user: number): StudioWalletMode => read(user, 'wallet-mode', (value): value is StudioWalletMode => value === 'on' || value === 'off' || value === 'legacy') ?? 'legacy'
+export function cacheStudioKeys(user: number, keys: readonly StudioKey[], walletMode: StudioWalletMode = 'legacy') {
   const previous = new Map(cachedStudioKeys(user)?.map(key => [key.id, key]))
   const current = new Map(keys.map(key => [key.id, key]))
   try {
     for (const name of catalogueKeys(user)) {
       const id = Number(name.slice(name.lastIndexOf(':') + 1))
+      if (id === studioWalletRoute) {
+        if (walletMode !== 'on') sessionStorage.removeItem(name)
+        continue
+      }
       const before = previous.get(id)
       const next = current.get(id)
       if (!before || !next || before.group_id !== next.group_id || next.can_generate === false) sessionStorage.removeItem(name)
     }
   } catch { /* Optional cache; fresh permissions still govern every request. */ }
   write(user, 'keys', keys.map(({ id, name, group_id, group_name, status, expired, quota_exhausted, can_generate, has_history }) => ({ id, name, group_id, group_name, status, expired, quota_exhausted, can_generate, has_history })))
+  write(user, 'wallet-mode', walletMode)
 }
 export const cachedStudioModels = (user: number | undefined, key: number): BatchImageModel[] | undefined => read(user, `model:${key}`, (value): value is BatchImageModel[] => Array.isArray(value) && value.length <= 128 && value.every(validModel))
 export function cacheStudioModels(user: number | undefined, key: number, models: BatchImageModel[]) {

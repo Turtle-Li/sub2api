@@ -11,11 +11,14 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
+	OpsAlertMetricGoodPutVideoIncident = "goodput_video_incident"
+
 	opsAlertEvaluatorJobName = "ops_alert_evaluator"
 
 	opsAlertEvaluatorTimeout         = 45 * time.Second
@@ -23,6 +26,10 @@ const (
 	opsAlertEvaluatorLeaderLockTTL   = 90 * time.Second
 	opsAlertEvaluatorSkipLogInterval = 1 * time.Minute
 )
+
+type opsGoodPutVideoAlertRepository interface {
+	SyncGoodPutVideoAlerts(context.Context, *OpsAlertRule, *int64) ([]*OpsAlertEvent, error)
+}
 
 var opsAlertEvaluatorReleaseScript = redis.NewScript(`
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -218,6 +225,13 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		rulesEnabled++
 
 		scopePlatform, scopeGroupID, scopeRegion := parseOpsAlertRuleScope(rule.Filters)
+		if rule.MetricType == OpsAlertMetricGoodPutVideoIncident {
+			if scopePlatform == "" || scopePlatform == PlatformOpenAI {
+				emailsSent += s.evaluateGoodPutVideoAlerts(ctx, runtimeCfg, rule, scopeGroupID)
+				rulesEvaluated++
+			}
+			continue
+		}
 
 		windowMinutes := rule.WindowMinutes
 		if windowMinutes <= 0 {
@@ -322,6 +336,28 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 
 	result := truncateString(fmt.Sprintf("rules=%d enabled=%d evaluated=%d created=%d resolved=%d emails_sent=%d", rulesTotal, rulesEnabled, rulesEvaluated, eventsCreated, eventsResolved, emailsSent), 2048)
 	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), result)
+}
+
+func (s *OpsAlertEvaluatorService) evaluateGoodPutVideoAlerts(ctx context.Context, cfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, groupID *int64) int {
+	repo, ok := s.opsRepo.(opsGoodPutVideoAlertRepository)
+	if !ok || !runtimegate.SharedWorkAllowed() {
+		return 0
+	}
+	unsent, err := repo.SyncGoodPutVideoAlerts(ctx, rule, groupID)
+	if err != nil {
+		logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] GoodPut incident scan failed: %v", err)
+		return 0
+	}
+	sent := 0
+	for _, event := range unsent {
+		if !runtimegate.SharedWorkAllowed() {
+			break
+		}
+		if s.maybeSendAlertEmail(ctx, cfg, rule, event) {
+			sent++
+		}
+	}
+	return sent
 }
 
 func (s *OpsAlertEvaluatorService) pruneRuleStates(rules []*OpsAlertRule) {

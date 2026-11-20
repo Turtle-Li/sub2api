@@ -61,7 +61,7 @@ describe('image model selection', () => {
     await act(async () => trigger.click())
 
     expect(document.activeElement).toBe(host.querySelector('input[type="search"]'))
-    expect(host.querySelectorAll('nav button')).toHaveLength(2)
+    expect(Array.from(host.querySelectorAll('nav button small')).map(count => Number(count.textContent)).sort()).toEqual([0, 0, 1, 2])
     const options = host.querySelectorAll<HTMLButtonElement>('[role="option"]')
     expect(options).toHaveLength(2)
     expect(options[0]?.textContent).toContain('1K · 额度 / 张')
@@ -95,5 +95,50 @@ describe('image model selection', () => {
     expect(trigger?.querySelector('.studio-model-copy strong')?.textContent).toBe('5.0 Pro')
     expect(trigger?.querySelector('.studio-model-copy small')?.textContent).toBe('豆包 Seedream · doubao-seedream-5-0-pro-260628')
     expect(trigger?.title).toBe('豆包 Seedream · doubao-seedream-5-0-pro-260628')
+  })
+  it('keeps Google transport names out of the UI without changing model routing', async () => {
+    const models: BatchImageModel[] = ['vertex', 'gemini_api'].map(provider => ({ id: 'gemini-3-pro-image', provider, object: 'model' }))
+    const change = vi.fn()
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    cleanup = () => { act(() => root.unmount()); host.remove() }
+    await act(async () => root.render(<ModelPicker models={models} value="vertex:gemini-3-pro-image" size="1K" disabled={false} onChange={change} />))
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')!
+    expect(trigger.textContent).toContain('Gemini')
+    expect(trigger.textContent).not.toContain('gemini-3-pro-image')
+    expect(trigger.title).toBe('Gemini')
+    await act(async () => trigger.click())
+    const options = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    expect(options).toHaveLength(2)
+    expect(options[0]?.textContent).toContain('gemini-3-pro-image')
+    expect(options[0]?.textContent).not.toBe(options[1]?.textContent)
+    expect(host.textContent).not.toContain('Google Vertex')
+    await act(async () => options.find(option => option.getAttribute('aria-selected') === 'true')?.click())
+    expect(change).toHaveBeenCalledWith('vertex:gemini-3-pro-image')
+  })
+
+  it('shows missing native platforms without inventing selectable models', async () => {
+    const change = vi.fn()
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    cleanup = () => { act(() => root.unmount()); host.remove() }
+    await act(async () => root.render(<ModelPicker models={[]} value="" size="1K" disabled={false} onChange={change} />))
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')?.click())
+    const platforms = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模型平台"] button'))
+    expect(platforms.map(button => button.textContent)).toEqual(expect.arrayContaining(['通义万相0', '豆包 Seedream0']))
+    await act(async () => platforms.find(button => button.textContent?.includes('Seedream'))?.click())
+    expect(host.textContent).toContain('确认工作台的模型和生图权限')
+    expect(host.querySelector('a[href="/keys"]')).toBeNull()
+    expect(host.querySelector('[role="option"]')).toBeNull()
+    expect(change).not.toHaveBeenCalled()
+
+    const seedream: BatchImageModel = { id: 'doubao-seedream-5-0-lite-260128', provider: 'seedream_images', object: 'model', prices: { '2K': { min: .32, max: .32 } } }
+    await act(async () => root.render(<ModelPicker models={[seedream]} value="" size="2K" disabled={false} onChange={change} />))
+    const option = host.querySelector<HTMLButtonElement>('[role="option"]')!
+    expect(option.textContent).toContain(seedream.id)
+    expect(host.querySelector('a[href="/keys"]')).toBeNull()
+    await act(async () => option.click())
+    expect(change).toHaveBeenCalledOnce()
+    expect(change).toHaveBeenCalledWith(`seedream_images:${seedream.id}`)
   })
 })

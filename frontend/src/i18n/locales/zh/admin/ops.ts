@@ -514,6 +514,7 @@ export default {
           cpu: 'CPU 使用率 (%)',
           memory: '内存使用率 (%)',
           queueDepth: '并发排队深度',
+          goodPutVideoIncident: 'GoodPut H3 单任务异常',
           groupAvailableAccounts: '分组可用账号数',
           groupAvailableRatio: '分组可用比例 (%)',
           groupRateLimitRatio: '分组限流比例 (%)',
@@ -533,6 +534,7 @@ export default {
           cpu: '当前实例 CPU 使用率（0~100）。',
           memory: '当前实例内存使用率（0~100）。',
           queueDepth: '统计窗口内并发队列排队深度（等待中的请求数）。',
+          goodPutVideoIncident: '回执丢失、计费秒数异常、超过所选窗口仍未结算，或成片下载失败后未恢复时，按任务和异常类型告警。',
           groupAvailableAccounts: '指定分组中当前可用账号数量（需要 group_id 过滤）。',
           groupAvailableRatio: '指定分组中可用账号占比（0~100，需要 group_id 过滤）。',
           groupRateLimitRatio: '指定分组中账号被限流的比例（0~100，需要 group_id 过滤）。',
@@ -581,6 +583,7 @@ export default {
           operatorRequired: '运算符不能为空',
           thresholdRequired: '阈值必须为数字',
           windowRange: '统计窗口必须为 1 / 5 / 60 分钟之一',
+          goodPutWindowRange: '等待结算窗口必须为 1 / 5 / 15 / 60 分钟之一',
           sustainedRange: '连续样本数必须在 1 到 1440 之间',
           cooldownRange: '冷却期必须在 0 到 1440 分钟之间'
         }

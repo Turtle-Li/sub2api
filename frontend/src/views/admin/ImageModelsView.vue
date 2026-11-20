@@ -7,6 +7,7 @@ import ImageGroupSettings from './imageModels/ImageGroupSettings.vue'
 import ImageGroupModels from './imageModels/ImageGroupModels.vue'
 import ImageGroupAccounts from './imageModels/ImageGroupAccounts.vue'
 import ImageModelDirectory from './imageModels/ImageModelDirectory.vue'
+import ImageStudioWalletGroup from './imageModels/ImageStudioWalletGroup.vue'
 import { useImageGroup } from './imageModels/useImageGroup'
 const { t } = useI18n()
 const { groups, imageGroups, group, draft, catalogue, selectedId, loading, saving, error, saved, dirty,
@@ -58,6 +59,7 @@ onBeforeRouteLeave(() => canLeave())
           <RouterLink to="/image-studio" class="btn btn-secondary">{{ t('admin.imageModels.openStudio') }}</RouterLink>
         </div>
       </div>
+      <ImageStudioWalletGroup :groups="groups" />
       <ImageModelDirectory :groups="groups" :revision="revision" @configure="configure" />
       <p v-if="error" role="alert" class="rounded-lg bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{{ error }}</p>
       <p v-if="loading" role="status" class="py-12 text-center text-sm text-gray-500">{{ t('common.loading') }}</p>
@@ -67,7 +69,7 @@ onBeforeRouteLeave(() => canLeave())
         <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="text-lg font-semibold">{{ selectedModel || t('admin.imageModels.models') }}</h2><p class="mt-1 text-sm text-gray-500 dark:text-gray-400">当前配置来源：{{ group.name }}。价格与权限沿用此通道现有计费。</p></div><button type="button" class="btn btn-secondary" :disabled="saving" @click="() => { if (canLeave()) { selectedId = null; group = null; draft = null; catalogue = null } }">收起配置</button></div>
         <form class="card p-5 sm:p-6" @submit.prevent="saveConfiguration">
           <fieldset :disabled="saving" class="min-w-0 space-y-6">
-            <p class="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">此价格配置由通道内的模型共用。需要不同单价的模型，请在高级路由中使用独立生图分组。</p>
+            <p class="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">此处是通道的默认分辨率价格。工作台的余额计费只使用对应分组里逐模型配置的图片价格。</p>
             <ImageGroupSettings v-model="draft" :platform="group.platform" :rate="group.rate_multiplier" />
             <details class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"><summary class="cursor-pointer text-sm font-medium">高级：内部分组路由与模型规则</summary><label class="mt-4 block max-w-sm space-y-2 text-sm"><span>{{ t('admin.imageModels.selectGroup') }}</span><select :value="selectedId" class="input" :disabled="saving || !imageGroups.length" @change="changeGroup"><option v-for="item in imageGroups.filter(item => item.allow_image_generation || item.allow_batch_image_generation || item.id === selectedId)" :key="item.id" :value="item.id">{{ item.name }} · {{ item.platform }}{{ item.status === 'inactive' ? ` · ${t('admin.imageModels.inactive')}` : '' }}</option></select></label><ImageGroupModels v-model="draft" :catalogue="catalogue" :dirty="dirty" /></details>
             <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 pt-5 dark:border-dark-600">

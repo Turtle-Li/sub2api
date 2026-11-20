@@ -1,6 +1,6 @@
 import type { GroupPlatform } from '@/types'
 
-export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.6-terra'
+export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-6.2-sol'
 export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
 export type CcSwitchClientType = 'claude' | 'gemini'
@@ -18,6 +18,7 @@ export interface CcSwitchImportDeeplinkInput {
   providerName: string
   apiKey: string
   usageScript: string
+  codexModel?: string
 }
 
 interface CcSwitchCodexSettings {
@@ -146,6 +147,7 @@ export function resolveCcSwitchImportConfig(
 
 export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput): string {
   const config = resolveCcSwitchImportConfig(input.platform, input.clientType, input.baseUrl)
+  const model = config.app === 'codex' ? input.codexModel?.trim() || config.model : config.model
   const entries: [string, string][] = [
     ['resource', 'provider'],
     ['app', config.app],
@@ -159,16 +161,16 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
     ['usageAutoInterval', '30']
   ]
 
-  if (config.model) {
-    entries.splice(2, 0, ['model', config.model])
+  if (model) {
+    entries.splice(2, 0, ['model', model])
   }
 
-  if (config.app === 'codex' && config.model) {
+  if (config.app === 'codex' && model) {
     const codexSettings = buildCodexWebSocketSettings(
       input.providerName,
       withV1Endpoint(config.endpoint),
       input.apiKey,
-      config.model
+      model
     )
     entries.push(['config', encodeBase64Utf8(JSON.stringify(codexSettings))])
   }
