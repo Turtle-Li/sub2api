@@ -395,6 +395,7 @@ type BatchImageConfig struct {
 // The bearer value is never accepted in configuration or environment; only an
 // exact Vault reference exposed by the colocated memory-only agent is stored.
 type ImageUpscaleConfig struct {
+	AliyunEnabled         bool   `mapstructure:"aliyun_enabled"`
 	Enabled               bool   `mapstructure:"enabled"`
 	BaseURL               string `mapstructure:"base_url"`
 	APIKeyVaultRef        string `mapstructure:"api_key_vault_ref"`
@@ -2656,6 +2657,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_cos_prefix", "sub2-batch-image/prod/")
 	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
 	viper.SetDefault("image_upscale.enabled", false)
+	viper.SetDefault("image_upscale.aliyun_enabled", false)
 	viper.SetDefault("image_upscale.base_url", "")
 	viper.SetDefault("image_upscale.api_key_vault_ref", "")
 	viper.SetDefault("image_upscale.vault_agent_socket", "/run/sub2api-upscale-vault/public.sock")
@@ -3698,6 +3700,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.BatchImage.DeliveryCOSAccessKeyID) != "" || strings.TrimSpace(c.BatchImage.DeliveryCOSSecretAccessKey) != "" {
 		return fmt.Errorf("batch_image raw COS credentials are not accepted; configure exact Vault references")
+	}
+	if _, raw := os.LookupEnv("IMAGE_UPSCALE_ALIYUN_CREDENTIALS"); raw {
+		return fmt.Errorf("image_upscale raw Aliyun credentials are not accepted; use the dedicated Vault agent")
+	}
+	if c.ImageUpscale.AliyunEnabled && !c.ImageUpscale.Enabled {
+		return fmt.Errorf("image_upscale.aliyun_enabled requires image_upscale.enabled")
 	}
 	if c.ImageUpscale.Enabled {
 		upscaleURL, err := url.Parse(strings.TrimSpace(c.ImageUpscale.BaseURL))

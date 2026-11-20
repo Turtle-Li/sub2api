@@ -9,6 +9,7 @@ require (
 	github.com/MoeForge/moego v0.1.0-alpha.1
 	github.com/alibabacloud-go/captcha-20230305 v1.1.3
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.13
+	github.com/alibabacloud-go/imageenhan-20190930/v3 v3.0.0
 	github.com/alibabacloud-go/tea v1.3.13
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/alitto/pond/v2 v2.6.2
