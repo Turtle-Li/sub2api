@@ -90,6 +90,9 @@ type imageUpscaleWaiter struct {
 }
 
 type ImageUpscaleService struct {
+	cloudUpscale         func(context.Context, []byte, int) (*ImageUpscaleResult, error)
+	cloudSlots           chan struct{}
+	cloudWaiting         atomic.Int64
 	cfg                  config.ImageUpscaleConfig
 	httpClient           *http.Client
 	loadAPIKey           imageUpscaleAPIKeyLoader
@@ -142,12 +145,17 @@ func NewImageUpscaleService(cfg *config.Config) *ImageUpscaleService {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
-	return &ImageUpscaleService{
+	service := &ImageUpscaleService{
 		cfg:        settings,
 		httpClient: &http.Client{Transport: transport},
 		loadAPIKey: newImageUpscaleVaultLoader(settings.VaultAgentSocket, settings.APIKeyVaultRef),
 		slots:      make(chan struct{}, maxConcurrent),
 	}
+	if settings.AliyunEnabled {
+		service.cloudSlots = make(chan struct{}, 1)
+		service.cloudUpscale = newAliyunImageUpscaler(settings)
+	}
+	return service
 }
 
 func (s *ImageUpscaleService) Active() bool {
@@ -293,32 +301,7 @@ func (s *ImageUpscaleService) upscaleWithSourceLoader(
 	class imageUpscaleWorkClass,
 	loader func(context.Context) ([]byte, error),
 ) (*ImageUpscaleResult, error) {
-	if !s.Active() {
-		return nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
-	}
-	if scale != 2 && scale != 4 {
-		return nil, imageUpscaleError("INVALID_SCALE", 0, false, nil)
-	}
-	jobCtx, cancel := imageUpscaleLifecycleContext(ctx, s.cfg)
-	defer cancel()
-	if ctxErr := jobCtx.Err(); ctxErr != nil {
-		return nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
-	}
-	if err := s.acquireClass(jobCtx, class); err != nil {
-		return nil, err
-	}
-	defer s.release()
-	if loader == nil {
-		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, nil)
-	}
-	source, err := loader(jobCtx)
-	if err != nil {
-		return nil, err
-	}
-	if clearSource {
-		defer clearBytes(source)
-	}
-	return s.upscaleLoadedSource(jobCtx, source, scale)
+	return s.routeUpscale(ctx, class, upscaleSourceRequest{scale: scale, owned: clearSource}, loader)
 }
 
 func (s *ImageUpscaleService) upscaleToRequestedSizeWithSourceLoader(
@@ -327,50 +310,10 @@ func (s *ImageUpscaleService) upscaleToRequestedSizeWithSourceLoader(
 	class imageUpscaleWorkClass,
 	loader func(context.Context) ([]byte, error),
 ) (*ImageUpscaleResult, error) {
-	if !s.Active() {
-		return nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
-	}
-	if _, ok := RequestedImageUpscaleScale(requestedSize); !ok {
-		return nil, imageUpscaleError("INVALID_SCALE", 0, false, nil)
-	}
-	jobCtx, cancel := imageUpscaleLifecycleContext(ctx, s.cfg)
-	defer cancel()
-	if ctxErr := jobCtx.Err(); ctxErr != nil {
-		return nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
-	}
-	if err := s.acquireClass(jobCtx, class); err != nil {
-		return nil, err
-	}
-	defer s.release()
-	if loader == nil {
-		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, nil)
-	}
-	source, err := loader(jobCtx)
-	if err != nil {
-		return nil, err
-	}
-	if len(source) > imageUpscaleMaxSourceBytes {
-		clearBytes(source)
-		return nil, imageUpscaleError("SOURCE_LIMIT_EXCEEDED", 0, false, errors.New("source image exceeds byte limit"))
-	}
-	width, height, mimeType, err := decodeUpscaleImageConfig(source)
-	if err != nil {
-		clearBytes(source)
-		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, err)
-	}
-	scale, required := imageUpscaleScaleForDimensions(requestedSize, width, height)
-	if !required {
-		return &ImageUpscaleResult{Data: source, MimeType: mimeType, Width: width, Height: height, Scale: 1}, nil
-	}
-	defer clearBytes(source)
-	return s.upscaleLoadedSource(jobCtx, source, scale)
+	return s.routeUpscale(ctx, class, upscaleSourceRequest{tier: requestedSize, owned: true}, loader)
 }
 
-func (s *ImageUpscaleService) upscaleLoadedSource(jobCtx context.Context, source []byte, scale int) (*ImageUpscaleResult, error) {
-	sourceWidth, sourceHeight, _, err := validateUpscaleSource(source)
-	if err != nil {
-		return nil, err
-	}
+func (s *ImageUpscaleService) runMiniUpscale(jobCtx context.Context, source []byte, sourceWidth, sourceHeight, scale int) (*ImageUpscaleResult, error) {
 	apiKey, err := s.loadAPIKey(jobCtx)
 	if err != nil {
 		return nil, imageUpscaleError("CREDENTIAL_UNAVAILABLE", 0, false, err)
@@ -695,7 +638,7 @@ func (s *ImageUpscaleService) submitWithOptions(ctx context.Context, source []by
 			return strings.TrimSpace(envelope.Job.ID), nil
 		}
 		lastErr = imageUpscaleError(upscaleHTTPErrorCode("SUBMIT", resp.StatusCode), resp.StatusCode, resp.StatusCode == 429 || resp.StatusCode >= 500, nil)
-		if resp.StatusCode != http.StatusTooManyRequests || attempt == s.cfg.RetryMax {
+		if s.cloudUpscale != nil || resp.StatusCode != http.StatusTooManyRequests || attempt == s.cfg.RetryMax {
 			return "", lastErr
 		}
 		if err := waitUpscaleRetry(ctx, resp.Header.Get("Retry-After"), attempt); err != nil {
@@ -877,6 +820,7 @@ func newImageUpscaleVaultLoader(socketPath, rawReference string) imageUpscaleAPI
 			return nil, err
 		}
 		body, err := readBoundedResponse(resp, 4*1024)
+		defer clearBytes(body)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			return nil, errors.New("image upscale vault agent unavailable")
 		}

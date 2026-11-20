@@ -15,7 +15,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 describe('model-directed workspace', () => {
-  it('shows available works before a slow history channel completes, retaining its cursor', async () => {
+  it('returns one combined history reply with independent cursors and asset ownership', async () => {
     const fast = client(), slow = client(), a = task('fast'), b = task('slow')
     fast.tasks.mockResolvedValue({ tasks: [a], itemContinuations: [], nextCursor: null })
     fast.thumbnail.mockResolvedValue(new Blob(['cover']))
@@ -23,13 +23,14 @@ describe('model-directed workspace', () => {
     slow.tasks.mockImplementation(() => new Promise(resolve => { finish = resolve }))
     vi.mocked(studioAPI).mockImplementation(key => key === 1 ? fast : slow)
     const api = workspaceAPI([1, 2], new AbortController().signal)
-    const update = vi.fn()
-    const pending = api.tasks('', undefined, update)
-    await vi.waitFor(() => expect(update).toHaveBeenCalledWith([a]))
-    await api.previews.load(a)
-    expect(fast.thumbnail).toHaveBeenCalledWith(a, expect.any(AbortSignal))
+    const complete = vi.fn()
+    const pending = api.tasks().then(page => { complete(); return page })
+    await vi.waitFor(() => expect(slow.tasks).toHaveBeenCalledOnce())
+    expect(complete).not.toHaveBeenCalled()
     finish({ tasks: [b], itemContinuations: [], nextCursor: 'next-slow' })
     const page = await pending
+    await api.previews.load(a)
+    expect(fast.thumbnail).toHaveBeenCalledWith(a, expect.any(AbortSignal))
     expect(page.tasks).toEqual([a, b])
     expect(JSON.parse(page.nextCursor!)).toEqual({ 1: null, 2: 'next-slow' })
   })

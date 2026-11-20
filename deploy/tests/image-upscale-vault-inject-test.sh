@@ -65,6 +65,8 @@ grep -Fq 'action=api' "$SCRIPT" || fail 'legacy single-key injection path is mis
 grep -Fq 'remote_action=load-all' "$SCRIPT" || fail 'combined stdin-only load action is missing'
 grep -Fq 'remote_action=load-batch-cos' "$SCRIPT" || fail 'independent COS load action is missing'
 grep -Fq 'remote_action=ready' "$SCRIPT" || fail 'post-injection readiness action is missing'
+if bash "$SCRIPT" aliyun "$image" >"$OUTPUT" 2>&1; then fail 'missing Aliyun credential was accepted'; fi
+grep -Fq -- '-u IMAGE_UPSCALE_ALIYUN_CREDENTIALS' "$SCRIPT" || fail 'SSH child inherits the Aliyun credential'
 if grep -Fq -- '--ref vault://' "$SCRIPT"; then
   fail 'local injector hardcodes a Vault reference instead of using remote root configuration'
 fi

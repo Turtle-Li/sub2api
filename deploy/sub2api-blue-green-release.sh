@@ -125,6 +125,7 @@ APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL="https://api.turtleligpt.com/api/v1/payment
 UNIFIED_PAYMENT_WEBHOOK_URL="${UNIFIED_PAYMENT_WEBHOOK_URL:-$APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL}"
 CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
 IMAGE_UPSCALE_ENABLED="${IMAGE_UPSCALE_ENABLED:-false}"
+IMAGE_UPSCALE_ALIYUN_ENABLED="${IMAGE_UPSCALE_ALIYUN_ENABLED:-false}"
 IMAGE_UPSCALE_BASE_URL="${IMAGE_UPSCALE_BASE_URL:-https://hcmac-mini.tailfc4ed7.ts.net}"
 IMAGE_UPSCALE_API_KEY_VAULT_REF="${IMAGE_UPSCALE_API_KEY_VAULT_REF:-vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key}"
 IMAGE_UPSCALE_VAULT_AGENT_SOCKET="${IMAGE_UPSCALE_VAULT_AGENT_SOCKET:-/run/sub2api-upscale-vault/public.sock}"
@@ -193,6 +194,7 @@ UNIFIED_PAYMENT_ENV_KEYS=(
   UNIFIED_PAYMENT_RETURN_URL UNIFIED_PAYMENT_WEBHOOK_URL
 )
 IMAGE_UPSCALE_ENV_KEYS=(
+  IMAGE_UPSCALE_ALIYUN_ENABLED
   IMAGE_UPSCALE_ENABLED IMAGE_UPSCALE_BASE_URL IMAGE_UPSCALE_API_KEY_VAULT_REF IMAGE_UPSCALE_VAULT_AGENT_SOCKET
   IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS IMAGE_UPSCALE_POLL_INTERVAL_MS
   IMAGE_UPSCALE_RETRY_MAX IMAGE_UPSCALE_MAX_CONCURRENT IMAGE_UPSCALE_MAX_QUEUE IMAGE_UPSCALE_MAX_RESULT_BYTES
@@ -469,7 +471,13 @@ validate_batch_image_delivery_cos_runtime() {
 }
 
 validate_image_upscale_runtime() {
-	local value sidecar_image
+	local value sidecar_image ready_action=ready-auto
+	require_bool IMAGE_UPSCALE_ALIYUN_ENABLED "$IMAGE_UPSCALE_ALIYUN_ENABLED"
+	[ "${IMAGE_UPSCALE_ALIYUN_CREDENTIALS+x}" != x ] || die "raw Aliyun image credentials are forbidden"
+	if [ "$IMAGE_UPSCALE_ALIYUN_ENABLED" = true ]; then
+		[ "$IMAGE_UPSCALE_ENABLED" = true ] || die "Aliyun fallback requires Mini upscaling"
+		ready_action=ready-aliyun-auto
+	fi
 	require_bool IMAGE_UPSCALE_ENABLED "$IMAGE_UPSCALE_ENABLED"
 	IMAGE_UPSCALE_VAULT_REQUIRED=false
 	if [ "$IMAGE_UPSCALE_ENABLED" = true ]; then
@@ -505,7 +513,7 @@ validate_image_upscale_runtime() {
 		sidecar_image="$(docker inspect sub2api-upscale-vault --format '{{.Config.Image}}' 2>/dev/null)" \
 			|| die "image upscale Vault agent is missing"
 		SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" \
-			bash "$IMAGE_UPSCALE_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null \
+			bash "$IMAGE_UPSCALE_VAULT_HELPER" "$ready_action" "$sidecar_image" >/dev/null \
 			|| die "image upscale Vault agent failed hardened readiness verification"
 		IMAGE_UPSCALE_VAULT_REQUIRED=true
 		IMAGE_UPSCALE_VAULT_MOUNT_ARGS=(
@@ -837,7 +845,7 @@ container_matches_unified_payment_env() {
 container_matches_image_upscale_env() {
 	local inspect_env="$1"
 	local key expected_value actual_value configured_count
-	! grep -q '^IMAGE_UPSCALE_API_KEY=' "$inspect_env" || return 1
+	! grep -Eq '^IMAGE_UPSCALE_(API_KEY|ALIYUN_CREDENTIALS)=' "$inspect_env" || return 1
 	configured_count="$(awk '
 		/^IMAGE_UPSCALE_[A-Z0-9_]*=/ { count += 1 }
 		END { print count + 0 }
@@ -849,6 +857,8 @@ container_matches_image_upscale_env() {
 		return 0
 	fi
 	for key in "${IMAGE_UPSCALE_ENV_KEYS[@]}"; do
+		# Pre-fallback containers are equivalent only to explicit fallback-off.
+		if [ "$key" = IMAGE_UPSCALE_ALIYUN_ENABLED ] && [ "$IMAGE_UPSCALE_ALIYUN_ENABLED" = false ] && ! grep -q "^${key}=" "$inspect_env"; then continue; fi
 		expected_value="${!key-}"
 		if ! actual_value="$(awk -v expected_key="$key" '
 			index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
@@ -1158,7 +1168,7 @@ make_runtime_env_file() {
 	  UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64)
 		continue
 		;;
-	  IMAGE_UPSCALE_API_KEY)
+	  IMAGE_UPSCALE_API_KEY|IMAGE_UPSCALE_ALIYUN_CREDENTIALS)
 		die "raw image upscale bearer environment is forbidden; use the dedicated Vault agent"
 		;;
 	  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY)
@@ -1167,7 +1177,7 @@ make_runtime_env_file() {
 	  BATCH_IMAGE_DELIVERY_ENABLED)
 		continue
 		;;
-	  IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
+	  IMAGE_UPSCALE_ALIYUN_ENABLED|IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
 		continue
 		;;
 	  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET)

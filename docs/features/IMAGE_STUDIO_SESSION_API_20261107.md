@@ -146,8 +146,12 @@ Failed items with no output stay in ordinary history; live `result_available`
 archives still open on demand. Expired records display text and task details only.
 Neither filter deletes records or changes output retention.
 
-The studio requests 24 items per page and history scope. Migration 281 adds nullable
-preview dimensions to existing item rows. A successful item may include
+The studio requests up to 24 metadata items per history scope. It combines the
+wallet and legacy-key replies before mounting cards, displaying at most 24 per
+visible page across all scopes. Surplus metadata stays in the current workspace
+and fills later pages without repeating reads; it does not mount thumbnails.
+Independent cursors still belong to the original scopes. Migration 281 adds
+nullable preview dimensions to existing item rows. A successful item may include
 `preview_size: {"width":768,"height":1024}` for its first output. Indexing reads
 the existing image header (or uses the final upscaled dimensions); an authorized
 thumbnail read can fill missing legacy dimensions from the JPEG it already has.

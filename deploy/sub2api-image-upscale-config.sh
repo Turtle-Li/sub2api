@@ -2,7 +2,8 @@
 
 # Install or switch the fixed, non-secret Image 2.5 upscale runtime block in
 # the existing production release configuration. The first installation must
-# be disabled; later calls may change only the enabled flag.
+# be disabled; later calls may change only the enabled flag. A separate
+# one-line Aliyun switch uses the same locked, fixed-block update.
 
 set -Eeuo pipefail
 
@@ -47,6 +48,7 @@ fi
 
 vault_volume=''
 enabled=''
+aliyun=''
 base_url=''
 vault_ref=''
 agent_socket=''
@@ -77,6 +79,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   case "$key" in
     SUB2API_IMAGE_UPSCALE_VAULT_VOLUME) vault_volume="$value" ;;
     IMAGE_UPSCALE_ENABLED) enabled="$value" ;;
+    IMAGE_UPSCALE_ALIYUN_ENABLED) aliyun="$value" ;;
     IMAGE_UPSCALE_BASE_URL) base_url="$value" ;;
     IMAGE_UPSCALE_API_KEY_VAULT_REF) vault_ref="$value" ;;
     IMAGE_UPSCALE_VAULT_AGENT_SOCKET) agent_socket="$value" ;;
@@ -91,21 +94,46 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
 done
 
-[ "$line_count" -eq 12 ] || die
-[ "$vault_volume" = sub2api_image_upscale_vault ] || die
-case "$enabled" in true|false) ;; *) die ;; esac
-[ "$base_url" = https://hcmac-mini.tailfc4ed7.ts.net ] || die
-[ "$vault_ref" = 'vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key' ] || die
-[ "$agent_socket" = /run/sub2api-upscale-vault/public.sock ] || die
-[ "$request_timeout" = 30 ] || die
-[ "$job_timeout" = 900 ] || die
-[ "$poll_interval" = 500 ] || die
-[ "$retry_max" = 3 ] || die
-[ "$max_concurrent" = 1 ] || die
-[ "$max_queue" = 8 ] || die
-[ "$max_result_bytes" = 134217728 ] || die
+if ! sub2api_maintenance_lock_open "$LOCK_FILE"; then die; fi
+flock -n "$SUB2API_MAINTENANCE_LOCK_FD" || die
 
-desired="$BEGIN_MARKER
+if [ -n "$aliyun" ]; then
+  [ "$line_count" -eq 1 ] || die
+  case "$aliyun" in true|false) ;; *) die ;; esac
+  if [ "$aliyun" = true ]; then
+    sed -n "/^${BEGIN_MARKER}$/,/^${END_MARKER}$/p" "$CONFIG_FILE" | grep -qxF "IMAGE_UPSCALE_ENABLED='true'" || die
+  fi
+  BEGIN_MARKER='# BEGIN SUB2API IMAGE UPSCALE ALIYUN (managed)'
+  END_MARKER='# END SUB2API IMAGE UPSCALE ALIYUN (managed)'
+  flag=IMAGE_UPSCALE_ALIYUN_ENABLED
+  enabled="$aliyun"
+  desired="$BEGIN_MARKER
+SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE='true'
+${flag}='${enabled}'
+$END_MARKER"
+  # Do not silently overlay hand-authored or duplicate switches elsewhere.
+  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
+    $0 == begin { inside=1 }; $0 == end { inside=0 }
+    !inside && /^[[:space:]]*(export[[:space:]]+)?(IMAGE_UPSCALE_ALIYUN_ENABLED|SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE)=/ { exit 1 }
+  ' "$CONFIG_FILE" || die
+else
+  flag=IMAGE_UPSCALE_ENABLED
+  if [ "$enabled" = false ] && grep -qxF "IMAGE_UPSCALE_ALIYUN_ENABLED='true'" "$CONFIG_FILE"; then die; fi
+  [ "$line_count" -eq 12 ] || die
+  [ "$vault_volume" = sub2api_image_upscale_vault ] || die
+  case "$enabled" in true|false) ;; *) die ;; esac
+  [ "$base_url" = https://hcmac-mini.tailfc4ed7.ts.net ] || die
+  [ "$vault_ref" = 'vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key' ] || die
+  [ "$agent_socket" = /run/sub2api-upscale-vault/public.sock ] || die
+  [ "$request_timeout" = 30 ] || die
+  [ "$job_timeout" = 900 ] || die
+  [ "$poll_interval" = 500 ] || die
+  [ "$retry_max" = 3 ] || die
+  [ "$max_concurrent" = 1 ] || die
+  [ "$max_queue" = 8 ] || die
+  [ "$max_result_bytes" = 134217728 ] || die
+
+  desired="$BEGIN_MARKER
 SUB2API_IMAGE_UPSCALE_VAULT_VOLUME='${vault_volume}'
 IMAGE_UPSCALE_ENABLED='${enabled}'
 IMAGE_UPSCALE_BASE_URL='${base_url}'
@@ -119,16 +147,9 @@ IMAGE_UPSCALE_MAX_CONCURRENT='${max_concurrent}'
 IMAGE_UPSCALE_MAX_QUEUE='${max_queue}'
 IMAGE_UPSCALE_MAX_RESULT_BYTES='${max_result_bytes}'
 $END_MARKER"
-if [ "$enabled" = true ]; then
-  alternate="$(printf '%s\n' "$desired" | sed "s/^IMAGE_UPSCALE_ENABLED='true'$/IMAGE_UPSCALE_ENABLED='false'/")"
-else
-  alternate="$(printf '%s\n' "$desired" | sed "s/^IMAGE_UPSCALE_ENABLED='false'$/IMAGE_UPSCALE_ENABLED='true'/")"
 fi
-
-if ! sub2api_maintenance_lock_open "$LOCK_FILE"; then
-  die
-fi
-flock -n "$SUB2API_MAINTENANCE_LOCK_FD" || die
+if [ "$enabled" = true ]; then opposite=false; else opposite=true; fi
+alternate="$(printf '%s\n' "$desired" | sed "s/^${flag}='${enabled}'$/${flag}='${opposite}'/")"
 
 begin_count="$(grep -cF "$BEGIN_MARKER" "$CONFIG_FILE" || true)"
 end_count="$(grep -cF "$END_MARKER" "$CONFIG_FILE" || true)"
@@ -153,10 +174,10 @@ case "$begin_count:$end_count" in
       TEMP_FILE="$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")" || die
       chmod 600 "$TEMP_FILE" || die
       chown "$expected_owner" "$TEMP_FILE" || die
-      if ! awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v enabled="$enabled" '
+      if ! awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v enabled="$enabled" -v flag="$flag" '
         $0 == begin { in_block = 1 }
-        in_block && /^IMAGE_UPSCALE_ENABLED=/ {
-          print "IMAGE_UPSCALE_ENABLED=\047" enabled "\047"
+        in_block && index($0,flag "=")==1 {
+          print flag "=\047" enabled "\047"
           next
         }
         { print }

@@ -2,6 +2,15 @@
 
 Date: 2026-09-28
 
+## November 21 amendment: Mini → Aliyun
+
+[Shared failover and activation contract](IMAGE_UPSCALE_ALIYUN_FALLBACK.md).
+The historic Mini-only behavior below describes the default until the separate
+cloud flag and purpose-scoped RAM credential are provisioned. With the fallback
+armed, local capacity exhaustion, Mini rejection, timeout or failure after receipt
+use the same source in Aliyun instead of replaying Mini or regenerating an image.
+The direct object-storage fallback below is independent of this decision.
+
 ## Scope
 
 This contract applies to every supported image model when the requested output

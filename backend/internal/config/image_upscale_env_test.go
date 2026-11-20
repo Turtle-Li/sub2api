@@ -11,6 +11,7 @@ import (
 func TestLoadImageUpscaleFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("IMAGE_UPSCALE_ENABLED", "true")
+	t.Setenv("IMAGE_UPSCALE_ALIYUN_ENABLED", "true")
 	t.Setenv("IMAGE_UPSCALE_BASE_URL", "https://upscale.example.com")
 	t.Setenv("IMAGE_UPSCALE_API_KEY_VAULT_REF", "vault://secret/data/infrastructure/upscale#api_key")
 	t.Setenv("IMAGE_UPSCALE_VAULT_AGENT_SOCKET", "/run/sub2api-upscale-vault/public.sock")
@@ -20,6 +21,7 @@ func TestLoadImageUpscaleFromEnv(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.True(t, cfg.ImageUpscale.Active())
+	require.True(t, cfg.ImageUpscale.AliyunEnabled)
 	require.Equal(t, "https://upscale.example.com", cfg.ImageUpscale.BaseURL)
 	require.Equal(t, "vault://secret/data/infrastructure/upscale#api_key", cfg.ImageUpscale.APIKeyVaultRef)
 	require.Equal(t, 1, cfg.ImageUpscale.MaxConcurrent)
@@ -84,4 +86,18 @@ func TestBatchImageCOSVaultReferencesRequireExactFieldsOnOnePath(t *testing.T) {
 		validAccess,
 		"vault://secret/data/sub2api/other#secret_access_key",
 	))
+}
+
+func TestAliyunFallbackIsOptInAndRequiresMini(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.ImageUpscale.AliyunEnabled)
+	t.Setenv("IMAGE_UPSCALE_ALIYUN_ENABLED", "true")
+	_, err = Load()
+	require.ErrorContains(t, err, "requires image_upscale.enabled")
+	t.Setenv("IMAGE_UPSCALE_ALIYUN_CREDENTIALS", "not-a-real-secret")
+	_, err = Load()
+	require.ErrorContains(t, err, "raw Aliyun credentials are not accepted")
+	require.NotContains(t, err.Error(), "not-a-real-secret")
 }

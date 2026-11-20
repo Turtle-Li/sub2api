@@ -35,6 +35,15 @@ stable ambiguous-submit identity. Subsequent edits use the selected output image
 and persisted root batch ID. Prompt previews are never replayed as complete prompts.
 The viewer's mouse image click stays open so double-click zoom is reachable.
 
+`DetailModal.tsx` keeps the native modal and the pinned Lightbox's focus, Escape,
+and gesture behavior. The host dialog reserves the first frame from gallery
+dimensions when available and uses each decoded original's aspect ratio for
+its final geometry. The resolution field shows the job's recorded request tier
+(`image_size`), never a pixel measurement; it is omitted if the tier is missing.
+Desktop portrait details use a side column; other shapes
+and small screens stack the information. Error/expired records have no image
+actions. The authorized original and explicit archive read paths are unchanged.
+
 The [session wallet path](../../../../docs/features/IMAGE_STUDIO_SESSION_API_20261107.md#session-only-wallet-generation)
 uses the same composer, owned task polling, previews and archive controls. Key
 IDs only select legacy history when the wallet catalogue is active. An old
@@ -190,10 +199,12 @@ stable fallback with an uncropped thumbnail. After a successful thumbnail read
 records the size, the next metadata refresh uses it. Loading, decoding or
 failing an image does not resize its frame.
 
-The client requests 24 items per page and history scope. The server cursor and
-batch-item continuation share a tail observer that prefetches within 400px of
-the viewport, plus one manual action. Only metadata
-loading controls the tail. Separately, card thumbnails prefetch within 640px of
+The client requests 24 metadata items per history scope, combines the replies,
+and mounts at most 24 cards per visible page. Extra metadata stays unmounted
+until the next scroll page; the heading does not show a transient card count.
+The server cursor, buffered metadata, and batch-item continuation share a tail
+observer that prefetches within 400px of the viewport, plus one manual action.
+Only metadata loading controls the tail. Separately, card thumbnails prefetch within 640px of
 the viewport, with visible cards taking precedence in a four-read queue. The
 limit leaves HTTP/1.1 connections available for metadata and originals. Scrolling
 away skips queued reads, not transfers that already started. A transient page

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BatchImageJob } from '@/api/batchImage'
-import { taskPending, type GalleryFilters, type ItemContinuation, type StudioTask } from './api'
+import { galleryPageSize, taskPending, type GalleryFilters, type ItemContinuation, type StudioTask } from './api'
 import type { workspaceAPI } from './workspaceAPI'
 
 type HistoryAPI = Pick<ReturnType<typeof workspaceAPI>, 'tasks' | 'items' | 'refreshPending'>
@@ -10,6 +10,7 @@ type Failure = 'read' | 'append'
 interface GalleryHistory {
   filters: GalleryFilters
   tasks: StudioTask[]
+  readonly visibleLimit: number
   continuations: ItemContinuation[]
   cursor: string | null
   pages: number
@@ -18,8 +19,19 @@ interface GalleryHistory {
 }
 
 const emptyHistory = (filters: GalleryFilters): GalleryHistory => ({
-  filters, tasks: [], continuations: [], cursor: null, pages: 1, phase: 'reading', failure: null,
+  filters, tasks: [], visibleLimit: galleryPageSize, continuations: [], cursor: null, pages: 1, phase: 'reading', failure: null,
 })
+
+function visibleTasks({ tasks, visibleLimit }: GalleryHistory) {
+  return tasks.length > visibleLimit ? tasks.slice(0, visibleLimit) : tasks
+}
+
+function galleryPageKey(history: GalleryHistory) {
+  const next = history.continuations[0]
+  const boundary = next ? [next.job.id, next.cursor] : history.cursor
+  if (!boundary && history.tasks.length <= history.visibleLimit) return null
+  return JSON.stringify([history.visibleLimit, boundary])
+}
 
 function appendTasks(current: StudioTask[], incoming: StudioTask[]) {
   const known = new Set(current.map(task => task.id))
@@ -85,9 +97,7 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
       try {
         let cursor = ''
         do {
-          const next = await api.tasks(cursor, filters, pages === 0 && start.tasks.length === 0 ? rows => {
-            if (canCommit()) publish({ ...latest.current, tasks: appendTasks(latest.current.tasks, rows) })
-          } : undefined)
+          const next = await api.tasks(cursor, filters)
           if (!canCommit()) return
           next.deniedBatchIds.forEach(id => denied.add(id))
           tasks = appendTasks(tasks, next.tasks)
@@ -119,11 +129,19 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
     return () => { request.current = null; revision.current++ }
   }, [api, filters, publish, refresh, signal])
 
+  const history = state.filters === filters ? state : emptyHistory(filters)
+  const pageKey = galleryPageKey(history)
   const appendPage = useCallback(async (retry: boolean) => {
     const start = latest.current
     const continuation = start.continuations[0]
-    if (request.current || signal.aborted || start.filters !== filters || start.phase !== 'idle' || (!start.cursor && !continuation)) return
+    if (request.current || signal.aborted || start.filters !== filters || start.phase !== 'idle' || !pageKey || pageKey !== galleryPageKey(start)) return
     if (start.failure && !(retry && start.failure === 'append')) return
+
+    const visibleLimit = visibleTasks(start).length + galleryPageSize
+    if (!start.failure && (start.tasks.length >= visibleLimit || (!start.cursor && !continuation))) {
+      publish({ ...start, visibleLimit })
+      return
+    }
 
     const ticket = Symbol()
     const version = revision.current
@@ -142,7 +160,7 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
         }
         const job = current.tasks.find(task => task.job.id === continuation.job.id)?.job ?? continuation.job
         const continuations = current.continuations.flatMap(item => item.job.id === job.id ? page.next ? [{ ...page.next, job }] : [] : [item])
-        publish({ ...current, tasks: appendTasks(current.tasks, page.tasks.map(task => ({ ...task, job }))), continuations })
+        publish({ ...current, tasks: appendTasks(current.tasks, page.tasks.map(task => ({ ...task, job }))), visibleLimit, continuations })
       } else if (start.cursor) {
         const page = await api.tasks(start.cursor, filters)
         if (!canCommit()) return
@@ -154,6 +172,7 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
         publish({
           ...current,
           tasks: appendTasks(current.tasks, page.tasks),
+          visibleLimit,
           continuations: mergeContinuations(current.continuations, page.itemContinuations),
           cursor: page.nextCursor,
           pages: current.pages + 1,
@@ -168,12 +187,12 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
         publish({ ...latest.current, phase: 'idle' })
       }
     }
-  }, [api, filters, publish, signal])
+  }, [api, filters, pageKey, publish, signal])
   const loadMore = useCallback(() => void appendPage(false), [appendPage])
   const retryMore = useCallback(() => void appendPage(true), [appendPage])
 
-  const history = state.filters === filters ? state : emptyHistory(filters)
-  const hasPending = history.tasks.some(taskPending)
+  const tasks = visibleTasks(history)
+  const hasPending = tasks.some(taskPending)
   useEffect(() => {
     if (!hasPending) return
     let active = true
@@ -181,7 +200,7 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
     async function poll() {
       const version = revision.current
       try {
-        const updates = await api.refreshPending(latest.current.tasks)
+        const updates = await api.refreshPending(visibleTasks(latest.current))
         if (active && !signal.aborted && version === revision.current && latest.current.phase !== 'reading') {
           const byId = new Map(updates.map(task => [task.id, task]))
           publish({ ...latest.current, tasks: latest.current.tasks.map(task => byId.get(task.id) ?? task) })
@@ -205,7 +224,5 @@ export function useGalleryHistory(api: HistoryAPI, signal: AbortSignal, filters:
     })
   }
 
-  const next = history.continuations[0]
-  const pageKey = next ? JSON.stringify([next.job.id, next.cursor]) : history.cursor
-  return { tasks: history.tasks, phase: history.phase, failure: history.failure, pageKey, loadMore, retryMore, updateJob }
+  return { tasks, phase: history.phase, failure: history.failure, pageKey, loadMore, retryMore, updateJob }
 }

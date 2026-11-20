@@ -11,8 +11,9 @@ import (
 type asyncImageTaskStorageContextKey struct{}
 
 type asyncImageTaskStorageState struct {
-	taskID string
-	stored atomic.Bool
+	taskID   string
+	stored   atomic.Bool
+	noReplay atomic.Bool
 }
 
 // WithAsyncImageTaskStorage binds an async task ID to the internal gateway
@@ -25,6 +26,20 @@ func WithAsyncImageTaskStorage(ctx context.Context, taskID string) context.Conte
 	return context.WithValue(ctx, asyncImageTaskStorageContextKey{}, &asyncImageTaskStorageState{
 		taskID: strings.TrimSpace(taskID),
 	})
+}
+
+// PreventAsyncImageTaskReplay fences a potentially paid postprocessing attempt:
+// a later storage or transport failure must not regenerate the source images.
+func PreventAsyncImageTaskReplay(ctx context.Context) {
+	if state, _ := ctx.Value(asyncImageTaskStorageContextKey{}).(*asyncImageTaskStorageState); state != nil {
+		state.noReplay.Store(true)
+	}
+}
+
+// AsyncImageTaskReplayPrevented reports the task-local, monotonic replay fence.
+func AsyncImageTaskReplayPrevented(ctx context.Context) bool {
+	state, _ := ctx.Value(asyncImageTaskStorageContextKey{}).(*asyncImageTaskStorageState)
+	return state != nil && state.noReplay.Load()
 }
 
 func asyncImageTaskStorageID(ctx context.Context) (string, bool) {

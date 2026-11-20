@@ -99,6 +99,21 @@ configuration true | run_config >"$OUTPUT" 2>&1
 grep -qx "IMAGE_UPSCALE_ENABLED='true'" "$CONFIG_FILE" || fail 'explicit enable failed'
 grep -qx 'EXISTING_SECRET=must-not-be-printed-or-rewritten' "$CONFIG_FILE" || fail 'enable changed surrounding config'
 
+# The optional one-line command manages only the new, fixed profile block.
+cloud() { printf 'IMAGE_UPSCALE_ALIYUN_ENABLED=%s\n' "$1" | run_config; }
+if cloud true >"$OUTPUT" 2>&1; then fail 'paid fallback activated without staging'; fi
+cloud false >"$OUTPUT"
+grep -qx "SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE='true'" "$CONFIG_FILE" || fail 'profile not staged'
+cloud true >"$OUTPUT"
+grep -qx "IMAGE_UPSCALE_ALIYUN_ENABLED='true'" "$CONFIG_FILE" || fail 'cloud enable failed'
+before="$(cksum "$CONFIG_FILE")"
+cloud true >"$OUTPUT"; [ "$before" = "$(cksum "$CONFIG_FILE")" ] || fail 'idempotent enable rewrote config'
+if configuration false | run_config >"$OUTPUT" 2>&1; then fail 'disabled Mini with live fallback'; fi
+if { configuration true; printf 'IMAGE_UPSCALE_ALIYUN_ENABLED=true\n'; } | run_config >"$OUTPUT" 2>&1; then fail 'mixed input accepted'; fi
+cloud false >"$OUTPUT"
+grep -qx "IMAGE_UPSCALE_ALIYUN_ENABLED='false'" "$CONFIG_FILE" || fail 'cloud disable failed'
+grep -qx 'EXISTING_SECRET=must-not-be-printed-or-rewritten' "$CONFIG_FILE" || fail 'cloud mode altered unrelated config'
+
 configuration false | run_config >"$OUTPUT" 2>&1
 grep -qx "IMAGE_UPSCALE_ENABLED='false'" "$CONFIG_FILE" || fail 'rollback disable failed'
 
@@ -114,4 +129,7 @@ if { configuration false; printf '%s\n' 'IMAGE_UPSCALE_ENABLED=false'; } | run_c
 fi
 [ "$before" = "$(cksum "$CONFIG_FILE")" ] || fail 'invalid duplicate input changed config'
 
+if cloud true >"$OUTPUT" 2>&1; then fail 'enabled fallback with Mini disabled'; fi
+printf "export IMAGE_UPSCALE_ALIYUN_ENABLED='false'\n" >>"$CONFIG_FILE"
+if cloud false >"$OUTPUT" 2>&1; then fail 'ignored duplicate cloud config outside managed block'; fi
 printf '%s\n' 'Image upscale config tests passed.'

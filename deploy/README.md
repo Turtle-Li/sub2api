@@ -8,7 +8,9 @@ a dedicated memory-only Vault agent. Read
 The raw bearer must never enter `.env`, Docker inspect, release logs, or
 `config.yaml`; only the exact Vault reference and read-only Unix socket mount
 are allowed. The sidecar must be loaded and healthy before the blue-green
-release enables `IMAGE_UPSCALE_ENABLED=true`.
+release enables `IMAGE_UPSCALE_ENABLED=true`. For the separate paid Aliyun
+failover profile and its staged one-line activation, see
+`docs/operations/IMAGE_UPSCALE_ALIYUN_FALLBACK.md`.
 Only the canonical `docker-compose.yml` declares the stable socket volume. It
 is empty and harmless while the feature is disabled, preserving the normal
 Compose quick start. The hardened helper must initialize it and start the

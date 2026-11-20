@@ -205,7 +205,9 @@
 
 - Before changing Image 2.5 2K/4K generation, batch result storage, the Office
   Mini upscale client, or its Vault/runtime mounts, read
-  `docs/operations/IMAGE_25_UPSCALE_20260928.md`. Preserve the 1K bypass,
+  `docs/operations/IMAGE_25_UPSCALE_20260928.md`. For paid Mini failover, read
+  `docs/operations/IMAGE_UPSCALE_ALIYUN_FALLBACK.md` (pinned VSO/SDK sources,
+  exact Vault profile, one-shot processing and rollout gate). Preserve the 1K bypass,
   requested-tier billing, shared bounded limiter, per-item batch failure and
   memory-only bearer contract.
 

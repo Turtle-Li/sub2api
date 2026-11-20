@@ -141,6 +141,17 @@ func TestAsyncImageHandlerAutoSubmitBatch(t *testing.T) {
 	router.ServeHTTP(single, request)
 	require.Equal(t, http.StatusOK, single.Code)
 	require.Contains(t, single.Body.String(), `"sync":true`)
+
+	// The next handler test can change Gin's global mode. Wait for this worker
+	// to finish using its recorder instead of letting it leak into that test.
+	var accepted struct {
+		TaskID string `json:"task_id"`
+	}
+	require.NoError(t, json.Unmarshal(batch.Body.Bytes(), &accepted))
+	require.Eventually(t, func() bool {
+		got, err := tasks.Get(t.Context(), service.ImageTaskOwner{UserID: 7, APIKeyID: 9}, accepted.TaskID)
+		return err == nil && got.Status == service.ImageTaskStatusCompleted
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestAsyncImageHandlerLateJSONErrorAfterCommitted200FailsTask(t *testing.T) {
@@ -364,4 +375,28 @@ func TestAsyncImageHandlerDisabledReturns404(t *testing.T) {
 
 	// No task was created / persisted.
 	require.Empty(t, store.tasks)
+}
+
+func TestAsyncImageHandlerDoesNotRegenerateAfterCloudFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &asyncImageMemoryStore{tasks: make(map[string]*service.ImageTaskRecord)}
+	tasks := service.NewImageTaskServiceWithUploader(store, nil, time.Hour, time.Minute)
+	owner := service.ImageTaskOwner{UserID: 7, APIKeyID: 9}
+	task, err := tasks.Create(t.Context(), owner)
+	require.NoError(t, err)
+	attempts := 0
+	h := &AsyncImageHandler{tasks: tasks, execute: func(_ string, c *gin.Context) {
+		attempts++
+		service.PreventAsyncImageTaskReplay(c.Request.Context())
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "image_upscale_error"}})
+	}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	ctx, cancel := context.WithCancel(service.WithAsyncImageTaskStorage(t.Context(), task.ID))
+	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/images/generations", nil)
+	h.run(task.ID, service.PlatformOpenAI, c, w, cancel)
+	got, err := tasks.Get(t.Context(), owner, task.ID)
+	require.NoError(t, err)
+	require.Equal(t, service.ImageTaskStatusFailed, got.Status)
+	require.Equal(t, 1, attempts)
 }
