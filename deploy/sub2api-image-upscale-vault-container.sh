@@ -16,6 +16,8 @@ VOLUME=sub2api_image_upscale_vault
 PUBLIC_DIR=/run/sub2api-upscale-vault
 ADMIN_DIR=/run/sub2api-upscale-vault-admin
 UPSCAPE_API_KEY_VAULT_REF='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+ALIYUN_CREDENTIALS_REF='vault://secret/data/sub2api/aliyun-image-upscale#credentials'
+ALIYUN_AGENT_ARGS=()
 CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
 COS_ACCESS_KEY_VAULT_REF=''
 COS_SECRET_ACCESS_KEY_VAULT_REF=''
@@ -89,11 +91,16 @@ load_root_runtime_configuration() {
   . "$CONFIG_FILE"
   set +x
 
-  for key in IMAGE_UPSCALE_API_KEY BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY; do
+  for key in IMAGE_UPSCALE_API_KEY IMAGE_UPSCALE_ALIYUN_CREDENTIALS BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY; do
     [ "${!key+x}" != x ] || die
   done
   [ "${IMAGE_UPSCALE_API_KEY_VAULT_REF:-}" = "$UPSCAPE_API_KEY_VAULT_REF" ] || die
   [ "${BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET:-}" = "$PUBLIC_DIR/public.sock" ] || die
+  case "${SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE:-${IMAGE_UPSCALE_ALIYUN_ENABLED:-false}}" in
+    true) ALIYUN_AGENT_ARGS=(--allowed-ref "$ALIYUN_CREDENTIALS_REF") ;;
+    false) ;;
+    *) die ;;
+  esac
   COS_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF:-}"
   COS_SECRET_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF:-}"
   access_path="$(parse_exact_vault_reference "$COS_ACCESS_KEY_VAULT_REF" access_key_id)" || die
@@ -124,8 +131,10 @@ require_image() {
 }
 
 agent_command_json() {
-  printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s","--allowed-ref","%s","--allowed-ref","%s"]' \
+  printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s","--allowed-ref","%s","--allowed-ref","%s"' \
     "$PUBLIC_DIR" "$ADMIN_DIR" "$UPSCAPE_API_KEY_VAULT_REF" "$COS_ACCESS_KEY_VAULT_REF" "$COS_SECRET_ACCESS_KEY_VAULT_REF"
+  if [ "${#ALIYUN_AGENT_ARGS[@]}" -gt 0 ]; then printf ',"--allowed-ref","%s"' "$ALIYUN_CREDENTIALS_REF"; fi
+  printf ']'
 }
 
 prepare_public_volume() {
@@ -237,7 +246,7 @@ esac
 action="$1"
 image="$2"
 case "$action" in
-  prepare|ready|ready-auto|load-api|load-batch-cos|load-all) ;;
+  prepare|ready|ready-auto|ready-aliyun-auto|load-api|load-aliyun|load-batch-cos|load-all) ;;
   *) die ;;
 esac
 
@@ -245,13 +254,14 @@ for command_name in docker flock id stat sed; do
   command -v "$command_name" >/dev/null 2>&1 || die
 done
 load_root_runtime_configuration
+case "$action" in load-aliyun|ready-aliyun-auto) [ "${#ALIYUN_AGENT_ARGS[@]}" -gt 0 ] || die ;; esac
 LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
 if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then
   die
 fi
 require_image "$image"
 
-if [ "$action" = ready-auto ]; then
+if [ "$action" = ready-auto ] || [ "$action" = ready-aliyun-auto ]; then
   # Release/recovery callers already hold the canonical maintenance lock and
   # pass its open descriptor across exec. Direct invocations have no matching
   # descriptor, so acquire the lock normally. Either path is non-blocking.
@@ -299,20 +309,22 @@ else
     --admin-socket "$ADMIN_DIR/admin.sock" \
     --allowed-ref "$UPSCAPE_API_KEY_VAULT_REF" \
     --allowed-ref "$COS_ACCESS_KEY_VAULT_REF" \
-    --allowed-ref "$COS_SECRET_ACCESS_KEY_VAULT_REF" >/dev/null || die
+    --allowed-ref "$COS_SECRET_ACCESS_KEY_VAULT_REF" "${ALIYUN_AGENT_ARGS[@]+${ALIYUN_AGENT_ARGS[@]}}" >/dev/null || die
 fi
 
 verify_container "$image" || die
 case "$action" in
-  ready|ready-auto)
+  ready|ready-auto|ready-aliyun-auto)
     [ "$(docker container inspect "$CONTAINER" --format '{{.State.Health.Status}}')" = healthy ] || die
     printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY'
     ;;
-  load-api|load-batch-cos|load-all)
+  load-api|load-aliyun|load-batch-cos|load-all)
+    aliyun_credentials=''
     api_key=''
     cos_access_key=''
     cos_secret_key=''
     cleanup_injected_values() {
+      clear_secret aliyun_credentials
       clear_secret api_key
       clear_secret cos_access_key
       clear_secret cos_secret_key
@@ -323,6 +335,12 @@ case "$action" in
         read_secret_line api_key 512 true
         require_no_additional_stdin
         load_secret "$UPSCAPE_API_KEY_VAULT_REF" api_key
+        ;;
+      load-aliyun)
+        read_secret_line aliyun_credentials 512 false
+        require_no_additional_stdin
+        printf '%s' "$aliyun_credentials" | python3 -c 'import json,sys; v=json.load(sys.stdin); sys.exit(0 if isinstance(v,dict) and set(v)=={"access_key_id","access_key_secret"} and all(isinstance(x,str) and x and not any(c.isspace() for c in x) for x in v.values()) else 1)' >/dev/null 2>&1 || die
+        load_secret "$ALIYUN_CREDENTIALS_REF" aliyun_credentials
         ;;
       load-batch-cos)
         read_secret_line cos_access_key 256 false

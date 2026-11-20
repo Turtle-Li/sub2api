@@ -48,8 +48,12 @@ export function taskDisplay(task: StudioTask) {
 export function isImageOutputGone(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === 410
 }
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : '请求失败，请刷新后重试'
+}
+export const outputErrorMessage = (error: unknown) => isImageOutputGone(error) ? '图片已过期或已清理。' : errorMessage(error)
 const studioBase = '/image-studio'
-const galleryPageSize = 24
+export const galleryPageSize = 24
 export const taskRoot = (task: StudioTask) => task.job.parent_batch_id || task.job.id
 export const taskPending = (task: StudioTask) => !['completed', 'failed', 'cancelled', 'output_deleted'].includes(task.job.status)
 export const taskId = (job: BatchImageJob, item: BatchImageItem) => `${job.id}/${item.custom_id}`

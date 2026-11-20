@@ -92,6 +92,8 @@ func TestChannelMonitorV2AggregatesHTTPFinalOutcomeOnce(t *testing.T) {
 	require.Len(t, facts.Metrics, 1)
 	require.EqualValues(t, 3, facts.Metrics[0].Success)
 	require.EqualValues(t, 2, facts.Metrics[0].Errors)
+	require.EqualValues(t, 1, facts.Metrics[0].OpenAIFaults, "only the final provider error counts, not cancellation, duplicate or recovered attempts")
+	require.False(t, facts.Metrics[0].OpenAICoverageMissing)
 	categories := map[string]int64{}
 	for _, fact := range facts.Errors {
 		categories[fact.Category] += fact.Errors

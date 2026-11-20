@@ -1,6 +1,53 @@
 # Public group availability module
 
-Latest owner correction, November9: public cards on the homepage, `/status`
+## GPT request availability — November 21, 2026
+
+The public `/api/v1/model-status` cards for groups with catalog platform `openai`
+measure **completed successes / (completed successes + attributable final failures)**.
+Use the same facts for the 180-minute rate and each ten-minute history cell. Excluded
+requests are not successes. Neither the display name nor the configured probe model
+selects this policy. Other platforms, component/incident diagnostics, Ops error
+categories, billing and the independently labelled checks retain their existing rules.
+
+- Count our upstream credentials, account quota/permissions or exhausted account pool,
+  confirmed provider throttling/overload, model-call/network timeouts and gateway faults.
+  Use final status, stage, owner and bounded error summaries. A provider can return
+  a caller's 400 through a gateway 502; a provider can also report overload via 400.
+  A bare 403 or generic 429 without evidence of provider responsibility is not enough.
+- Exclude caller authentication, balance or limits, bad arguments/tool references,
+  content policy, disconnects, request-body/upload timeouts and file/asset download
+  timeouts (including an upstream fetching the caller's URL). Recovered attempts,
+  token counting and raw payloads are not scoring inputs. Do not change the global
+  ignored-category list to implement this distinction.
+- The configured error-rate thresholds still apply. Slow first-token P50 is a
+  separate timing metric, not a GPT fault. A single counted failure that would
+  otherwise meet the red threshold is `errors_observed` rather than an outage.
+  If all outcomes in a slot are excluded, a valid check may supply the cell, but
+  never the request denominator. Without either source the slot stays unknown
+  (collecting for the current empty slot). Existing freshness and sample limits apply.
+
+**Rollout and rollback.** Migration 284 adds a nullable minute count and the
+classifier shared by live aggregation and migration 285. Deploy the schema before
+the new reader. The separate backfill transaction visits only error-bearing OpenAI
+minutes in the visible 72 slots, using existing group/time and request-ID indexes;
+it sets counts only when deduplicated raw finals reconcile with the stored group,
+platform, model, minute and error total. It does not replay model calls or rewrite
+raw logs, real successes, billing or rollups. Both migrations bound lock waits to
+five seconds; the backfill also has a two-minute statement timeout. A timeout
+aborts its transaction rather than recording a partially applied migration.
+
+An old writer can still write `NULL`. No attribution is needed for a zero-error
+minute. In a minute with errors, missing/invalid coverage suppresses the affected
+percentage and a successful check cannot paint that historical slot green. Known
+faults remain visible. Ordinary collector refreshes or the rolling window clear
+the gap. For application rollback keep the additive schema and data; the prior
+binary reads the original diagnostic counts. No schema downgrade or full-history
+rewrite is required. The sanitized 72-slot comparison is executable in
+`TestOpenAIGroupStatusReplays72Slots`; it is a historical replay, not live telemetry.
+
+## Public presentation — November 9
+
+Public cards on the homepage, `/status`
 and `/monitor` show service status and qualified metrics without check cadence,
 shared-source names or reuse explanations. This also applies to timeline
 tooltips, accessible names, metric subtitles and the public rules disclosure.

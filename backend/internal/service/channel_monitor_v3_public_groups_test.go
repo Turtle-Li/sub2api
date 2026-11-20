@@ -18,7 +18,7 @@ func TestChannelMonitorV3GroupHistoryMatchesTenMinuteChecks(t *testing.T) {
 	r.slotFacts.Metrics = []ChannelMonitorV3Fact{{GroupID: 4, Model: "any-group-model", Slot: now.Truncate(10 * time.Minute), Success: 1}}
 	s := NewChannelMonitorV3Service(r, nil)
 	s.now = func() time.Time { return now }
-	out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, 180, out[4].WindowMinutes)
 	require.Len(t, out[4].Cells, 72)
@@ -27,12 +27,13 @@ func TestChannelMonitorV3GroupHistoryMatchesTenMinuteChecks(t *testing.T) {
 	require.Equal(t, "requests", out[4].Cells[71].Source)
 	require.Nil(t, out[4].RequestSuccessRate, "one request is not enough for a percentage")
 	r.slotFacts.Metrics[0].Errors = 1
-	out, err = s.PlazaStatuses(context.Background(), []int64{4}, false)
+	r.slotFacts.Metrics[0].OpenAIFaults = 1
+	out, err = s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "errors_observed", out[4].Cells[71].Status)
 	require.Nil(t, out[4].RequestSuccessRate, "sparse failures do not justify a percentage")
 	r.slotFacts.Metrics = nil
-	out, err = s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err = s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "collecting", out[4].Cells[71].Status)
 	require.Equal(t, "unknown", out[4].Cells[70].Status, "an empty historical slot stays unknown")

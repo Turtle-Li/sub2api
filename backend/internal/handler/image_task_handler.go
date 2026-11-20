@@ -297,6 +297,7 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, _
 			h.failTask(taskID, http.StatusGatewayTimeout, imageTaskErrorPayload("timeout_error", "image generation task timed out"))
 			return
 		}
+		canReplay := attempt < 3 && !service.AsyncImageTaskReplayPrevented(taskCtx.Request.Context())
 		statusCode := recorder.Code
 		if statusCode == 0 {
 			statusCode = http.StatusOK
@@ -310,7 +311,7 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, _
 			if statusCode < http.StatusBadRequest {
 				statusCode = http.StatusBadGateway
 			}
-			if attempt < 3 && retryableImageTaskStatus(statusCode) {
+			if canReplay && retryableImageTaskStatus(statusCode) {
 				continue
 			}
 			h.failTask(taskID, statusCode, taskErr)
@@ -318,7 +319,7 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, _
 		}
 		if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
 			if len(body) == 0 || !json.Valid(body) {
-				if attempt < 3 {
+				if canReplay {
 					continue
 				}
 				h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "upstream returned an invalid image response"))
@@ -335,7 +336,7 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, _
 			}
 			return
 		}
-		if attempt < 3 && retryableImageTaskStatus(statusCode) {
+		if canReplay && retryableImageTaskStatus(statusCode) {
 			continue
 		}
 		h.failTask(taskID, statusCode, extractImageTaskError(body))

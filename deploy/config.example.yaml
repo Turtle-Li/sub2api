@@ -1483,6 +1483,8 @@ unified_payment:
 # by the dedicated memory Vault agent and is never written to this file.
 image_upscale:
   enabled: false
+  # Paid Mini failover; requires the four-field production Vault agent profile.
+  aliyun_enabled: false
   base_url: "https://hcmac-mini.tailfc4ed7.ts.net"
   api_key_vault_ref: "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key"
   vault_agent_socket: "/run/sub2api-upscale-vault/public.sock"

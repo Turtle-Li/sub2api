@@ -6,7 +6,15 @@ import (
 	"time"
 )
 
+type channelMonitorV3ScorePolicy int
+
+const (
+	channelMonitorV3Diagnostic channelMonitorV3ScorePolicy = iota
+	channelMonitorV3OpenAIFaults
+)
+
 type channelMonitorV3Acc struct {
+	incomplete bool
 	success    int64
 	errors     int64
 	ignored    int64
@@ -19,10 +27,10 @@ type channelMonitorV3Acc struct {
 
 func (a *channelMonitorV3Acc) counted() int64 { return a.success + a.errors }
 
-// channelMonitorV3Accumulate folds the facts of one component into count
+// accumulate folds the facts of one component into count
 // slots starting at first; count 0 folds everything into a single total.
-// Ignored error categories are taken out of the counted errors.
-func channelMonitorV3Accumulate(cfg ChannelMonitorV3Config, component ChannelMonitorV3Component, facts *ChannelMonitorV3Facts, first time.Time, count int, interval ...time.Duration) []channelMonitorV3Acc {
+// Diagnostic views subtract configured categories; GPT cards use final attributable faults instead.
+func (policy channelMonitorV3ScorePolicy) accumulate(cfg ChannelMonitorV3Config, component ChannelMonitorV3Component, facts *ChannelMonitorV3Facts, first time.Time, count int, interval ...time.Duration) []channelMonitorV3Acc {
 	size := count
 	if size < 1 {
 		size = 1
@@ -47,25 +55,35 @@ func channelMonitorV3Accumulate(cfg ChannelMonitorV3Config, component ChannelMon
 	for _, f := range facts.Metrics {
 		if i := index(f.GroupID, f.Model, f.Slot); i >= 0 {
 			accs[i].success += f.Success
-			accs[i].errors += f.Errors
+			if policy == channelMonitorV3OpenAIFaults {
+				accs[i].incomplete = accs[i].incomplete || f.OpenAICoverageMissing
+				accs[i].errors += f.OpenAIFaults
+			} else {
+				accs[i].errors += f.Errors
+			}
 			accs[i].input += f.InputTokens
 			accs[i].cacheWrite += f.CacheCreationTokens
 			accs[i].cacheRead += f.CacheReadTokens
 		}
 	}
-	for _, f := range facts.Errors {
-		i := index(f.GroupID, f.Model, f.Slot)
-		if i < 0 {
-			continue
+	if policy == channelMonitorV3Diagnostic {
+		for _, f := range facts.Errors {
+			i := index(f.GroupID, f.Model, f.Slot)
+			if i < 0 {
+				continue
+			}
+			if slices.Contains(cfg.IgnoredErrorCategories, f.Category) {
+				accs[i].ignored += f.Errors
+				continue
+			}
+			if accs[i].categories == nil {
+				accs[i].categories = map[string]int64{}
+			}
+			accs[i].categories[f.Category] += f.Errors
 		}
-		if slices.Contains(cfg.IgnoredErrorCategories, f.Category) {
-			accs[i].ignored += f.Errors
-			continue
+		for i := range accs {
+			accs[i].errors -= min(accs[i].ignored, accs[i].errors)
 		}
-		if accs[i].categories == nil {
-			accs[i].categories = map[string]int64{}
-		}
-		accs[i].categories[f.Category] += f.Errors
 	}
 	for _, f := range facts.Latency {
 		if i := index(f.GroupID, f.Model, f.Slot); i >= 0 {
@@ -75,22 +93,23 @@ func channelMonitorV3Accumulate(cfg ChannelMonitorV3Config, component ChannelMon
 			accs[i].ttft[f.UpperBound] += f.Count
 		}
 	}
-	for i := range accs {
-		accs[i].errors -= min(accs[i].ignored, accs[i].errors)
-	}
 	return accs
 }
 
 func channelMonitorV3Cells(cfg ChannelMonitorV3Config, component ChannelMonitorV3Component, facts *ChannelMonitorV3Facts, first time.Time, count int, interval time.Duration, admin bool) []*ChannelMonitorV3Cell {
-	accs := channelMonitorV3Accumulate(cfg, component, facts, first, count, interval)
+	accs := channelMonitorV3Diagnostic.accumulate(cfg, component, facts, first, count, interval)
+	return channelMonitorV3Diagnostic.cells(cfg, component, accs, first, interval, admin)
+}
+
+func (policy channelMonitorV3ScorePolicy) cells(cfg ChannelMonitorV3Config, component ChannelMonitorV3Component, accs []channelMonitorV3Acc, first time.Time, interval time.Duration, admin bool) []*ChannelMonitorV3Cell {
 	threshold := component.DegradedTTFTMs
 	if threshold <= 0 {
 		threshold = cfg.DegradedTTFTMs
 	}
-	cells := make([]*ChannelMonitorV3Cell, count)
+	cells := make([]*ChannelMonitorV3Cell, len(accs))
 	for i, acc := range accs {
 		counted := acc.counted()
-		if counted == 0 {
+		if counted == 0 || acc.incomplete {
 			continue
 		}
 		cell := &ChannelMonitorV3Cell{Start: first.Add(time.Duration(i) * interval), SuccessRate: float64(acc.success) / float64(counted)}
@@ -100,9 +119,12 @@ func channelMonitorV3Cells(cfg ChannelMonitorV3Config, component ChannelMonitorV
 		switch {
 		case counted < int64(cfg.MinRequests):
 			cell.Status = ChannelMonitorV3StatusInsufficient
+		case policy == channelMonitorV3OpenAIFaults && acc.errors == 1 && errorRate >= cfg.DownErrorRate:
+			// A single attributable failure remains visible, but cannot establish an outage.
+			cell.Status = ChannelMonitorV3StatusInsufficient
 		case errorRate >= cfg.DownErrorRate:
 			cell.Status = ChannelMonitorV3StatusDown
-		case errorRate >= cfg.DegradedErrorRate || (cell.TTFTP50Ms != nil && *cell.TTFTP50Ms > int64(threshold)):
+		case errorRate >= cfg.DegradedErrorRate || (policy == channelMonitorV3Diagnostic && cell.TTFTP50Ms != nil && *cell.TTFTP50Ms > int64(threshold)):
 			cell.Status = ChannelMonitorV3StatusDegraded
 		default:
 			cell.Status = ChannelMonitorV3StatusOperational

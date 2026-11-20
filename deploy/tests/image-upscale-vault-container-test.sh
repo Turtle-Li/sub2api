@@ -178,7 +178,10 @@ case "$1:$2" in
       *"$admin_dir"*) printf '%s\n' "${MOCK_ADMIN_TMPFS:-rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000}" ;;
       *'.HostConfig.Tmpfs'*'/tmp'*) printf '%s\n' "${MOCK_TMP_TMPFS:-rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000}" ;;
       *'range .Mounts'*) printf 'volume|%s|%s|true\n' "$volume" "$public_dir" ;;
-      *'.Config.Cmd'*) printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s","--allowed-ref","%s","--allowed-ref","%s"]\n' "$public_dir" "$admin_dir" "$upscale_ref" "$cos_access_ref" "$cos_secret_ref" ;;
+      *'.Config.Cmd'*)
+        printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s","--allowed-ref","%s","--allowed-ref","%s"' "$public_dir" "$admin_dir" "$upscale_ref" "$cos_access_ref" "$cos_secret_ref"
+        if [ "${MOCK_ALIYUN_PROFILE:-false}" = true ]; then printf ',"--allowed-ref","vault://secret/data/sub2api/aliyun-image-upscale#credentials"'; fi
+        printf ']\n' ;;
       *'.Config.Healthcheck.Test'*) printf '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket %s/public.sock"]\n' "$public_dir" ;;
       *) exit 1 ;;
     esac
@@ -265,6 +268,21 @@ grep -q -- "exec -i sub2api-upscale-vault /app/sub2api-vault-agent load --admin-
   || fail 'COS access-key load did not target the exact configured reference'
 grep -q -- "exec -i sub2api-upscale-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-upscale-vault-admin/admin.sock --ref $COS_SECRET_VAULT_REF" "$CALLS" \
   || fail 'COS secret-key load did not target the exact configured reference'
+
+# A legacy profile cannot claim cloud readiness. The purpose-specific fourth
+# ref is explicitly staged and accepts one atomic stdin-only JSON value.
+if run_script ready-aliyun-auto "$image" >"$OUTPUT" 2>&1; then fail 'legacy profile claimed cloud readiness'; fi
+printf 'SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE=true\n' >>"$CONFIG_FILE"
+if run_script ready-aliyun-auto "$image" >"$OUTPUT" 2>&1; then fail 'three-ref agent passed expanded profile'; fi
+export MOCK_ALIYUN_PROFILE=true
+aliyun_fixture='{"access_key_id":"fixture-id", "access_key_secret":"fixture-secret-private"}'
+printf '%s\n' "$aliyun_fixture" | run_script load-aliyun "$image" >"$OUTPUT"
+assert_no_secret_in_output_or_calls 'fixture-secret-private'
+if printf '%s\n' '{"access_key_id":"fixture-id"}' | run_script load-aliyun "$image" >"$OUTPUT" 2>&1; then fail 'accepted partial RAM credential'; fi
+run_script ready-aliyun-auto "$image" >"$OUTPUT"
+grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'cloud profile not ready'
+unset MOCK_ALIYUN_PROFILE
+printf 'SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE=false\n' >>"$CONFIG_FILE"
 
 before_runs="$(run_count)"
 if MOCK_NETWORK=bridge run_script ready "$image" >"$OUTPUT" 2>&1; then

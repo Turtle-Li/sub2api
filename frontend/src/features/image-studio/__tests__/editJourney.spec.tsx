@@ -132,7 +132,7 @@ it('retains task details for expired work without fetching or reusing deleted by
   const detail = host.querySelector('dialog[aria-label="任务详情"]')!
   expect(detail.textContent).toContain('图片已清理')
   const actions = Array.from(detail.querySelectorAll('button')).filter(button => ['下载图片', '引用此图继续修改'].includes(button.textContent || ''))
-  expect(actions.map(button => button.disabled)).toEqual([true, true])
+  expect(actions).toHaveLength(0)
   expect(image).not.toHaveBeenCalled()
   expect(thumbnail).not.toHaveBeenCalled()
 })
@@ -175,12 +175,15 @@ it.each(['success', 'failed', 'expired'] as const)('opens a %s Vertex archive on
     expect(archivePreview).toHaveBeenCalledOnce()
     expect(detail.textContent).toContain('归档结果不支持直接带入')
     expect(detail.textContent).not.toContain('用这张图生成视频')
-    const download = Array.from(detail.querySelectorAll('button')).find(button => button.textContent === '下载图片')!
-    expect(download.disabled).toBe(outcome === 'failed')
+    const download = Array.from(detail.querySelectorAll('button')).find(button => button.textContent === '下载图片')
     if (outcome === 'failed') {
+      expect(download).toBeUndefined()
       expect(detail.textContent).toContain('SAFETY_BLOCKED')
       expect(detail.querySelector('img')).toBeNull()
-    } else expect(detail.querySelector('.studio-detail-image img')?.getAttribute('src')).toBe('blob:fixture')
+    } else {
+      expect(download?.disabled).toBe(false)
+      expect(detail.querySelector('.studio-detail-image img')?.getAttribute('src')).toBe('blob:fixture')
+    }
   }
   expect(image).not.toHaveBeenCalled()
   expect(thumbnail).not.toHaveBeenCalled()
@@ -191,23 +194,74 @@ it('only offers video for the readable selected original; opening the draft does
   const task: StudioTask = { ...original, item: { ...original.item, image_count: 2 } }
   const image = vi.fn().mockRejectedValueOnce({ status: 403 }).mockResolvedValueOnce(new Blob(['original'], { type: 'image/png' }))
   const tasks = vi.fn().mockResolvedValue({ tasks: [task], nextCursor: null, itemContinuations: [] })
-  const submit = vi.fn(), onVideo = vi.fn(async () => {})
+  const submit = vi.fn(), onVideo = vi.fn(async () => {}), onCanvas = vi.fn(async () => {})
   vi.mocked(studioAPI).mockReturnValue({ models: vi.fn(async () => []), image, tasks, submit, refreshPending: vi.fn(),
     items: vi.fn(), thumbnail: vi.fn(), archivePreview: vi.fn(), cancel: vi.fn() })
   vi.mocked(listKeys).mockResolvedValue([{ id: 43, name: 'own key', group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false }])
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
-  await act(async () => root.render(<Studio userId={7} onVideo={onVideo} />))
+  await act(async () => root.render(<Studio userId={7} onVideo={onVideo} onCanvas={onCanvas} />))
   expect(image).not.toHaveBeenCalled()
   await act(async () => host.querySelector<HTMLElement>('.studio-source-card')?.click())
-  const action = (label: string) => [...host.querySelectorAll('dialog.studio-detail button')].find(b => b.textContent === label)
+  const action = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('dialog.studio-detail button')].find(b => (b.getAttribute('aria-label') || b.textContent) === label)
   expect(action('用这张图生成视频')).toBeUndefined()
   expect(action('引用此图继续修改')).toBeDefined()
   await act(async () => action('下一张')?.click())
   expect(action('用这张图生成视频')).toBeDefined()
   await act(async () => action('用这张图生成视频')?.click())
+  const add = action('加入画布'); expect(add).toBeDefined()
+  await act(async () => add!.click())
+  expect(onCanvas).toHaveBeenCalledWith({ route: 43, batchId: task.job.id, itemId: task.item.custom_id, index: 1 })
   expect(onVideo).toHaveBeenCalledOnce()
   expect(onVideo).toHaveBeenCalledWith({ route: 43, batchId: task.job.id, itemId: task.item.custom_id, index: 1 })
   expect(image).toHaveBeenCalledTimes(2)
   expect(submit).not.toHaveBeenCalled()
+})
+
+it('shows the requested tier immediately while sizing the detail from each output', async () => {
+  const task = { ...original, job: { ...original.job, image_size: '2K' }, item: { ...original.item, image_count: 2, preview_size: { width: 600, height: 900 } } }
+  const image = vi.fn(async (_task: StudioTask, index: number) => new Blob([String(index)], { type: 'image/png' }))
+  const client = {
+    models: vi.fn(async () => []), tasks: vi.fn(async () => ({ tasks: [task], nextCursor: null, itemContinuations: [] })),
+    image, submit: vi.fn(), refreshPending: vi.fn(), items: vi.fn(), cancel: vi.fn(),
+  }
+  vi.mocked(studioAPI).mockReturnValue(client)
+  vi.mocked(listKeys).mockResolvedValue([{ id: 42, name: 'fixture', group_name: 'fixture', status: 'active', expired: false, quota_exhausted: false }])
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host); unmount = () => { act(() => root.unmount()); host.remove() }
+  await act(async () => root.render(<Studio userId={805} />))
+  const card = host.querySelector<HTMLElement>('.studio-source-card')
+  if (!card) throw new Error('No gallery card')
+  expect(image).not.toHaveBeenCalled()
+
+  await act(async () => card.click())
+  const detail = host.querySelector<HTMLDialogElement>('dialog[aria-label="任务详情"]')
+  if (!detail) throw new Error('No task dialog')
+  const ratio = () => Number(detail.style.getPropertyValue('--detail-aspect'))
+  const tier = () => [...detail.querySelectorAll('dt')].find(label => label.textContent === '分辨率档位')?.nextElementSibling?.textContent
+  expect(tier()).toBe('2K')
+  expect(detail.dataset.layout).toBe('portrait')
+  expect(ratio()).toBeCloseTo(2 / 3)
+  expect(image.mock.calls.map(([, index]) => index)).toEqual([0])
+
+  const decode = async (width: number, height: number) => {
+    const img = detail.querySelector('.studio-detail-image img')
+    if (!img) throw new Error('No detail image to decode')
+    Object.defineProperties(img, { naturalWidth: { value: width }, naturalHeight: { value: height } })
+    await act(async () => img.dispatchEvent(new Event('load')))
+  }
+  await decode(1024, 1536)
+  expect(tier()).toBe('2K')
+  expect(detail.textContent).not.toContain('1024 × 1536')
+  const next = detail.querySelector<HTMLButtonElement>('.studio-detail-actions button[aria-label="下一张"]')
+  if (!next) throw new Error('No next-image control in detail actions')
+  await act(async () => next.click())
+  expect(ratio()).toBe(1)
+  expect(tier()).toBe('2K')
+  expect(image.mock.calls.map(([, index]) => index)).toEqual([0, 1])
+  await decode(1536, 1024)
+  expect(detail.dataset.layout).toBe('landscape')
+  expect(ratio()).toBe(1.5)
+  expect(tier()).toBe('2K')
+  expect(detail.textContent).not.toContain('1536 × 1024')
 })

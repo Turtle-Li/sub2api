@@ -297,12 +297,12 @@ func TestChannelMonitorV3PlazaSuppressesSmallSamplePercentages(t *testing.T) {
 	now := time.Date(2026, 11, 7, 2, 12, 0, 0, time.UTC)
 	finished := now.Add(-time.Minute)
 	repo.through = &finished
-	facts := ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: now.Truncate(5 * time.Minute), Success: 2, Errors: 1}}}
+	facts := ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: now.Truncate(5 * time.Minute), Success: 2, Errors: 1, OpenAIFaults: 1}}}
 	repo.slotFacts, repo.totals = facts, facts
 	repo.results = []ChannelMonitorV3GroupProbeResult{{GroupID: 4, Model: "gpt-mini", Slot: now.Truncate(10 * time.Minute), FinishedAt: &finished, Outcome: "success"}}
 	svc := NewChannelMonitorV3Service(repo, nil)
 	svc.now = func() time.Time { return now }
-	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Nil(t, out[4].RequestSuccessRate, "two successes and one failure are not a reliable percentage")
 	require.Nil(t, out[4].ProbeSuccessRate, "one representative check must not imply 100% availability")
@@ -313,7 +313,7 @@ func TestChannelMonitorV3PlazaSeparatesProbeAndRequestRates(t *testing.T) {
 	now := time.Date(2026, 11, 7, 2, 12, 0, 0, time.UTC)
 	finished := now.Add(-time.Minute)
 	repo.through = &finished
-	repo.slotFacts = ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: now.Truncate(5 * time.Minute).Add(-30 * time.Minute), Success: 15, Errors: 5}}}
+	repo.slotFacts = ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: now.Truncate(5 * time.Minute).Add(-30 * time.Minute), Success: 15, Errors: 5, OpenAIFaults: 5}}}
 	for i := range 6 {
 		outcome := "failure"
 		if i%2 == 0 {
@@ -324,7 +324,7 @@ func TestChannelMonitorV3PlazaSeparatesProbeAndRequestRates(t *testing.T) {
 	repo.results = append(repo.results, ChannelMonitorV3GroupProbeResult{GroupID: 9, Model: "private", Slot: now, FinishedAt: &finished, Outcome: "failure"})
 	svc := NewChannelMonitorV3Service(repo, nil)
 	svc.now = func() time.Time { return now }
-	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Equal(t, 75.0, *out[4].RequestSuccessRate)
@@ -333,11 +333,11 @@ func TestChannelMonitorV3PlazaSeparatesProbeAndRequestRates(t *testing.T) {
 	require.Equal(t, "operational", out[4].Status)
 	require.Equal(t, []int64{4}, repo.queried)
 	repo.config.GroupProbe.Enabled = false
-	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err = svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "unknown", out[4].Status)
 	repo.config.PublicEnabled = false
-	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, true)
+	out, err = svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, true)
 	require.NoError(t, err)
 	require.Empty(t, out)
 }
@@ -359,7 +359,7 @@ func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testi
 	}
 	svc := NewChannelMonitorV3Service(repo, nil)
 	svc.now = func() time.Time { return now }
-	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformAnthropic}}, false)
 	require.NoError(t, err)
 	got := out[4]
 	require.Equal(t, "ready", got.RequestSampleState)
@@ -372,7 +372,7 @@ func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testi
 	require.Equal(t, 10*time.Minute, repo.slotCalls[0].interval)
 	require.True(t, repo.slotCalls[0].withLatency)
 	repo.config.MinRequests = 50
-	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err = svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformAnthropic}}, false)
 	require.NoError(t, err)
 	require.Nil(t, out[4].RequestSuccessRate)
 	require.Nil(t, out[4].CacheReadRate)
@@ -380,7 +380,7 @@ func TestChannelMonitorV3PlazaMetricsUseValidRequestsAndNeverEmptySlots(t *testi
 	repo.config.MinRequests = 1
 	stale := now.Add(-11 * time.Minute)
 	repo.through = &stale
-	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err = svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformAnthropic}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "stale", out[4].RequestSampleState)
 	require.Nil(t, out[4].RequestSuccessRate)
@@ -411,12 +411,12 @@ func TestChannelMonitorV3PlazaFreshProbeSurvivesStaleCollector(t *testing.T) {
 	repo.results = []ChannelMonitorV3GroupProbeResult{{GroupID: 4, Model: "gpt-mini", Slot: now.Truncate(10 * time.Minute), FinishedAt: &finished, Outcome: "success"}}
 	svc := NewChannelMonitorV3Service(repo, nil)
 	svc.now = func() time.Time { return now }
-	out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "probe", out[4].Source)
 	require.Equal(t, "operational", out[4].Status)
 	repo.config.GroupProbe.Groups[0].Enabled = false
-	out, err = svc.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err = svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	require.Equal(t, "unknown", out[4].Status)
 }

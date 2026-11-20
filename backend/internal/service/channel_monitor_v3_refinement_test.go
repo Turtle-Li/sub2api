@@ -54,7 +54,7 @@ func TestChannelMonitorV3DenseHistoryKeepsThreeHourMetrics(t *testing.T) {
 	old, recent := now.Truncate(10*time.Minute).Add(-6*time.Hour), now.Truncate(10*time.Minute)
 	r := &groupProbeRepoFake{monitorV3RepoFake: &monitorV3RepoFake{config: monitorV3Config(), through: &now}}
 	r.config.GroupProbe = ChannelMonitorV3GroupProbeConfig{Enabled: true, Groups: []ChannelMonitorV3GroupProbeTarget{{GroupID: 4, Model: "selected", Enabled: true}}}
-	r.slotFacts = ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: old, Errors: 100}, {GroupID: 4, Slot: recent, Success: 30}}}
+	r.slotFacts = ChannelMonitorV3Facts{Metrics: []ChannelMonitorV3Fact{{GroupID: 4, Slot: old, Errors: 100, OpenAIFaults: 100}, {GroupID: 4, Slot: recent, Success: 30}}}
 	input, read := int64(100), int64(10)
 	r.results = []ChannelMonitorV3GroupProbeResult{{GroupID: 4, Model: "selected", Slot: old, FinishedAt: &old, Outcome: "success", CacheInputTokens: &input, CacheReadTokens: &read}}
 	for i := 0; i < 6; i++ {
@@ -63,7 +63,7 @@ func TestChannelMonitorV3DenseHistoryKeepsThreeHourMetrics(t *testing.T) {
 	}
 	s := NewChannelMonitorV3Service(r, nil)
 	s.now = func() time.Time { return now }
-	out, err := s.PlazaStatuses(context.Background(), []int64{4}, false)
+	out, err := s.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 	require.NoError(t, err)
 	item := out[4]
 	require.Len(t, item.Cells, 72)

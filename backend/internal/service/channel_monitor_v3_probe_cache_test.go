@@ -106,7 +106,7 @@ func TestChannelMonitorV3ProbeCacheUsesQualifiedSuccessfulFinalReceipts(t *testi
 			svc := NewChannelMonitorV3Service(r, nil)
 			svc.now = func() time.Time { return now }
 			// When public aggregate metrics are built.
-			out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+			out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 			require.NoError(t, err)
 			// Then cache uses its own qualification, source and denominator.
 			require.Equal(t, tc.state, out[4].ProbeCacheState)

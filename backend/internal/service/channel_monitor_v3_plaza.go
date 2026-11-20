@@ -72,12 +72,17 @@ type ChannelMonitorV3RequestCache struct {
 	Requests, InputTokens, CacheCreationTokens, CacheReadTokens int64
 }
 
-// PlazaStatuses accepts only IDs authorized for public card publication.
+// PlazaStatuses uses the groups already authorized for public card publication;
+// their catalog platform, not the display name or probe model, selects the scoring policy.
 // Success/history stay group-scoped; cache has an explicit account-pool scope.
-func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []int64, anonymous bool) (map[int64]*ChannelMonitorV3GroupStatus, error) {
+func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groups []Group, anonymous bool) (map[int64]*ChannelMonitorV3GroupStatus, error) {
 	out := map[int64]*ChannelMonitorV3GroupStatus{}
-	if len(groupIDs) == 0 {
+	if len(groups) == 0 {
 		return out, nil
+	}
+	groupIDs := make([]int64, len(groups))
+	for i := range groups {
+		groupIDs[i] = groups[i].ID
 	}
 	cfg, err := s.repo.GetConfig(ctx)
 	if err != nil {
@@ -130,7 +135,12 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			quotaAccounts = accounts
 		}
 	}
-	for _, id := range groupIDs {
+	for i := range groups {
+		id := groups[i].ID
+		policy := channelMonitorV3Diagnostic
+		if groups[i].Platform == PlatformOpenAI {
+			policy = channelMonitorV3OpenAIFaults
+		}
 		target := targets[id]
 		probeTarget, probeSource, groupProbes := target, "probe", byGroup[id]
 		shared := target.SourceGroupID > 0
@@ -171,13 +181,13 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			}
 		}
 		component := ChannelMonitorV3Component{GroupID: id}
-		total := channelMonitorV3Accumulate(*cfg, component, metricFacts, time.Time{}, 0)[0]
-		if total.counted() > 0 {
+		total := policy.accumulate(*cfg, component, metricFacts, time.Time{}, 0)[0]
+		if total.counted() > 0 || total.incomplete {
 			item.RequestSampleState = "insufficient"
 		}
 		if !passiveFresh {
 			item.RequestSampleState = "stale"
-		} else if total.counted() >= int64(item.MinRequests) {
+		} else if !total.incomplete && total.counted() >= int64(item.MinRequests) {
 			item.RequestSampleState = "ready"
 			rate := 100 * float64(total.success) / float64(total.counted())
 			item.RequestSuccessRate = &rate
@@ -189,11 +199,17 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 				item.TTFTP50Ms = channelMonitorV3P50(total.ttft)
 			}
 		}
-		cells := channelMonitorV3Cells(*cfg, component, facts, first, channelMonitorV3GroupCells, interval, false)
-		observations := channelMonitorV3Accumulate(*cfg, component, facts, first, channelMonitorV3GroupCells, interval)
+		observations := policy.accumulate(*cfg, component, facts, first, channelMonitorV3GroupCells, interval)
+		cells := policy.cells(*cfg, component, observations, first, interval, false)
 		for i := range item.Cells {
 			item.Cells[i] = ChannelMonitorV3GroupCell{Start: first.Add(time.Duration(i) * interval), Status: ChannelMonitorV3StatusUnknown, Source: "none"}
-			if cells[i] != nil {
+			if observations[i].incomplete {
+				// A successful probe cannot certify a missing real outcome. Preserve any known faults.
+				item.Cells[i].Source = "requests"
+				if observations[i].errors > 0 {
+					item.Cells[i].Status = "errors_observed"
+				}
+			} else if cells[i] != nil {
 				item.Cells[i].Status, item.Cells[i].Source = cells[i].Status, "requests"
 				if cells[i].Status == ChannelMonitorV3StatusInsufficient {
 					item.Cells[i].Status = "observed"
@@ -217,7 +233,7 @@ func (s *ChannelMonitorV3Service) PlazaStatuses(ctx context.Context, groupIDs []
 			}
 			if !probe.Slot.Before(first) {
 				index := int(probe.Slot.Sub(first) / interval)
-				if index >= 0 && index < len(item.Cells) && item.Cells[index].Source != "requests" {
+				if index >= 0 && index < len(item.Cells) && (item.Cells[index].Source != "requests" || (observations[index].incomplete && probe.Outcome == "failure")) {
 					state := ChannelMonitorV3StatusDown
 					if probe.Outcome == "success" {
 						state = ChannelMonitorV3StatusOperational

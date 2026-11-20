@@ -104,7 +104,7 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
       try { await discover(); return visibleModels() }
       finally { if (onUpdate) listeners.delete(onUpdate) }
     },
-    async tasks(cursor = '', filters?: GalleryFilters, onUpdate?: (tasks: StudioTask[]) => void) {
+    async tasks(cursor = '', filters?: GalleryFilters) {
       // History does not wait for every model catalogue to finish.
       const entries = [...clients.entries()].filter(([key]) => historyKeys.has(key))
       const offsets: Record<string, string | null> = cursor ? JSON.parse(cursor) : {}
@@ -120,7 +120,6 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
             signal.throwIfAborted()
             remember(key, page.tasks)
             pages.push(page); next[key] = page.nextCursor
-            onUpdate?.(pages.flatMap(page => page.tasks))
           } catch (error) {
             if (signal.aborted) throw error
             const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined

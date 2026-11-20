@@ -174,7 +174,7 @@ func (s *ChannelMonitorV3Service) componentStatus(cfg ChannelMonitorV3Config, co
 			break
 		}
 	}
-	total := channelMonitorV3Accumulate(cfg, component, totals, time.Time{}, 0)[0]
+	total := channelMonitorV3Diagnostic.accumulate(cfg, component, totals, time.Time{}, 0)[0]
 	if counted := total.counted(); counted > 0 {
 		availability := float64(total.success) * 100 / float64(counted)
 		item.Availability = &availability

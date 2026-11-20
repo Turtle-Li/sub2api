@@ -47,7 +47,7 @@ func TestChannelMonitorV3QuietGroupProbeMetrics(t *testing.T) {
 			svc := NewChannelMonitorV3Service(r, nil)
 			svc.now = func() time.Time { return now }
 			// When the public group metrics are read.
-			out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+			out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 			require.NoError(t, err)
 			data, err := json.Marshal(out[4])
 			require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestChannelMonitorV3ProbeTimingRequiresSuccessfulValidSamples(t *testing.T)
 			svc := NewChannelMonitorV3Service(r, nil)
 			svc.now = func() time.Time { return now }
 			// When statistics are calculated, only complete valid samples qualify.
-			out, err := svc.PlazaStatuses(context.Background(), []int64{4}, false)
+			out, err := svc.PlazaStatuses(context.Background(), []Group{{ID: 4, Platform: PlatformOpenAI}}, false)
 			require.NoError(t, err)
 			require.Equal(t, 1, out[4].ProbeMetricsVersion)
 			require.Equal(t, tc.state, out[4].ProbeSampleState)
