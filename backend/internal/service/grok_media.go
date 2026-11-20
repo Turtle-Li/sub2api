@@ -41,7 +41,7 @@ func (e GrokMediaEndpoint) RequiresRequestBody() bool {
 }
 
 func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
-	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete || e == MuseVideoStatus || e == MuseVideoContent || e == GoodPutVideoStatus || e == GoodPutVideoContent
+	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete || e == MuseVideoStatus || e == MuseVideoContent || e == GoodPutVideoStatus || e == GoodPutVideoContent || e == HiAPIVideoStatus || e == HiAPIVideoContent
 }
 
 func (e GrokMediaEndpoint) IsTaskLookupRequest() bool {
@@ -49,7 +49,7 @@ func (e GrokMediaEndpoint) IsTaskLookupRequest() bool {
 }
 
 func (e GrokMediaEndpoint) IsGenerationRequest() bool {
-	if e == SeedanceEndpointCreate || e == MuseVideoCreate || e == GoodPutVideoCreate {
+	if e == SeedanceEndpointCreate || e == MuseVideoCreate || e == GoodPutVideoCreate || e == HiAPIVideoCreate {
 		return true
 	}
 	switch e {

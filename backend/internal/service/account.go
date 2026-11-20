@@ -1994,6 +1994,12 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	if capability == OpenAIEndpointCapabilityGoodPutVideo {
 		return a.supportsGoodPutVideo()
 	}
+	if capability == OpenAIEndpointCapabilityHiAPIVideo {
+		return a.supportsHiAPIVideo()
+	}
+	if a.supportsHiAPIVideo() && capability != "" {
+		return false
+	}
 	if capability == OpenAIEndpointCapabilitySeedance {
 		configured, _ := a.openAIEndpointCapabilitySet()
 		return configured["seedance"] && a.Platform == PlatformOpenAI && a.Type == AccountTypeAPIKey &&

@@ -64,6 +64,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		platform = service.PlatformOpenAI
 		noAccountCode, noAccountMessage = "goodput_video_no_eligible_account", "No eligible GoodPut H3 account"
 	}
+	if endpoint.IsHiAPIVideo() {
+		platform = service.PlatformOpenAI
+		noAccountCode, noAccountMessage = "hiapi_video_no_eligible_account", "No eligible HiAPI video account"
+	}
 	if endpoint.IsMuseVideo() {
 		platform = service.PlatformOpenAI
 		noAccountCode, noAccountMessage = "muse_video_no_eligible_account", "No eligible Muse video accounts"
@@ -87,6 +91,14 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 	if endpoint == service.GoodPutVideoCreate && !h.gatewayService.CanSubmitGoodPutVideo(apiKey.Group) {
 		h.errorResponse(c, http.StatusForbidden, "goodput_video_group_not_enabled", "GoodPut H3 submissions are not enabled for this public group")
+		return
+	}
+	if endpoint.IsHiAPIVideo() && !service.IsHiAPIVideoGroup(apiKey.Group) {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "HiAPI video is not available for this group")
+		return
+	}
+	if endpoint == service.HiAPIVideoCreate && !apiKey.Group.IsExclusive {
+		h.errorResponse(c, http.StatusForbidden, "hiapi_video_group_not_enabled", "HiAPI video requires an exclusive wallet group")
 		return
 	}
 	if endpoint.IsMuseMedia() && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI || apiKey.Group.IsSubscriptionType()) {
@@ -118,8 +130,17 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	var museIdempotencyKey string
 	var goodPutRequest *service.GoodPutVideoRequest
 	var goodPutPending *service.GrokVideoPendingBilling
-	var goodPutJob *service.GoodPutVideoJob
+	var goodPutJob *service.DurableVideoJob
+	var hiAPIRequest *service.HiAPIVideoRequest
+	var hiAPIJob *service.DurableVideoJob
 	switch {
+	case endpoint == service.HiAPIVideoCreate:
+		hiAPIRequest, err = service.ParseHiAPIVideoRequest(contentType, body)
+		if err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		requestInfo = hiAPIRequest.Info()
 	case endpoint == service.GoodPutVideoCreate:
 		goodPutRequest, err = service.ParseGoodPutVideoRequest(contentType, body)
 		if err != nil {
@@ -208,6 +229,18 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 		requestInfo.Model = goodPutPending.Model
 	}
+	if endpoint.IsHiAPIVideo() && endpoint.IsTaskLookupRequest() {
+		hiAPIJob, err = h.gatewayService.FindHiAPIVideoJob(c.Request.Context(), apiKey, requestID)
+		if err != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "HiAPI video status is unavailable")
+			return
+		}
+		if hiAPIJob == nil || hiAPIJob.Model != service.HiAPISeedanceMiniModel {
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "HiAPI video task not found")
+			return
+		}
+		requestInfo.Model = hiAPIJob.Model
+	}
 	requestModel := requestInfo.Model
 	routingModel := service.NormalizeGrokMediaModelForEndpoint(endpoint, requestModel, requestInfo.HasInputImage())
 	if endpoint.IsGenerationRequest() && strings.TrimSpace(requestModel) == "" {
@@ -274,7 +307,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 
 	// Bound Muse/GoodPut tasks can still be read after the wallet or key quota is used up.
-	if !(endpoint.IsMuseMedia() || endpoint.IsGoodPutVideo()) || endpoint.IsGenerationRequest() {
+	if !(endpoint.IsMuseMedia() || endpoint.IsGoodPutVideo() || endpoint.IsHiAPIVideo()) || endpoint.IsGenerationRequest() {
 		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 			reqLog.Info("grok_media.billing_eligibility_check_failed", zap.Error(err))
 			status, code, message, retryAfter := billingErrorDetails(err)
@@ -331,6 +364,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
 		if goodPutJob != nil {
 			boundLookupAccountID = goodPutJob.AccountID
+		} else if hiAPIJob != nil {
+			boundLookupAccountID = hiAPIJob.AccountID
 		} else {
 			boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
 				c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
@@ -484,7 +519,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		)
 
 		account := selection.Account
-		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() && !endpoint.IsMuseMedia() && !endpoint.IsGoodPutVideo() {
+		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() && !endpoint.IsMuseMedia() && !endpoint.IsGoodPutVideo() && !endpoint.IsHiAPIVideo() {
 			eligible, eligibilityReason, eligibilityErr := h.ensureGrokMediaAccountEligibility(requestCtx, account)
 			if !eligible {
 				releaseAccount()
@@ -536,6 +571,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending, durable: goodPutJob != nil,
 				account: account, key: apiKey, subject: subject, log: reqLog,
 			})
+			return
+		}
+		if endpoint.IsHiAPIVideo() {
+			h.forwardHiAPIVideo(requestCtx, c, endpoint, apiKey, account, hiAPIRequest, hiAPIJob, reqLog)
 			return
 		}
 		if endpoint.IsMuseImage() {
@@ -726,6 +765,9 @@ func (h *OpenAIGatewayHandler) ensureGrokMediaAccountEligibility(ctx context.Con
 }
 
 func grokMediaRequiredCapability(endpoint service.GrokMediaEndpoint) service.OpenAIEndpointCapability {
+	if endpoint.IsHiAPIVideo() {
+		return service.OpenAIEndpointCapabilityHiAPIVideo
+	}
 	if endpoint.IsGoodPutVideo() {
 		return service.OpenAIEndpointCapabilityGoodPutVideo
 	}

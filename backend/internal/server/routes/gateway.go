@@ -134,6 +134,10 @@ func RegisterGatewayRoutes(
 	}
 	videoGenerationHandler := func(c *gin.Context) {
 		if key, ok := middleware.GetAPIKeyFromContext(c); ok && key != nil && key.Group != nil && key.Group.Platform == service.PlatformOpenAI {
+			if service.IsHiAPIVideoGroup(key.Group) {
+				h.OpenAIGateway.HiAPIVideoGeneration(c)
+				return
+			}
 			if service.IsGoodPutVideoGroup(key.Group) {
 				h.OpenAIGateway.GoodPutVideoGeneration(c)
 				return
@@ -157,6 +161,10 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoStatusHandler := func(c *gin.Context) {
+		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsHiAPIVideoTaskID(c.Param("request_id")) {
+			h.OpenAIGateway.HiAPIVideoStatus(c)
+			return
+		}
 		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsGoodPutVideoTaskID(c.Param("request_id")) {
 			h.OpenAIGateway.GoodPutVideoStatus(c)
 			return
@@ -181,6 +189,10 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoContentHandler := func(c *gin.Context) {
+		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsHiAPIVideoTaskID(c.Param("request_id")) {
+			h.OpenAIGateway.HiAPIVideoContent(c)
+			return
+		}
 		if getGroupPlatform(c) == service.PlatformOpenAI && service.IsGoodPutVideoTaskID(c.Param("request_id")) {
 			h.OpenAIGateway.GoodPutVideoContent(c)
 			return
@@ -621,6 +633,9 @@ func gatewayMediaBodyLimits(c *gin.Context) {
 				museModel = service.MuseImageModel
 			case "/videos", "/videos/generations":
 				museModel = service.MuseVideoModel
+				if service.IsHiAPIVideoGroup(key.Group) {
+					c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.HiAPIVideoRequestMaxBytes)
+				}
 				if service.IsGoodPutVideoGroup(key.Group) {
 					c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.GoodPutVideoRequestMaxBytes)
 				}

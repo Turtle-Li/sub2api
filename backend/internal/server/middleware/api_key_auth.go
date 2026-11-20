@@ -441,7 +441,8 @@ func isBoundOpenAIVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
 		"/videos/:request_id", "/videos/:request_id/content",
 		"/videos/generations/:request_id", "/videos/generations/:request_id/content":
 		id := c.Param("request_id")
-		return service.IsMuseVideoTaskID(id) || (service.IsGoodPutVideoGroup(key.Group) && service.IsGoodPutVideoTaskID(id))
+		return service.IsMuseVideoTaskID(id) || (service.IsGoodPutVideoGroup(key.Group) && service.IsGoodPutVideoTaskID(id)) ||
+			(service.IsHiAPIVideoGroup(key.Group) && service.IsHiAPIVideoTaskID(id))
 	default:
 		return false
 	}

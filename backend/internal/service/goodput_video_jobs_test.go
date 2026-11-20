@@ -16,16 +16,16 @@ import (
 
 type goodPutReconcileStore struct {
 	UsageBillingBatchRepository
-	GoodPutVideoJobRepository
-	job    *GoodPutVideoJob
+	DurableVideoJobRepository
+	job    *DurableVideoJob
 	states []string
 }
 
-func (r *goodPutReconcileStore) ClaimGoodPutVideoJob(context.Context) (*GoodPutVideoJob, error) {
+func (r *goodPutReconcileStore) ClaimVideoJob(context.Context) (*DurableVideoJob, error) {
 	return r.job, nil
 }
 
-func (r *goodPutReconcileStore) FinishGoodPutVideoJob(_ context.Context, id, state string) (bool, error) {
+func (r *goodPutReconcileStore) FinishVideoJob(_ context.Context, id, state string) (bool, error) {
 	if r.job == nil || r.job.ID != id {
 		return false, nil
 	}
@@ -53,7 +53,7 @@ func TestGoodPutWorkerSettlesWithoutClientRead(t *testing.T) {
 		{"still pending", `{"id":"video_test","status":"in_progress"}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			job := &GoodPutVideoJob{ID: "test-job", AccountID: 42, NativeID: "video_test", Seconds: 5, CreatedAt: time.Now()}
+			job := &DurableVideoJob{ID: "test-job", AccountID: 42, NativeID: "video_test", Seconds: 5, CreatedAt: time.Now()}
 			store := &goodPutReconcileStore{job: job}
 			lanes := NewUsageBillingLaneCombiner(store)
 			t.Cleanup(lanes.Stop)

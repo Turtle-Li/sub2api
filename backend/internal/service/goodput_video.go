@@ -22,7 +22,7 @@ import (
 
 const (
 	goodPutVideoTaskPrefix = "gpv_"
-	goodPutVideoMaxBytes   = 100_000_000
+	videoDownloadMaxBytes  = 100_000_000
 )
 
 var (
@@ -169,14 +169,18 @@ func (s *OpenAIGatewayService) WriteGoodPutVideoContent(ctx context.Context, c *
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	return writeBoundVideoMP4(c, resp)
+}
+
+func writeBoundVideoMP4(c *gin.Context, resp *http.Response) error {
 	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if resp.StatusCode != http.StatusOK || resp.ContentLength > goodPutVideoMaxBytes ||
+	if resp.StatusCode != http.StatusOK || resp.ContentLength > videoDownloadMaxBytes ||
 		(contentType != "video/mp4" && contentType != "application/octet-stream") {
-		return errors.New("GoodPut video content is unavailable or exceeds the download limit")
+		return errors.New("video content is unavailable or exceeds the download limit")
 	}
 	reader := bufio.NewReader(resp.Body)
 	if prefix, err := reader.Peek(12); err != nil || string(prefix[4:8]) != "ftyp" {
-		return errors.New("GoodPut did not return a valid MP4 download")
+		return errors.New("upstream did not return a valid MP4 download")
 	}
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("Content-Type", "video/mp4")
@@ -186,16 +190,16 @@ func (s *OpenAIGatewayService) WriteGoodPutVideoContent(ctx context.Context, c *
 	}
 	c.Status(http.StatusOK)
 	MarkResponseCommitted(c)
-	written, err := io.Copy(c.Writer, io.LimitReader(reader, goodPutVideoMaxBytes))
+	written, err := io.Copy(c.Writer, io.LimitReader(reader, videoDownloadMaxBytes))
 	if err != nil {
-		return fmt.Errorf("copy GoodPut video content: %w", err)
+		return fmt.Errorf("copy video content: %w", err)
 	}
 	if resp.ContentLength >= 0 && written != resp.ContentLength {
-		return errors.New("incomplete GoodPut video download")
+		return errors.New("incomplete video download")
 	}
-	if resp.ContentLength < 0 && written == goodPutVideoMaxBytes {
+	if resp.ContentLength < 0 && written == videoDownloadMaxBytes {
 		if _, err := reader.Peek(1); !errors.Is(err, io.EOF) {
-			return errors.New("GoodPut video download exceeded its limit or did not terminate cleanly")
+			return errors.New("video download exceeded its limit or did not terminate cleanly")
 		}
 	}
 	return nil

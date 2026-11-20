@@ -127,6 +127,7 @@ type grokMediaSlotBindings struct {
 	pending map[string][]byte
 	usage   []*service.UsageLog
 	goodPut *goodPutVideoTestJobs
+	hiAPI   *hiAPIVideoTestJobs
 }
 
 type grokMediaSlotUsage struct {
@@ -226,6 +227,10 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 				accounts[i].Credentials["base_url"] = "https://api.goodputai.cn/v1"
 				accounts[i].Credentials["model_mapping"] = map[string]any{platforms[1]: platforms[1]}
 			}
+			if len(platforms) > 1 && platforms[1] == service.HiAPISeedanceMiniModel {
+				accounts[i].Credentials["base_url"] = "https://api.hiapi.ai/v1"
+				accounts[i].Credentials["model_mapping"] = map[string]any{platforms[1]: platforms[1]}
+			}
 			if len(platforms) > 1 && (platforms[1] == service.MuseVideoModel || platforms[1] == service.MuseImageModel) {
 				accounts[i].Credentials["base_url"] = "https://muse.example/v1"
 				accounts[i].Credentials["model_mapping"] = map[string]any{platforms[1]: platforms[1]}
@@ -263,6 +268,14 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 		bindings.goodPut = &goodPutVideoTestJobs{}
 		billingRepo = bindings.goodPut
 		cfg.Gateway.GoodPutVideoPublicGroupID = 24
+		usage = grokMediaSlotUsage{bindings: bindings}
+		pricing = service.NewBillingService(cfg, nil)
+		resolver = service.NewModelPricingResolver(nil, pricing)
+		deferred = service.NewDeferredService(repo, nil, 0)
+	}
+	if len(platforms) > 1 && platforms[1] == service.HiAPISeedanceMiniModel {
+		bindings.hiAPI = &hiAPIVideoTestJobs{goodPutVideoTestJobs: &goodPutVideoTestJobs{}}
+		billingRepo = bindings.hiAPI
 		usage = grokMediaSlotUsage{bindings: bindings}
 		pricing = service.NewBillingService(cfg, nil)
 		resolver = service.NewModelPricingResolver(nil, pricing)

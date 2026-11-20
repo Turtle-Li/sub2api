@@ -21,34 +21,34 @@ import (
 
 type goodPutVideoTestJobs struct {
 	service.UsageBillingRepository
-	job        service.GoodPutVideoJob
+	job        service.DurableVideoJob
 	reserveErr error
 }
 
-func (r *goodPutVideoTestJobs) ReserveGoodPutVideoJob(_ context.Context, job service.GoodPutVideoJob, _ bool) error {
+func (r *goodPutVideoTestJobs) ReserveVideoJob(_ context.Context, job service.DurableVideoJob, _ bool) error {
 	if r.reserveErr != nil {
 		return r.reserveErr
 	}
 	r.job = job
 	return nil
 }
-func (r *goodPutVideoTestJobs) AttachGoodPutVideoReceipt(_ context.Context, id, publicID, nativeID string) error {
+func (r *goodPutVideoTestJobs) AttachVideoReceipt(_ context.Context, id, publicID, nativeID string) error {
 	if id != r.job.ID {
 		return errors.New("unexpected reservation id")
 	}
 	r.job.PublicID, r.job.NativeID = publicID, nativeID
 	return nil
 }
-func (r *goodPutVideoTestJobs) FindGoodPutVideoJob(_ context.Context, id string, userID, keyID, groupID int64) (*service.GoodPutVideoJob, error) {
+func (r *goodPutVideoTestJobs) FindVideoJob(_ context.Context, id string, userID, keyID, groupID int64) (*service.DurableVideoJob, error) {
 	if id == r.job.PublicID && userID == r.job.UserID && keyID == r.job.APIKeyID && groupID == r.job.GroupID {
 		return &r.job, nil
 	}
 	return nil, nil
 }
-func (*goodPutVideoTestJobs) ClaimGoodPutVideoJob(context.Context) (*service.GoodPutVideoJob, error) {
+func (*goodPutVideoTestJobs) ClaimVideoJob(context.Context) (*service.DurableVideoJob, error) {
 	return nil, nil
 }
-func (*goodPutVideoTestJobs) FinishGoodPutVideoJob(context.Context, string, string) (bool, error) {
+func (*goodPutVideoTestJobs) FinishVideoJob(context.Context, string, string) (bool, error) {
 	return true, nil
 }
 

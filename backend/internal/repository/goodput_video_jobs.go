@@ -8,9 +8,46 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-var _ service.GoodPutVideoJobRepository = (*usageBillingRepository)(nil)
+var _ service.DurableVideoJobRepository = (*usageBillingRepository)(nil)
 
-func (r *usageBillingRepository) ReserveGoodPutVideoJob(ctx context.Context, job service.GoodPutVideoJob, publicEnabled bool) error {
+type videoJobTable string
+
+const (
+	goodPutVideoTable videoJobTable = "goodput_video_jobs"
+	hiAPIVideoTable   videoJobTable = "hiapi_video_jobs"
+)
+
+type videoJobLedger struct {
+	*usageBillingRepository
+	table videoJobTable
+}
+
+func (r *usageBillingRepository) HiAPIVideoJobs() service.DurableVideoJobRepository {
+	return videoJobLedger{r, hiAPIVideoTable}
+}
+
+func (r *usageBillingRepository) ReserveVideoJob(ctx context.Context, job service.DurableVideoJob, publicEnabled bool) error {
+	job.Resolution = service.VideoBillingResolution720P
+	return videoJobLedger{r, goodPutVideoTable}.ReserveVideoJob(ctx, job, publicEnabled)
+}
+
+func (r *usageBillingRepository) AttachVideoReceipt(ctx context.Context, id, publicID, nativeID string) error {
+	return videoJobLedger{r, goodPutVideoTable}.AttachVideoReceipt(ctx, id, publicID, nativeID)
+}
+
+func (r *usageBillingRepository) FindVideoJob(ctx context.Context, publicID string, userID, keyID, groupID int64) (*service.DurableVideoJob, error) {
+	return videoJobLedger{r, goodPutVideoTable}.FindVideoJob(ctx, publicID, userID, keyID, groupID)
+}
+
+func (r *usageBillingRepository) ClaimVideoJob(ctx context.Context) (*service.DurableVideoJob, error) {
+	return videoJobLedger{r, goodPutVideoTable}.ClaimVideoJob(ctx)
+}
+
+func (r *usageBillingRepository) FinishVideoJob(ctx context.Context, id, state string) (bool, error) {
+	return videoJobLedger{r, goodPutVideoTable}.FinishVideoJob(ctx, id, state)
+}
+
+func (r videoJobLedger) ReserveVideoJob(ctx context.Context, job service.DurableVideoJob, publicEnabled bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -22,7 +59,7 @@ func (r *usageBillingRepository) ReserveGoodPutVideoJob(ctx context.Context, job
 	} else if err != nil {
 		return err
 	}
-	if !exclusive && !publicEnabled {
+	if !exclusive && (!publicEnabled || r.table == hiAPIVideoTable) {
 		return service.ErrGoodPutVideoGroup
 	}
 	// Wallet first, then API key, matching normal usage billing lock order.
@@ -50,40 +87,42 @@ func (r *usageBillingRepository) ReserveGoodPutVideoJob(ctx context.Context, job
 		return err
 	}
 	var pending bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM goodput_video_jobs WHERE api_key_id=$1 AND state IN ('submitting','pending','review'))`, job.APIKeyID).Scan(&pending); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM goodput_video_jobs WHERE api_key_id=$1 AND state IN ('submitting','pending','review')
+		UNION ALL SELECT 1 FROM hiapi_video_jobs WHERE api_key_id=$1 AND state IN ('submitting','pending','review'))`, job.APIKeyID).Scan(&pending); err != nil {
 		return err
 	}
 	if pending {
 		return service.ErrGoodPutVideoLimit
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO goodput_video_jobs
+	if _, err := tx.ExecContext(ctx, `INSERT INTO `+string(r.table)+`
 		(id,user_id,api_key_id,group_id,account_id,model,seconds,hold_amount,reference_amount,rate_multiplier,currency,
-		account_rate,account_quota_cost,account_quota_daily,account_quota_weekly,account_request_count,next_poll_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW()+INTERVAL '2 minutes')`, job.ID, job.UserID, job.APIKeyID, job.GroupID,
+		account_rate,account_quota_cost,account_quota_daily,account_quota_weekly,account_request_count,resolution,next_poll_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()+INTERVAL '2 minutes')`, job.ID, job.UserID, job.APIKeyID, job.GroupID,
 		job.AccountID, job.Model, job.Seconds, job.HoldAmount, job.ReferenceAmount, job.Multiplier, job.Currency, job.AccountRate, job.AccountQuotaCost,
-		job.AccountQuotaDaily, job.AccountQuotaWeekly, job.AccountRequestCount); err != nil {
+		job.AccountQuotaDaily, job.AccountQuotaWeekly, job.AccountRequestCount, job.Resolution); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (r *usageBillingRepository) AttachGoodPutVideoReceipt(ctx context.Context, id, publicID, nativeID string) error {
+func (r videoJobLedger) AttachVideoReceipt(ctx context.Context, id, publicID, nativeID string) error {
 	var attached string
-	return r.db.QueryRowContext(ctx, `UPDATE goodput_video_jobs SET public_id=$2,native_id=$3,
+	return r.db.QueryRowContext(ctx, `UPDATE `+string(r.table)+` SET public_id=$2,native_id=$3,
 		state=CASE WHEN native_id IS NULL THEN 'pending' ELSE state END,
 		next_poll_at=CASE WHEN native_id IS NULL THEN NOW() ELSE next_poll_at END
 		WHERE id=$1 AND ((native_id IS NULL AND state IN ('submitting','review')) OR (public_id=$2 AND native_id=$3)) RETURNING id`, id, publicID, nativeID).Scan(&attached)
 }
 
-const goodPutVideoJobColumns = `id,COALESCE(public_id,''),COALESCE(native_id,''),user_id,api_key_id,group_id,account_id,
+const durableVideoJobColumns = `id,COALESCE(public_id,''),COALESCE(native_id,''),user_id,api_key_id,group_id,account_id,
 	model,seconds,hold_amount,reference_amount,rate_multiplier,currency,account_rate,account_quota_cost,account_quota_daily,
-	account_quota_weekly,account_request_count,created_at`
+	account_quota_weekly,account_request_count,created_at,resolution,state`
 
-func scanGoodPutVideoJob(row *sql.Row) (*service.GoodPutVideoJob, error) {
-	var job service.GoodPutVideoJob
+func scanDurableVideoJob(row *sql.Row) (*service.DurableVideoJob, error) {
+	var job service.DurableVideoJob
 	err := row.Scan(&job.ID, &job.PublicID, &job.NativeID, &job.UserID, &job.APIKeyID, &job.GroupID, &job.AccountID,
 		&job.Model, &job.Seconds, &job.HoldAmount, &job.ReferenceAmount, &job.Multiplier, &job.Currency, &job.AccountRate, &job.AccountQuotaCost,
-		&job.AccountQuotaDaily, &job.AccountQuotaWeekly, &job.AccountRequestCount, &job.CreatedAt)
+		&job.AccountQuotaDaily, &job.AccountQuotaWeekly, &job.AccountRequestCount, &job.CreatedAt, &job.Resolution, &job.State)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -93,29 +132,29 @@ func scanGoodPutVideoJob(row *sql.Row) (*service.GoodPutVideoJob, error) {
 	return &job, nil
 }
 
-func (r *usageBillingRepository) FindGoodPutVideoJob(ctx context.Context, publicID string, userID, keyID, groupID int64) (*service.GoodPutVideoJob, error) {
-	return scanGoodPutVideoJob(r.db.QueryRowContext(ctx, `SELECT `+goodPutVideoJobColumns+` FROM goodput_video_jobs
+func (r videoJobLedger) FindVideoJob(ctx context.Context, publicID string, userID, keyID, groupID int64) (*service.DurableVideoJob, error) {
+	return scanDurableVideoJob(r.db.QueryRowContext(ctx, `SELECT `+durableVideoJobColumns+` FROM `+string(r.table)+`
 		WHERE public_id=$1 AND user_id=$2 AND api_key_id=$3 AND group_id=$4 AND created_at > NOW() - INTERVAL '24 hours'`, publicID, userID, keyID, groupID))
 }
 
-func (r *usageBillingRepository) ClaimGoodPutVideoJob(ctx context.Context) (*service.GoodPutVideoJob, error) {
-	return scanGoodPutVideoJob(r.db.QueryRowContext(ctx, `UPDATE goodput_video_jobs SET next_poll_at=NOW()+INTERVAL '20 seconds',
+func (r videoJobLedger) ClaimVideoJob(ctx context.Context) (*service.DurableVideoJob, error) {
+	return scanDurableVideoJob(r.db.QueryRowContext(ctx, `UPDATE `+string(r.table)+` SET next_poll_at=NOW()+INTERVAL '20 seconds',
 		state=CASE WHEN state='submitting' THEN 'review' ELSE state END
-		WHERE id=(SELECT id FROM goodput_video_jobs WHERE state IN ('submitting','pending') AND next_poll_at <= NOW()
-		ORDER BY next_poll_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING `+goodPutVideoJobColumns))
+		WHERE id=(SELECT id FROM `+string(r.table)+` WHERE state IN ('submitting','pending') AND next_poll_at <= NOW()
+		ORDER BY next_poll_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING `+durableVideoJobColumns))
 }
 
-func (r *usageBillingRepository) FinishGoodPutVideoJob(ctx context.Context, id, state string) (bool, error) {
+func (r videoJobLedger) FinishVideoJob(ctx context.Context, id, state string) (bool, error) {
 	if state != "completed" && state != "failed" && state != "review" {
-		return false, errors.New("invalid GoodPut settlement state")
+		return false, errors.New("invalid video settlement state")
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	job, err := scanGoodPutVideoJob(tx.QueryRowContext(ctx, `UPDATE goodput_video_jobs SET state=$2
-		WHERE id=$1 AND (state='pending' OR (state='submitting' AND $2='failed')) RETURNING `+goodPutVideoJobColumns, id, state))
+	job, err := scanDurableVideoJob(tx.QueryRowContext(ctx, `UPDATE `+string(r.table)+` SET state=$2
+		WHERE id=$1 AND (state='pending' OR (state='submitting' AND $2='failed')) RETURNING `+durableVideoJobColumns, id, state))
 	if err != nil || job == nil {
 		return false, err
 	}
@@ -130,7 +169,7 @@ func (r *usageBillingRepository) FinishGoodPutVideoJob(ctx context.Context, id, 
 			return false, err
 		}
 		if state == "completed" {
-			if err := r.recordGoodPutVideoSettlement(ctx, tx, *job); err != nil {
+			if err := r.recordVideoSettlement(ctx, tx, *job); err != nil {
 				return false, err
 			}
 		}
@@ -141,7 +180,7 @@ func (r *usageBillingRepository) FinishGoodPutVideoJob(ctx context.Context, id, 
 	return true, nil
 }
 
-func (r *usageBillingRepository) recordGoodPutVideoSettlement(ctx context.Context, tx *sql.Tx, job service.GoodPutVideoJob) error {
+func (r videoJobLedger) recordVideoSettlement(ctx context.Context, tx *sql.Tx, job service.DurableVideoJob) error {
 	cmd := &service.UsageBillingCommand{UserID: job.UserID, APIKeyID: job.APIKeyID, AccountID: job.AccountID,
 		AccountType: service.AccountTypeAPIKey, AccountQuotaCost: job.AccountQuotaCost,
 		AccountQuotaHasDailyLimit: job.AccountQuotaDaily, AccountQuotaHasWeeklyLimit: job.AccountQuotaWeekly,
@@ -161,16 +200,19 @@ func (r *usageBillingRepository) recordGoodPutVideoSettlement(ctx context.Contex
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, &service.UsageBillingApplyResult{}); err != nil {
 		return err
 	}
-	resolution, mode, endpoint, media := service.VideoBillingResolution720P, string(service.BillingModeVideo), "/v1/videos", "video"
+	mode, inbound, upstream, media := string(service.BillingModeVideo), "/v1/videos", "/v1/videos", "video"
+	if r.table == hiAPIVideoTable {
+		upstream = "/v1/tasks"
+	}
 	log := &service.UsageLog{UserID: job.UserID, APIKeyID: job.APIKeyID, AccountID: job.AccountID, GroupID: &job.GroupID,
 		RequestID: service.StableGrokVideoBillingRequestID(job.PublicID), Model: job.Model, RequestedModel: job.Model,
 		UpstreamModel: &job.Model, Currency: job.Currency, TotalCost: job.ReferenceAmount, ActualCost: job.HoldAmount,
 		RateMultiplier: job.Multiplier, AccountRateMultiplier: &job.AccountRate, BillingType: service.BillingTypeBalance, BillingMode: &mode,
-		RequestType: service.RequestTypeSync, VideoCount: 1, VideoResolution: &resolution, VideoDurationSeconds: &job.Seconds,
-		InboundEndpoint: &endpoint, UpstreamEndpoint: &endpoint, MediaType: &media}
+		RequestType: service.RequestTypeSync, VideoCount: 1, VideoResolution: &job.Resolution, VideoDurationSeconds: &job.Seconds,
+		InboundEndpoint: &inbound, UpstreamEndpoint: &upstream, MediaType: &media}
 	inserted, err := (&usageLogRepository{}).createSingle(ctx, tx, log)
 	if err == nil && !inserted {
-		return errors.New("GoodPut video usage row already exists before settlement")
+		return errors.New("video usage row already exists before settlement")
 	}
 	return err
 }

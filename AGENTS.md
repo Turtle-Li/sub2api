@@ -70,6 +70,13 @@
   background settlement and the verified cost ceiling. Never replay an
   ambiguous paid request.
 
+## HiAPI Seedance video
+
+- Read `docs/hiapi-seedance-video.md` before changing routing, scope or billing.
+  Keep the exact Mini model and exclusive wallet group isolated from Ark and
+  H3. Settle successful tasks independently of reads and never replay an
+  uncertain paid submission. Drain HiAPI holds before rollback.
+
 ## Image Studio integration
 
 - For group-based image administration, read
