@@ -143,6 +143,7 @@ docs/*
 !docs/agent-resource-safety.md
 !docs/moego-json-batching.md
 !docs/admin-api-keys.md
+!docs/goodput-h3-video.md
 !docs/mcp.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md

@@ -2013,3 +2013,43 @@ func (r *stubUserSubscriptionRepo) IncrementUsage(ctx context.Context, id int64,
 func (r *stubUserSubscriptionRepo) BatchUpdateExpiredStatus(ctx context.Context) (int64, error) {
 	return 0, errors.New("not implemented")
 }
+
+func TestGoodPutVideoReadsStayBoundToAValidKeyAndDedicatedGroup(t *testing.T) {
+	const path = "/v1/videos/gpv_1234567890abcdef1234567890abcdef/content"
+	group := service.Group{ID: 27, Platform: service.PlatformOpenAI, Status: service.StatusActive,
+		Hydrated: true, IsExclusive: true, SubscriptionType: service.SubscriptionTypeStandard,
+		ModelAllowlist: service.GroupModelAllowlist{Enabled: true, Models: []string{service.GoodPutH3Model}}}
+	repo := &stubApiKeyRepo{getByKey: func(_ context.Context, credential string) (*service.APIKey, error) {
+		status := service.StatusAPIKeyQuotaExhausted
+		g := group
+		user := &service.User{ID: 7, Status: service.StatusActive, AllowedGroups: []int64{group.ID}}
+		switch credential {
+		case "other-group":
+			g.ModelAllowlist.Models = []string{service.MuseVideoModel}
+		case "expired":
+			status = service.StatusAPIKeyExpired
+		case "revoked-group":
+			user.AllowedGroups = nil
+		}
+		return &service.APIKey{ID: 100, UserID: 7, Key: credential, Status: status, Group: &g, GroupID: &g.ID, User: user}, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	router := gin.New()
+	auth := gin.HandlerFunc(NewAPIKeyAuthMiddleware(service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg), nil, cfg))
+	router.GET("/v1/videos/:request_id/content", auth, func(c *gin.Context) { c.Status(http.StatusOK) })
+	for _, tc := range []struct {
+		key    string
+		status int
+	}{
+		{"owner", http.StatusOK},
+		{"other-group", http.StatusTooManyRequests},
+		{"expired", http.StatusForbidden},
+		{"revoked-group", http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+tc.key)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, tc.status, w.Code, "%s: %s", tc.key, w.Body.String())
+	}
+}

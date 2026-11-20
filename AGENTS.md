@@ -62,6 +62,13 @@
   contract, exact mapping, one-reference limit, resumable receipt and billing rules.
   Reuse the original sequential batch lifecycle; never retry an ambiguous POST.
 
+## GoodPut H3 video
+
+- Read `docs/goodput-h3-video.md` before changing the H3 adapter or
+  provisioning a GoodPut account. Use a dedicated exclusive pilot group, exact
+  model IDs, same-key task ownership, and a verified cost ceiling. Do not
+  publish the group or replay an ambiguous paid request.
+
 ## Image Studio integration
 
 - For group-based image administration, read

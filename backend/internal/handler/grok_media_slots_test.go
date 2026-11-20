@@ -125,6 +125,17 @@ type grokMediaSlotBindings struct {
 	key     string
 	billed  map[string]bool
 	pending map[string][]byte
+	usage   []*service.UsageLog
+}
+
+type grokMediaSlotUsage struct {
+	service.UsageLogRepository
+	bindings *grokMediaSlotBindings
+}
+
+func (r grokMediaSlotUsage) Create(_ context.Context, entry *service.UsageLog) (bool, error) {
+	r.bindings.usage = append(r.bindings.usage, entry)
+	return true, nil
 }
 
 func (s *grokMediaSlotBindings) SetGrokVideoPendingBilling(_ context.Context, key string, body []byte, _ time.Duration) error {
@@ -210,6 +221,10 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 			accounts[i].Platform = platforms[0]
 			accounts[i].Credentials["base_url"] = "https://ark.cn-beijing.volces.com/api/v3"
 			accounts[i].Credentials["openai_capabilities"] = []string{"seedance"}
+			if len(platforms) > 1 && service.IsGoodPutVideoModel(platforms[1]) {
+				accounts[i].Credentials["base_url"] = "https://api.goodputai.cn/v1"
+				accounts[i].Credentials["model_mapping"] = map[string]any{platforms[1]: platforms[1]}
+			}
 			if len(platforms) > 1 && (platforms[1] == service.MuseVideoModel || platforms[1] == service.MuseImageModel) {
 				accounts[i].Credentials["base_url"] = "https://muse.example/v1"
 				accounts[i].Credentials["model_mapping"] = map[string]any{platforms[1]: platforms[1]}
@@ -238,7 +253,17 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 		_, err := provider.GetAccessToken(context.Background(), &accounts[1])
 		require.NoError(t, err)
 	}
-	gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, bindings, cfg, nil, concurrency, nil, nil, nil, upstream, nil, nil, provider, nil, nil, nil, nil, nil)
+	var usage service.UsageLogRepository
+	var pricing *service.BillingService
+	var resolver *service.ModelPricingResolver
+	var deferred *service.DeferredService
+	if len(platforms) > 1 && service.IsGoodPutVideoModel(platforms[1]) {
+		usage = grokMediaSlotUsage{bindings: bindings}
+		pricing = service.NewBillingService(cfg, nil)
+		resolver = service.NewModelPricingResolver(nil, pricing)
+		deferred = service.NewDeferredService(repo, nil, 0)
+	}
+	gateway := service.NewOpenAIGatewayService(repo, usage, nil, nil, nil, nil, bindings, cfg, nil, concurrency, pricing, nil, nil, upstream, deferred, nil, provider, resolver, nil, nil, nil, nil)
 	groupID := int64(24)
 	require.NoError(t, gateway.BindGrokMediaVideoRequestAccount(context.Background(), &groupID, "task", 10, 20, 1))
 	bindings.writes = 0

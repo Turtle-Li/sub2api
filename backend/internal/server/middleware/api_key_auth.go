@@ -182,15 +182,15 @@ func admitLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService api
 	c.Request = c.Request.WithContext(ctx)
 	billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
 	// A completed task can consume the last of the key's quota or balance.
-	// Reads still require an authenticated, bound key; expired Muse keys stay denied.
-	museVideoRead := isMuseVideoTaskRead(c, apiKey)
+	// Reads still require an authenticated, bound key; expired keys stay denied.
+	boundVideoRead := isBoundOpenAIVideoTaskRead(c, apiKey)
 	museImageRead := isMuseImageTaskRead(c)
-	if (museVideoRead || museImageRead) && (apiKey.Status == service.StatusAPIKeyExpired || apiKey.IsExpired()) {
+	if (boundVideoRead || museImageRead) && (apiKey.Status == service.StatusAPIKeyExpired || apiKey.IsExpired()) {
 		AbortWithError(c, 403, "API_KEY_EXPIRED", "API key 已过期")
 		return
 	}
 	skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest ||
-		isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) || museVideoRead
+		isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) || boundVideoRead
 
 	// ── 4. SimpleMode → early return ─────────────────────────────
 
@@ -431,7 +431,7 @@ func isAsyncImageTaskRead(method, path string) bool {
 	return strings.HasPrefix(path, "/v1/images/tasks/") || strings.HasPrefix(path, "/images/tasks/")
 }
 
-func isMuseVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
+func isBoundOpenAIVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
 	if c.Request.Method != http.MethodGet || key.Group == nil || key.Group.Platform != service.PlatformOpenAI || key.Group.IsSubscriptionType() {
 		return false
 	}
@@ -440,7 +440,8 @@ func isMuseVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
 		"/v1/videos/generations/:request_id", "/v1/videos/generations/:request_id/content",
 		"/videos/:request_id", "/videos/:request_id/content",
 		"/videos/generations/:request_id", "/videos/generations/:request_id/content":
-		return service.IsMuseVideoTaskID(c.Param("request_id"))
+		id := c.Param("request_id")
+		return service.IsMuseVideoTaskID(id) || (service.IsGoodPutVideoGroup(key.Group) && service.IsGoodPutVideoTaskID(id))
 	default:
 		return false
 	}
