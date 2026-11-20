@@ -80,7 +80,7 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 		fillGlobalPricingFallback(s.pricingService, supported)
 		s.populateMinimalProbeMetadata(supported, time.Now())
 		snapshot := ch.gptDisplayModelsByGroup()
-		claudeSnapshot := ch.displayModelsByGroup(featureKeyClaudeDisplayModels)
+		platformSnapshots := ch.platformDisplaySnapshots()
 
 		groups := make([]AvailableGroupRef, 0, len(ch.GroupIDs))
 		var additional, display map[int64][]SupportedModel
@@ -102,7 +102,7 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 				PeakRateMultiplier: g.PeakRateMultiplier,
 				IsExclusive:        g.IsExclusive,
 			})
-			if models := s.modelCatalog.projectClaudeDisplay(ch, g, supported, claudeSnapshot[gid]); models != nil {
+			if models := s.modelCatalog.projectGroupDisplay(ch, g, supported, platformSnapshots); models != nil {
 				if display == nil {
 					display = make(map[int64][]SupportedModel)
 				}

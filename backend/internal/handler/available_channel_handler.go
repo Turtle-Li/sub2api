@@ -220,22 +220,22 @@ func buildPlatformSections(
 		groupsByPlatform[g.Platform] = append(groupsByPlatform[g.Platform], g)
 	}
 
-	if len(compositeGroups) > 0 {
-		modelPlatforms := make(map[string]struct{}, len(ch.SupportedModels))
-		for i := range ch.SupportedModels {
-			if platform := ch.SupportedModels[i].Platform; platform != "" {
-				modelPlatforms[platform] = struct{}{}
+	for _, g := range compositeGroups {
+		models, synced := ch.DisplayModelsByGroup[g.ID]
+		if !synced {
+			models = ch.SupportedModels
+		}
+		modelPlatforms := make(map[string]struct{})
+		for _, model := range models {
+			if model.Platform != "" {
+				modelPlatforms[model.Platform] = struct{}{}
 			}
 		}
 		if len(modelPlatforms) == 0 {
-			groupsByPlatform[service.PlatformComposite] = append(
-				groupsByPlatform[service.PlatformComposite],
-				compositeGroups...,
-			)
-		} else {
-			for platform := range modelPlatforms {
-				groupsByPlatform[platform] = append(groupsByPlatform[platform], compositeGroups...)
-			}
+			modelPlatforms[service.PlatformComposite] = struct{}{}
+		}
+		for platform := range modelPlatforms {
+			groupsByPlatform[platform] = append(groupsByPlatform[platform], g)
 		}
 	}
 	if len(groupsByPlatform) == 0 {

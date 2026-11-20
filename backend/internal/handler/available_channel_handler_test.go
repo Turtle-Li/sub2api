@@ -252,6 +252,18 @@ func TestBuildPlatformSections_ClaudeSnapshotReplacesManualModelsForVisibleGroup
 	}
 }
 
+func TestBuildPlatformSections_CompositeUsesOnlyVisibleGroupSnapshots(t *testing.T) {
+	ch := service.AvailableChannel{DisplayModelsByGroup: map[int64][]service.SupportedModel{
+		1: {{Name: "kimi-k3", Platform: service.PlatformKimi}},
+		2: {{Name: "private-glm", Platform: service.PlatformZhipu}},
+	}}
+	sections := buildPlatformSections(ch, []userAvailableGroup{{ID: 1, Platform: service.PlatformComposite}})
+	require.Len(t, sections, 1)
+	require.Equal(t, service.PlatformKimi, sections[0].Platform)
+	require.Len(t, sections[0].SupportedModels, 1)
+	require.Equal(t, "kimi-k3", sections[0].SupportedModels[0].Name)
+}
+
 func TestBuildPlatformSections_CompositeGroupExpandsAcrossConfiguredModelPlatforms(t *testing.T) {
 	anthropicPrice := 3e-6
 	openAIPrice := 2.5e-6

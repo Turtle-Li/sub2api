@@ -1,4 +1,4 @@
-# Manual GPT and Claude display model sync
+# Channel display sync and the group account model picker
 
 ## Pinned upstream and local contract
 
@@ -13,6 +13,70 @@ Keep the upstream union of mapping/price entries, platform filtering, tier
 display, existing LGPL notices and direct integration history. Upstream's
 pricing-catalog sync still imports pricing model names; this feature previews
 group account model names for display only. Neither replaces billing.
+
+## Current workflow (all registered platforms)
+
+- **Channel pricing → Edit → platform → 从分组账号同步 (Sync from group accounts)**
+  previews additions and removals for each selected active group. This includes
+  manual display aliases and pricing-only rows. Only **Save** publishes the
+  result. Closing the editor discards it; editing its inputs invalidates it.
+  This is separate from importing prices. There is no timer, provider probe,
+  production config migration or account discovery during public catalog reads.
+- Discovery uses only the accounts bound to that group which meet its platform,
+  privacy and account requirements. Paused, unschedulable, auto-expired and
+  paid-reserve accounts are excluded; temporary rate limits are not removals.
+  Enumerate concrete request-side names from account mappings or a finite native
+  catalog for the bound account type. For a cross-provider binding, the model
+  **after account mapping** must belong to the target family. For example, if a
+  WorkBuddy account lists Kimi, GLM and MiniMax, its GLM group suggests only its
+  GLM names. `fast → cn:kimi-k3` is offered in a Kimi group as `fast`, not as
+  the internal target. To hand-pick several vendors from that same account, use
+  a **WorkBuddy** group and select the desired names in its model allowlist.
+- Reconcile against current account names, channel entries and exact group
+  allowlist entries. A wildcard may admit a known name but is not a model ID
+  and is never expanded against an unrelated vendor catalog. Previously saved
+  names alone are not evidence. Respect group allowlists, channel mappings and
+  hidden names, GPT image admission and Muse's media-only policy. Native GPT
+  additions still require a declared identity and a known price for inferred
+  text; group image prices remain independent. No mappings, prices, bindings,
+  monitor settings or routing rules are written by sync.
+- Restricted channels are not synced. Skip OpenAI groups pinned to an upstream
+  catalog. On a composite group, each platform has its own list; unsynced tabs
+  keep their manual rows. Available Channels only projects groups visible to
+  the requesting user. A failure reading any group cancels the whole preview.
+- **Groups → Edit → Model allowlist (模型白名单)** lists candidates from the same
+  bound accounts without filtering them through the *old* allowlist. Previously
+  saved entries remain visible and selected, with non-catalog names marked. Use
+  **仅选账号模型 (Select account models only)** and save to replace them, or keep
+  intentional manual aliases/wildcards. No accounts / no enumerable names means
+  no suggested defaults; a new group can be saved first and populated after
+  binding accounts. This does not change the monitor's `available_only` selector
+  or the gateway's allowlist enforcement.
+
+**Persistence and rollback.** The generic admin preview is
+`POST /admin/channels/display-models/preview?platform=<id>`. Saving an edit
+passes `display_model_updates` grouped by platform then group ID. The server
+merges just the reviewed groups into the channel's stored features: `{}` is
+no patch, `{ "12": [] }` is a reviewed empty list that hides even manual rows.
+Skipped, detached and unrelated groups are not erased; saved entries do not
+publish an unlinked or inactive group. Existing admin clients can still replace
+an entire snapshot through `features_config`; to undo, restore that snapshot or
+remove the group entry to resume manual display. Claude reuses
+`claude_display_models_by_group`; other tabs use `<platform>_account_display_models_by_group`.
+An untouched `gpt_display_models_by_group` remains an additive legacy supplement
+until a full OpenAI snapshot exists for that group. The old GPT and Claude
+preview endpoints remain compatible. An older binary ignores the new platform
+keys; no data or schema rollback is required.
+
+Reference for group admission: Wei-Shaw/sub2api v0.2.2
+`5485f368b29d05adb95a00f71801c7c23d8f48af`,
+`backend/internal/service/group_model_allowlist{,_test}.go` (LGPL-3.0).
+The local editor intentionally does **not** seed platform-wide defaults. See
+`docs/operations/WORKBUDDY_PLATFORM_20261101.md` and
+`docs/operations/MULTI_MODEL_ACCOUNT_GROUPS_20261009.md` for the forwarding
+contracts the catalog consumes without changing.
+
+## Historical GPT supplement (older admin endpoint)
 
 - In **Channel pricing → Edit → OpenAI**, click **Sync GPT display models**.
   The administrator sees additions and removals by group before saving the
@@ -48,7 +112,7 @@ Discovery performs one local account lookup per eligible group per admin
 preview. No account lookup is added to public catalog reads. The earlier
 unpublished automatic option has no effect.
 
-## Claude group reconciliation
+## Historical Claude-only editor (storage still supported)
 
 **Channel pricing → Edit → Anthropic → Sync Claude display models** previews both
 additions and removals for the currently selected, active Anthropic groups.
@@ -78,7 +142,7 @@ an empty **object** (not an empty group array) to revert to the manual list.
 
 ## Initial production observation and bounded change
 
-On the current production configuration, `OpenAI 广场展示` is a display-only
+At the time of the initial observation, `OpenAI 广场展示` was a display-only
 channel with four linked GPT groups, no channel price overrides and no model
 restriction. A currently schedulable account bound to all four groups already
 declares `gpt-6.2-sol` and `gpt-6.2-astra`. This is configuration evidence, not

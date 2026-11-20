@@ -141,11 +141,18 @@ func existingGPTDisplayNames(manual []SupportedModel) map[string]struct{} {
 }
 
 func (s *ChannelModelCatalog) displayModel(ch *Channel, group *Group, seen map[string]struct{}, name string) (SupportedModel, bool) {
-	if _, exists := seen[name]; exists || !isConcreteGPTCatalogID(name) ||
-		!group.ModelAllowlist.Allows(name) || ch.IsModelHiddenFromPlaza(name) || channelRewritesCatalogModel(ch, name) {
+	if _, exists := seen[name]; exists {
 		return SupportedModel{}, false
 	}
 	seen[name] = struct{}{}
+	return s.inferredGPTModel(ch, group, name)
+}
+
+func (s *ChannelModelCatalog) inferredGPTModel(ch *Channel, group *Group, name string) (SupportedModel, bool) {
+	if !isConcreteGPTCatalogID(name) ||
+		!group.ModelAllowlist.Allows(name) || ch.IsModelHiddenFromPlaza(name) || channelRewritesCatalogModel(ch, name) {
+		return SupportedModel{}, false
+	}
 	model := SupportedModel{Name: name, Platform: PlatformOpenAI}
 	if IsGPTImageGenerationModel(name) {
 		// Per-image prices are group-specific; only the plaza quotes them.
@@ -189,7 +196,7 @@ func (s *ChannelModelCatalog) textDisplayPrice(ch *Channel, platform, name strin
 			continue
 		}
 		for _, pattern := range card.Models {
-			if matchWildcard(strings.ToLower(pattern), name) && !pricingNeedsFallback(card) {
+			if matchWildcard(strings.ToLower(pattern), strings.ToLower(name)) && !pricingNeedsFallback(card) {
 				cp := card.Clone()
 				return &cp
 			}

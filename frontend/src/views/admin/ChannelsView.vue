@@ -334,9 +334,9 @@
             <div v-if="section.platform === activeTab && displayPreview" class="space-y-2 border-t border-gray-200 pt-3 dark:border-dark-600">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0 flex-1 basis-56">
-                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ t(displayPreview.label('Models')) }}</p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ t('admin.channels.form.accountDisplayModels') }}</p>
                   <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-                    {{ t(form.restrict_models ? displayPreview.label('Restricted') : displayPreview.label('Hint')) }}
+                    {{ t(form.restrict_models ? 'admin.channels.form.accountDisplayRestricted' : 'admin.channels.form.accountDisplayHint') }}
                   </p>
                 </div>
                 <button
@@ -346,7 +346,7 @@
                   :aria-busy="displayPreview.loading"
                   @click="displayPreview.load"
                 >
-                  {{ t(displayPreview.loading ? 'admin.channels.form.gptDisplaySyncing' : displayPreview.label('Sync')) }}
+                  {{ t(displayPreview.loading ? 'admin.channels.form.gptDisplaySyncing' : 'admin.channels.form.accountDisplaySync') }}
                 </button>
               </div>
               <p v-if="displayPreview.error" role="alert" class="text-xs text-red-700 dark:text-red-300">{{ displayPreview.error }}</p>
@@ -354,7 +354,7 @@
                 {{ t('admin.channels.form.gptDisplayStale') }}
               </p>
               <p v-else-if="displayPreview.ready && !displayPreview.changes.length" role="status" class="text-xs text-gray-600 dark:text-gray-300">
-                {{ t(displayPreview.label('Unchanged')) }}
+                {{ t(displayPreview.models ? 'admin.channels.form.accountDisplayUnchanged' : 'admin.channels.form.accountDisplayNoGroups') }}
               </p>
               <details v-else-if="displayPreview.changes.length" open class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-dark-800">
                 <summary class="cursor-pointer font-medium text-gray-900 dark:text-gray-100">
@@ -675,12 +675,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, shallowReactive, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
-import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule, DisplayModelsByGroup, DisplayPreviewRequest, DisplayPreviewResponse } from '@/api/admin/channels'
+import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule, DisplayModelsByGroup, DisplayPreviewRequest } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
 import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formReasoningEffortMultipliersToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, normalizePricingCurrency, perTokenToMTok, validateIntervals, validateReasoningEffortMultipliers, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
@@ -825,26 +825,13 @@ const form = reactive({
 })
 
 const gptDisplayFeature = 'gpt_display_models_by_group'
-const claudeDisplayFeature = 'claude_display_models_by_group'
 const plazaHiddenModels = computed(() => [...new Set(form.plaza_hidden_models.split(/[\s,，]+/).filter(Boolean))])
 
-type DisplayPreviewOptions = {
-  platform: 'openai' | 'anthropic'
-  feature: string
-  prefix: 'gptDisplay' | 'claudeDisplay'
-  request: (input: DisplayPreviewRequest, signal: AbortSignal) => Promise<DisplayPreviewResponse>
+function platformDisplayFeature(platform: string) {
+  return platform === 'anthropic' ? 'claude_display_models_by_group' : `${platform}_account_display_models_by_group`
 }
 
-function readSavedDisplayModels(value: unknown): DisplayModelsByGroup {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  return Object.fromEntries(Object.entries(value).flatMap(([id, names]) =>
-    /^\d+$/.test(id) && Array.isArray(names)
-      ? [[id, names.filter((name: unknown): name is string => typeof name === 'string')]]
-      : []
-  ))
-}
-
-function createDisplayPreview({ platform, feature, prefix, request }: DisplayPreviewOptions) {
+function createDisplayPreview(platform: string) {
   const preview = shallowRef<{ signature: string; models: DisplayModelsByGroup; previous: DisplayModelsByGroup } | null>(null)
   const inFlight = shallowRef<AbortController | null>(null)
   const loading = computed(() => inFlight.value !== null)
@@ -854,7 +841,8 @@ function createDisplayPreview({ platform, feature, prefix, request }: DisplayPre
     const { model_mapping, model_pricing } = formToAPI()
     return {
       group_ids: [...(section?.group_ids ?? [])].sort((a, b) => a - b),
-      model_mapping: { [platform]: model_mapping[platform] ?? {} },
+      model_mapping: allGroups.value.some(g => g.platform === 'composite' && section?.group_ids.includes(g.id))
+        ? model_mapping : { [platform]: model_mapping[platform] ?? {} },
       model_pricing: model_pricing.filter(price => price.platform === platform),
       restrict_models: form.restrict_models,
       hidden_models: plazaHiddenModels.value
@@ -863,7 +851,6 @@ function createDisplayPreview({ platform, feature, prefix, request }: DisplayPre
   const signature = computed(() => JSON.stringify(input.value))
   const stale = computed(() => preview.value !== null && preview.value.signature !== signature.value)
   const ready = computed(() => preview.value !== null && !stale.value)
-  const label = (suffix: string) => `admin.channels.form.${prefix}${suffix}`
 
   const changes = computed(() => {
     if (!preview.value || stale.value) return []
@@ -897,38 +884,36 @@ function createDisplayPreview({ platform, feature, prefix, request }: DisplayPre
     const requestedSignature = signature.value
     inFlight.value = controller
     try {
-      const result = await request(input.value, controller.signal)
+      const result = await adminAPI.channels.previewPlatformDisplayModels(platform, { ...input.value, channel_id: editingChannel.value?.id }, controller.signal)
       if (!controller.signal.aborted) {
         preview.value = {
           signature: requestedSignature,
           models: result.models_by_group,
-          previous: result.previous_models_by_group ?? readSavedDisplayModels(editingChannel.value?.features_config?.[feature])
+          previous: result.previous_models_by_group
         }
       }
     } catch (cause: unknown) {
-      if (!controller.signal.aborted) error.value = extractApiErrorMessage(cause, t(label('Error')))
+      if (!controller.signal.aborted) error.value = extractApiErrorMessage(cause, t('admin.channels.form.accountDisplayError'))
     } finally {
       if (inFlight.value === controller) inFlight.value = null
     }
   }
 
-  return reactive({ feature, label, loading, ready, stale, error, changes, totals, models: computed(() => ready.value ? preview.value?.models : undefined), load, clear })
+  const models = computed(() => ready.value && preview.value && Object.keys(preview.value.models).length ? preview.value.models : undefined)
+  return reactive({ loading, ready, stale, error, changes, totals, models, load, clear })
 }
 
-const displayPreviews = {
-  openai: createDisplayPreview({
-    platform: 'openai', feature: gptDisplayFeature, prefix: 'gptDisplay',
-    request: (input, signal) => adminAPI.channels.previewGPTDisplayModels(input, signal)
-  }),
-  anthropic: createDisplayPreview({
-    platform: 'anthropic', feature: claudeDisplayFeature, prefix: 'claudeDisplay',
-    request: (input, signal) => adminAPI.channels.previewClaudeDisplayModels({ ...input, channel_id: editingChannel.value?.id }, signal)
-  })
-}
-const displayPreview = computed(() => {
-  const platform = activeTab.value
-  return platform === 'openai' || platform === 'anthropic' ? displayPreviews[platform] : null
-})
+const displayPreviews = shallowReactive<Record<string, ReturnType<typeof createDisplayPreview>>>({})
+watch(listPlatformIds, platforms => {
+  for (const platform of platforms) displayPreviews[platform] ??= createDisplayPreview(platform)
+  for (const platform of Object.keys(displayPreviews)) {
+    if (!platforms.includes(platform)) {
+      displayPreviews[platform].clear()
+      delete displayPreviews[platform]
+    }
+  }
+}, { immediate: true })
+const displayPreview = computed(() => displayPreviews[activeTab.value])
 const displayPreviewLoading = computed(() => Object.values(displayPreviews).some(preview => preview.loading))
 
 function clearDisplayPreviews() {
@@ -1299,7 +1284,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     ? { ...editingChannel.value.features_config }
     : {}
   delete featuresConfig[gptDisplayFeature]
-  delete featuresConfig[claudeDisplayFeature]
+  for (const platform of listPlatformIds()) delete featuresConfig[platformDisplayFeature(platform)]
 
   for (const section of form.platforms) {
     if (!section.enabled) continue
@@ -1797,14 +1782,16 @@ async function handleSubmit() {
   }
 
   const { group_ids, model_pricing, model_mapping, features_config } = formToAPI()
-  for (const preview of Object.values(displayPreviews)) {
-    if (preview.models) features_config[preview.feature] = preview.models
+  const displayUpdates: Record<string, DisplayModelsByGroup> = {}
+  for (const [platform, preview] of Object.entries(displayPreviews)) {
+    if (preview.models) displayUpdates[platform] = preview.models
   }
 
   submitting.value = true
   try {
     if (editingChannel.value) {
       const req: UpdateChannelRequest = {
+        ...(Object.keys(displayUpdates).length ? { display_model_updates: displayUpdates } : {}),
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         status: form.status,
@@ -1820,6 +1807,7 @@ async function handleSubmit() {
       await adminAPI.channels.update(editingChannel.value.id, req)
       appStore.showSuccess(t('admin.channels.updateSuccess', 'Channel updated'))
     } else {
+      for (const [platform, models] of Object.entries(displayUpdates)) features_config[platformDisplayFeature(platform)] = models
       const req: CreateChannelRequest = {
         name: form.name.trim(),
         description: form.description.trim() || undefined,

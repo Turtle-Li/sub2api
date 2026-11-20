@@ -184,7 +184,7 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		supported := ch.SupportedModels()
 		fillGlobalPricingFallback(s.pricingService, supported)
 		snapshot := ch.gptDisplayModelsByGroup()
-		claudeSnapshot := ch.displayModelsByGroup(featureKeyClaudeDisplayModels)
+		platformSnapshots := ch.platformDisplaySnapshots()
 
 		for _, gid := range ch.GroupIDs {
 			pg, ok := byGroup[gid]
@@ -197,8 +197,8 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 				modelIdx[gid] = idx
 			}
 			models := supported
-			if claude := s.modelCatalog.projectClaudeDisplay(ch, groupEnt[gid], supported, claudeSnapshot[gid]); claude != nil {
-				models = claude
+			if synced := s.modelCatalog.projectGroupDisplay(ch, groupEnt[gid], supported, platformSnapshots); synced != nil {
+				models = synced
 			} else if extra := s.modelCatalog.savedModels(ch, groupEnt[gid], supported, snapshot[gid]); len(extra) > 0 {
 				models = slices.Concat(supported, extra)
 			}
