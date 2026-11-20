@@ -568,7 +568,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		if endpoint.IsGoodPutVideo() {
 			h.forwardGoodPutVideo(requestCtx, c, goodPutVideoDispatch{
-				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending, durable: goodPutJob != nil,
+				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending, job: goodPutJob,
 				account: account, key: apiKey, subject: subject, log: reqLog,
 			})
 			return

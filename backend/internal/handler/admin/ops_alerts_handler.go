@@ -25,6 +25,7 @@ var validOpsAlertMetricTypes = []string{
 	"bandwidth_utilization",
 	"network_bandwidth_utilization_percent",
 	"concurrency_queue_depth",
+	service.OpsAlertMetricGoodPutVideoIncident,
 	"group_available_accounts",
 	"group_available_ratio",
 	"group_rate_limit_ratio",
@@ -207,7 +208,14 @@ func validateOpsAlertRulePayload(raw map[string]json.RawMessage) (*opsAlertRuleV
 		}
 		switch validated.WindowMinutes {
 		case 1, 5, 60:
+		case 15:
+			if metricType != service.OpsAlertMetricGoodPutVideoIncident {
+				return nil, fmt.Errorf("window_minutes must be one of: 1, 5, 60")
+			}
 		default:
+			if metricType == service.OpsAlertMetricGoodPutVideoIncident {
+				return nil, fmt.Errorf("window_minutes must be one of: 1, 5, 15, 60")
+			}
 			return nil, fmt.Errorf("window_minutes must be one of: 1, 5, 60")
 		}
 	} else {

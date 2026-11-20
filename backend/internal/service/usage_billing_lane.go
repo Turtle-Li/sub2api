@@ -118,12 +118,12 @@ func (c *UsageBillingLaneCombiner) ReleaseBatchImageBalance(ctx context.Context,
 	return c.repo.ReleaseBatchImageBalance(ctx, cmd)
 }
 
-func (c *UsageBillingLaneCombiner) goodPutVideoJobs() DurableVideoJobRepository {
+func (c *UsageBillingLaneCombiner) goodPutVideoJobs() GoodPutVideoJobRepository {
 	if c == nil {
 		return nil
 	}
 	// Reservations and settlement are already atomic; only ordinary Apply is coalesced.
-	repo, _ := c.repo.(DurableVideoJobRepository)
+	repo, _ := c.repo.(GoodPutVideoJobRepository)
 	return repo
 }
 

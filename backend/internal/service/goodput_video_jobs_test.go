@@ -16,9 +16,11 @@ import (
 
 type goodPutReconcileStore struct {
 	UsageBillingBatchRepository
-	DurableVideoJobRepository
+	GoodPutVideoJobRepository
 	job    *DurableVideoJob
 	states []string
+	billed int
+	reason string
 }
 
 func (r *goodPutReconcileStore) ClaimVideoJob(context.Context) (*DurableVideoJob, error) {
@@ -34,6 +36,16 @@ func (r *goodPutReconcileStore) FinishVideoJob(_ context.Context, id, state stri
 	return true, nil
 }
 
+func (r *goodPutReconcileStore) CompleteGoodPutVideoJob(ctx context.Context, id string, seconds int) (bool, error) {
+	r.billed = seconds
+	return r.FinishVideoJob(ctx, id, "completed")
+}
+
+func (r *goodPutReconcileStore) ReviewGoodPutVideoJob(ctx context.Context, id, reason string) (bool, error) {
+	r.reason = reason
+	return r.FinishVideoJob(ctx, id, "review")
+}
+
 type goodPutReconcileTransport struct {
 	HTTPUpstream
 	call func(*http.Request, int64) (*http.Response, error)
@@ -45,15 +57,19 @@ func (u goodPutReconcileTransport) Do(req *http.Request, _ string, accountID int
 
 func TestGoodPutWorkerSettlesWithoutClientRead(t *testing.T) {
 	for _, tc := range []struct {
-		name, response, state string
+		name, response, state, reason string
+		quoted, billed                int
 	}{
-		{"success", `{"id":"video_test","status":"completed","usage":{"duration_seconds":5}}`, "completed"},
-		{"failure", `{"id":"video_test","status":"failed"}`, "failed"},
-		{"unexpected duration", `{"id":"video_test","status":"completed","usage":{"duration_seconds":6}}`, "review"},
-		{"still pending", `{"id":"video_test","status":"in_progress"}`, ""},
+		{"success", `{"id":"video_test","status":"completed","usage":{"duration_seconds":5}}`, "completed", "", 5, 5},
+		{"lower actual usage", `{"id":"video_test","status":"completed","usage":{"duration_seconds":14}}`, "completed", "", 15, 14},
+		{"failure", `{"id":"video_test","status":"failed"}`, "failed", "", 5, 0},
+		{"over quote", `{"id":"video_test","status":"completed","usage":{"duration_seconds":6}}`, "review", GoodPutReviewUsageUnverified, 5, 0},
+		{"missing meter", `{"id":"video_test","status":"completed","usage":null}`, "review", GoodPutReviewUsageUnverified, 15, 0},
+		{"different native receipt", `{"id":"video_other","status":"completed","usage":{"duration_seconds":14}}`, "", "", 15, 0},
+		{"still pending", `{"id":"video_test","status":"in_progress"}`, "", "", 5, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			job := &DurableVideoJob{ID: "test-job", AccountID: 42, NativeID: "video_test", Seconds: 5, CreatedAt: time.Now()}
+			job := &DurableVideoJob{ID: "test-job", AccountID: 42, Model: GoodPutH3Model, NativeID: "video_test", Seconds: tc.quoted, CreatedAt: time.Now()}
 			store := &goodPutReconcileStore{job: job}
 			lanes := NewUsageBillingLaneCombiner(store)
 			t.Cleanup(lanes.Stop)
@@ -75,6 +91,8 @@ func TestGoodPutWorkerSettlesWithoutClientRead(t *testing.T) {
 			require.Same(t, store, svc.goodPutVideoJobs(), "the production billing provider must preserve the durable repository")
 			svc.reconcileGoodPutVideo(t.Context())
 			require.Equal(t, 1, calls)
+			require.Equal(t, tc.billed, store.billed)
+			require.Equal(t, tc.reason, store.reason)
 			if tc.state == "" {
 				require.Empty(t, store.states)
 				return

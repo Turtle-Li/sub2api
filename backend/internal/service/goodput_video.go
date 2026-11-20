@@ -88,14 +88,25 @@ func (t GoodPutVideoTask) ID() string {
 
 func (t GoodPutVideoTask) NativeID() string { return t.nativeID }
 func (t GoodPutVideoTask) Completed() bool  { return t.state == "completed" }
-func (t GoodPutVideoTask) Seconds() int     { return t.seconds }
 
-func (t GoodPutVideoTask) Public(model string) gin.H {
+// BillableSeconds returns zero when the receipt does not substantiate a
+// charge within the originally quoted duration for this model.
+func (t GoodPutVideoTask) BillableSeconds(model string, quotedSeconds int) int {
+	if !t.Completed() || !IsGoodPutVideoModel(model) || t.seconds < 4 || t.seconds > 15 ||
+		t.seconds > quotedSeconds || (model == GoodPutH3FastModel && (t.seconds < 5 || t.seconds > 14)) {
+		return 0
+	}
+	return t.seconds
+}
+
+func (t GoodPutVideoTask) Public(model string, billedSeconds int) gin.H {
 	out := gin.H{"id": t.ID(), "object": "video", "model": model, "status": t.state,
 		"progress": min(100, max(0, t.progress)), "created_at": t.created}
 	switch t.state {
 	case "completed":
-		out["usage"] = gin.H{"duration_seconds": t.seconds}
+		if billedSeconds > 0 {
+			out["usage"] = gin.H{"duration_seconds": billedSeconds}
+		}
 		out["video_url"] = "/v1/videos/" + t.ID() + "/content"
 	case "failed":
 		out["error"] = gin.H{"code": "generation_failed", "message": "GoodPut did not generate this video"}
@@ -135,13 +146,11 @@ func (s *OpenAIGatewayService) sendGoodPutVideo(ctx context.Context, account *Ac
 
 func decodeGoodPutVideoTask(reader io.Reader, expectedNativeID string) (GoodPutVideoTask, error) {
 	var receipt struct {
-		ID        string `json:"id"`
-		Status    string `json:"status"`
-		Progress  int    `json:"progress"`
-		CreatedAt int64  `json:"created_at"`
-		Usage     struct {
-			Seconds int `json:"duration_seconds"`
-		} `json:"usage"`
+		ID        string          `json:"id"`
+		Status    string          `json:"status"`
+		Progress  int             `json:"progress"`
+		CreatedAt int64           `json:"created_at"`
+		Usage     json.RawMessage `json:"usage"`
 	}
 	if err := json.NewDecoder(io.LimitReader(reader, 256<<10)).Decode(&receipt); err != nil ||
 		!goodPutNativeVideoID.MatchString(receipt.ID) || (expectedNativeID != "" && receipt.ID != expectedNativeID) {
@@ -151,11 +160,16 @@ func decodeGoodPutVideoTask(reader io.Reader, expectedNativeID string) (GoodPutV
 	case "queued", "in_progress", "failed":
 		return GoodPutVideoTask{nativeID: receipt.ID, state: receipt.Status, progress: receipt.Progress, created: receipt.CreatedAt}, nil
 	case "completed":
-		if receipt.Usage.Seconds >= 4 && receipt.Usage.Seconds <= 15 {
-			return GoodPutVideoTask{nativeID: receipt.ID, state: receipt.Status, seconds: receipt.Usage.Seconds, progress: 100, created: receipt.CreatedAt}, nil
+		task := GoodPutVideoTask{nativeID: receipt.ID, state: receipt.Status, progress: 100, created: receipt.CreatedAt}
+		var usage struct {
+			Seconds int `json:"duration_seconds"`
 		}
+		if json.Unmarshal(receipt.Usage, &usage) == nil {
+			task.seconds = usage.Seconds
+		}
+		return task, nil
 	}
-	return GoodPutVideoTask{}, errors.New("invalid GoodPut video status or billable duration")
+	return GoodPutVideoTask{}, errors.New("invalid GoodPut video status")
 }
 
 // WriteGoodPutVideoContent is called only after the bound task reports completion.

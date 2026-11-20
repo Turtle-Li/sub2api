@@ -32,7 +32,7 @@ type goodPutVideoDispatch struct {
 	id       string
 	request  *service.GoodPutVideoRequest
 	pending  *service.GrokVideoPendingBilling
-	durable  bool
+	job      *service.DurableVideoJob
 	account  *service.Account
 	key      *service.APIKey
 	subject  middleware.AuthSubject
@@ -46,10 +46,11 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 			h.writeGoodPutVideoError(c, opts.log, err)
 			return
 		}
-		model := opts.request.Info().Model
+		info := opts.request.Info()
+		model := info.Model
 		h.gatewayService.ReportOpenAIAccountScheduleResult(opts.account, model, true, nil)
 		c.Header("Cache-Control", "private, no-store")
-		c.JSON(http.StatusAccepted, task.Public(model))
+		c.JSON(http.StatusAccepted, task.Public(model, task.BillableSeconds(model, info.DurationSeconds)))
 		return
 	}
 	pending := opts.pending
@@ -62,17 +63,18 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 		h.errorResponse(c, http.StatusBadGateway, "upstream_error", "GoodPut returned a mismatched video task")
 		return
 	}
-	if task.Completed() {
-		if task.Seconds() != pending.VideoDurationSeconds {
-			opts.log.Warn("goodput_video.billing_duration_mismatch", zap.Int("reported_seconds", task.Seconds()), zap.Int("expected_seconds", pending.VideoDurationSeconds))
-			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "GoodPut reported an unexpected billable duration")
-			return
+	billedSeconds := task.BillableSeconds(pending.Model, pending.VideoDurationSeconds)
+	if opts.job != nil && opts.job.State == "completed" {
+		billedSeconds = opts.job.BilledSeconds
+		if billedSeconds == 0 {
+			// Before actual-usage settlement, completed rows required an exact match.
+			billedSeconds = opts.job.Seconds
 		}
 	}
-	if task.Completed() && !opts.durable {
+	if task.Completed() && opts.job == nil && billedSeconds > 0 {
 		result := &service.OpenAIForwardResult{
 			ResponseID: task.ID(), Model: pending.Model, BillingModel: pending.BillingModel, UpstreamModel: pending.UpstreamModel,
-			VideoDurationSeconds: task.Seconds(), VideoResolution: pending.VideoResolution, VideoCount: 1,
+			VideoDurationSeconds: billedSeconds, VideoResolution: pending.VideoResolution, VideoCount: 1,
 			Duration: service.GrokVideoE2EDuration(pending.CreatedAt, time.Now()),
 		}
 		if bill := prepareGrokVideoCompletionBilling(ctx, h, opts.log, opts.key, opts.subject, task.ID(), result); bill != nil {
@@ -86,12 +88,14 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 			h.errorResponse(c, http.StatusConflict, "video_not_ready", "The GoodPut video is not available for download")
 			return
 		}
-		if err := h.gatewayService.WriteGoodPutVideoContent(ctx, c, opts.account, task); err != nil {
+		err := h.gatewayService.WriteGoodPutVideoContent(ctx, c, opts.account, task)
+		h.gatewayService.RecordGoodPutContentOutcome(ctx, opts.job, err != nil)
+		if err != nil {
 			h.writeGoodPutVideoError(c, opts.log, err)
 		}
 		return
 	}
-	c.JSON(http.StatusOK, task.Public(pending.Model))
+	c.JSON(http.StatusOK, task.Public(pending.Model, billedSeconds))
 }
 
 func (h *OpenAIGatewayHandler) writeGoodPutVideoError(c *gin.Context, log *zap.Logger, err error) {

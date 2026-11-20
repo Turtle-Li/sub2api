@@ -14,9 +14,14 @@ import (
 
 const goodPutVideoReceiptWindow = 24 * time.Hour
 
+const (
+	GoodPutReviewUsageUnverified = "completed_usage_unverified"
+	GoodPutReviewReceiptExpired  = "receipt_expired"
+)
+
 var (
 	ErrGoodPutVideoFunds = errors.New("Insufficient balance or API key allowance for this video")
-	ErrGoodPutVideoLimit = errors.New("This API key already has an unsettled GoodPut H3 task")
+	ErrGoodPutVideoLimit = errors.New("A previous video submission is still running or unconfirmed; check the original task instead of resubmitting")
 	ErrGoodPutVideoGroup = errors.New("GoodPut H3 submissions are not enabled for this group")
 )
 
@@ -24,11 +29,12 @@ type DurableVideoJob struct {
 	ID, PublicID, NativeID, Model, Currency string
 	Resolution, State                       string
 	UserID, APIKeyID, GroupID, AccountID    int64
-	Seconds                                 int
+	Seconds, BilledSeconds                  int
 	HoldAmount, ReferenceAmount, Multiplier float64
 	AccountRate, AccountQuotaCost           float64
 	AccountQuotaDaily, AccountQuotaWeekly   bool
 	AccountRequestCount                     int
+	ContentFailed                           bool
 	CreatedAt                               time.Time
 }
 
@@ -40,11 +46,18 @@ type DurableVideoJobRepository interface {
 	FinishVideoJob(context.Context, string, string) (bool, error)
 }
 
-func (s *OpenAIGatewayService) goodPutVideoJobs() DurableVideoJobRepository {
+type GoodPutVideoJobRepository interface {
+	DurableVideoJobRepository
+	CompleteGoodPutVideoJob(ctx context.Context, id string, billedSeconds int) (bool, error)
+	ReviewGoodPutVideoJob(ctx context.Context, id, reason string) (bool, error)
+	RecordGoodPutContentOutcome(ctx context.Context, id string, failed bool) error
+}
+
+func (s *OpenAIGatewayService) goodPutVideoJobs() GoodPutVideoJobRepository {
 	if lanes, ok := s.usageBillingRepo.(*UsageBillingLaneCombiner); ok {
 		return lanes.goodPutVideoJobs()
 	}
-	repo, _ := s.usageBillingRepo.(DurableVideoJobRepository)
+	repo, _ := s.usageBillingRepo.(GoodPutVideoJobRepository)
 	return repo
 }
 
@@ -62,6 +75,19 @@ func (s *OpenAIGatewayService) FindGoodPutVideoJob(ctx context.Context, key *API
 		return nil, nil
 	}
 	return repo.FindVideoJob(ctx, id, key.UserID, key.ID, *key.GroupID)
+}
+
+func (s *OpenAIGatewayService) RecordGoodPutContentOutcome(ctx context.Context, job *DurableVideoJob, failed bool) {
+	if job == nil || (!job.ContentFailed && !failed) || ctx.Err() != nil || !runtimegate.SharedWorkAllowed() {
+		return
+	}
+	if repo := s.goodPutVideoJobs(); repo != nil {
+		record, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		if err := repo.RecordGoodPutContentOutcome(record, job.ID, failed); err != nil {
+			slog.Warn("goodput video content outcome could not be recorded", "task_id", job.PublicID)
+		}
+	}
 }
 
 func (s *OpenAIGatewayService) SubmitGoodPutVideoJob(ctx context.Context, key *APIKey, account *Account, req *GoodPutVideoRequest) (GoodPutVideoTask, error) {
@@ -115,6 +141,7 @@ func (s *OpenAIGatewayService) SubmitGoodPutVideoJob(ctx context.Context, key *A
 			s.invalidateGoodPutWallet(save, job.UserID)
 		} else {
 			slog.Warn("goodput video submission uncertain", "reservation_id", job.ID)
+			return GoodPutVideoTask{}, &GoodPutVideoError{Status: http.StatusBadGateway, Code: "goodput_video_outcome_unconfirmed", Message: "GoodPut submission could not be confirmed; do not resubmit"}
 		}
 		return GoodPutVideoTask{}, err
 	}
@@ -166,7 +193,7 @@ func (s *OpenAIGatewayService) invalidateGoodPutWallet(ctx context.Context, user
 
 func (s *OpenAIGatewayService) reconcileGoodPutVideo(ctx context.Context) {
 	repo := s.goodPutVideoJobs()
-	if !runtimegate.SharedWorkAllowed() {
+	if repo == nil || !runtimegate.SharedWorkAllowed() {
 		return
 	}
 	job, err := repo.ClaimVideoJob(ctx)
@@ -183,7 +210,8 @@ func (s *OpenAIGatewayService) reconcileGoodPutVideo(ctx context.Context) {
 		return
 	}
 	if time.Since(job.CreatedAt) > goodPutVideoReceiptWindow {
-		s.finishDurableVideo(ctx, repo, *job, "review")
+		applied, err := repo.ReviewGoodPutVideoJob(ctx, job.ID, GoodPutReviewReceiptExpired)
+		s.afterDurableVideoFinish(ctx, *job, "review", applied, err)
 		return
 	}
 	account, err := s.accountRepo.GetByID(ctx, job.AccountID)
@@ -203,10 +231,14 @@ func (s *OpenAIGatewayService) reconcileGoodPutVideo(ctx context.Context) {
 		return
 	}
 	switch {
-	case task.Completed() && task.Seconds() == job.Seconds:
-		s.finishDurableVideo(ctx, repo, *job, "completed")
 	case task.Completed():
-		s.finishDurableVideo(ctx, repo, *job, "review")
+		if seconds := task.BillableSeconds(job.Model, job.Seconds); seconds > 0 {
+			applied, err := repo.CompleteGoodPutVideoJob(ctx, job.ID, seconds)
+			s.afterDurableVideoFinish(ctx, *job, "completed", applied, err)
+		} else {
+			applied, err := repo.ReviewGoodPutVideoJob(ctx, job.ID, GoodPutReviewUsageUnverified)
+			s.afterDurableVideoFinish(ctx, *job, "review", applied, err)
+		}
 	case task.state == "failed":
 		s.finishDurableVideo(ctx, repo, *job, "failed")
 	}
@@ -214,6 +246,10 @@ func (s *OpenAIGatewayService) reconcileGoodPutVideo(ctx context.Context) {
 
 func (s *OpenAIGatewayService) finishDurableVideo(ctx context.Context, repo DurableVideoJobRepository, job DurableVideoJob, state string) {
 	applied, err := repo.FinishVideoJob(ctx, job.ID, state)
+	s.afterDurableVideoFinish(ctx, job, state, applied, err)
+}
+
+func (s *OpenAIGatewayService) afterDurableVideoFinish(ctx context.Context, job DurableVideoJob, state string, applied bool, err error) {
 	if err != nil || (applied && state == "review") {
 		slog.Warn("video settlement requires attention", "task_id", job.PublicID, "state", state)
 	}

@@ -21,6 +21,7 @@ import (
 
 type goodPutVideoTestJobs struct {
 	service.UsageBillingRepository
+	service.GoodPutVideoJobRepository
 	job        service.DurableVideoJob
 	reserveErr error
 }
@@ -50,6 +51,13 @@ func (*goodPutVideoTestJobs) ClaimVideoJob(context.Context) (*service.DurableVid
 }
 func (*goodPutVideoTestJobs) FinishVideoJob(context.Context, string, string) (bool, error) {
 	return true, nil
+}
+func (r *goodPutVideoTestJobs) RecordGoodPutContentOutcome(_ context.Context, id string, failed bool) error {
+	if id != r.job.ID {
+		return errors.New("unexpected content outcome job id")
+	}
+	r.job.ContentFailed = failed
+	return nil
 }
 
 func goodPutVideoTestContext(t *testing.T, model, taskID string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -86,19 +94,24 @@ func goodPutVideoTestCatalog(model, price string) string {
 
 func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 	for _, tc := range []struct {
-		model   string
-		seconds int
+		name, model, usage string
+		seconds            int
+		billed             int
 	}{
-		{service.GoodPutH3Model, 15},
-		{service.GoodPutH3FastModel, 10},
+		{"standard 15 bills 14", service.GoodPutH3Model, `,"usage":{"duration_seconds":14}`, 15, 14},
+		{"fast exact", service.GoodPutH3FastModel, `,"usage":{"duration_seconds":10}`, 10, 10},
+		{"missing meter", service.GoodPutH3Model, ``, 10, 0},
+		{"unparseable meter", service.GoodPutH3Model, `,"usage":{"duration_seconds":"bad"}`, 10, 0},
+		{"over quote", service.GoodPutH3Model, `,"usage":{"duration_seconds":11}`, 10, 0},
 	} {
 		model, seconds := tc.model, strconv.Itoa(tc.seconds)
-		t.Run(model, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI, model)
 			nativeID := "video_" + strings.Repeat("provider_metadata_", 12)
 			const mp4 = "\x00\x00\x00\x18ftypmp42test-video"
 			var submits, statusCalls, downloads int
 			state := "in_progress"
+			badContent := false
 			upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
 				require.Equal(t, int64(1), accountID)
 				require.True(t, service.HTTPUpstreamRedirectsDisabled(req.Context()))
@@ -122,10 +135,13 @@ func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 					return response(`{"id":"` + nativeID + `","status":"queued"}`), nil
 				case "/v1/videos/" + nativeID:
 					statusCalls++
-					return response(`{"id":"` + nativeID + `","status":"` + state + `","usage":{"duration_seconds":` + seconds + `},"video_url":"https://private-storage.example/signed"}`), nil
+					return response(`{"id":"` + nativeID + `","status":"` + state + `"` + tc.usage + `,"video_url":"https://private-storage.example/signed"}`), nil
 				case "/v1/videos/" + nativeID + "/content":
 					downloads++
 					resp := response(mp4)
+					if badContent {
+						resp = response("this is not a valid MP4")
+					}
 					resp.Header.Set("Content-Type", "video/mp4")
 					return resp, nil
 				default:
@@ -168,14 +184,30 @@ func TestGoodPutVideoOwnerBoundLifecycle(t *testing.T) {
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.Contains(t, w.Body.String(), "/v1/videos/"+receipt.ID+"/content")
 			require.NotContains(t, w.Body.String(), "private-storage")
+			if tc.billed == 0 {
+				require.NotContains(t, w.Body.String(), `"usage"`)
+			} else {
+				require.Contains(t, w.Body.String(), `"duration_seconds":`+strconv.Itoa(tc.billed))
+			}
+			wantDownloads := 1
+			if tc.billed == 14 {
+				badContent = true
+				c, w = goodPutVideoTestContext(t, model, receipt.ID)
+				h.GoodPutVideoContent(c)
+				require.Equal(t, http.StatusBadGateway, w.Code)
+				require.True(t, bindings.goodPut.job.ContentFailed)
+				badContent = false
+				wantDownloads++
+			}
 			c, w = goodPutVideoTestContext(t, model, receipt.ID)
 			key, _ = middleware.GetAPIKeyFromContext(c)
 			key.Group.IsExclusive = false
 			h.GoodPutVideoContent(c)
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.Equal(t, mp4, w.Body.String())
+			require.False(t, bindings.goodPut.job.ContentFailed)
 			require.Equal(t, 1, submits)
-			require.Equal(t, 1, downloads)
+			require.Equal(t, wantDownloads, downloads)
 			// Reads must not charge a durable job; only the worker settles it.
 			require.Empty(t, bindings.usage)
 			require.Equal(t, receipt.ID, bindings.goodPut.job.PublicID)
