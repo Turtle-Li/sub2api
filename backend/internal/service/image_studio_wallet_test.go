@@ -59,6 +59,56 @@ func TestImageStudioWalletCatalogueUsesOneExplicitGroupAndExactTierPrices(t *tes
 	require.Equal(t, "gpt-image-2.6-sunburst", list.Data[0].ID)
 }
 
+func TestImageStudioWalletImage26TwoKTier(t *testing.T) {
+	for _, tt := range []struct {
+		model      string
+		sourceEdge int
+		wantScales []int
+	}{
+		{"gpt-image-2.6-flare", 1024, []int{2}},
+		{"gpt-image-2.6-sunburst", 2048, nil},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+			mini := newBatchImageUpscaleTestAPI()
+			t.Cleanup(mini.Close)
+			cfg, upscaler := newBatchImageUpscaleTestService(mini.URL(), "batch-image/delivery")
+			svc.Config.ImageUpscale = cfg.ImageUpscale
+			provider := &publicBatchImageProvider{name: BatchImageProviderOpenAI,
+				result:      string(batchImageUpscaleTestResultLine("one", batchImageUpscaleTestPNG(tt.sourceEdge, tt.sourceEdge/2))),
+				getStatuses: []*BatchProviderStatus{{InternalState: BatchProviderStateSucceeded}},
+			}
+			svc.ProviderRegistry = NewBatchImageProviderRegistry(provider)
+			account := testBatchImageMappedAccount(202, AccountTypeOAuth, map[string]any{tt.model: tt.model})
+			account.Platform = PlatformOpenAI
+			svc.AccountRepo = &publicBatchImageAccountRepo{accounts: []Account{account}}
+			group := &Group{ID: 45, Platform: PlatformOpenAI, Status: StatusActive, SubscriptionType: SubscriptionTypeStandard,
+				AllowImageGeneration: true, RateMultiplier: 1,
+				ModelPricing: []ChannelModelPricing{{Models: []string{tt.model}, BillingMode: BillingModeImage, Currency: PricingCurrencyCNY,
+					Intervals: []PricingInterval{{TierLabel: ImageBillingSize2K, PerRequestPrice: ptrFloat64(.4)}}}},
+			}
+			svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{group.ID: group}}
+			owner := BatchImageOwner{UserID: 8, GroupID: &group.ID, StudioWallet: true, StudioAccountIDs: []int64{account.ID}}
+			job, err := svc.Submit(t.Context(), owner, BatchImageSubmitRequest{Provider: provider.Name(), Model: tt.model, ImageSize: ImageBillingSize2K,
+				Items: []BatchImageSubmitItem{{CustomID: "one", Prompt: "a pear"}}}, "")
+			require.NoError(t, err)
+			require.Equal(t, ImageBillingSize2K, job.ImageSize)
+			require.Len(t, provider.submits, 1)
+			require.Equal(t, ImageBillingSize1K, provider.submits[0].ImageSize)
+
+			processor := BatchImageProviderProcessor{Repo: repo, ProviderRegistry: svc.ProviderRegistry, AccountResolver: &fakeBatchImageAccountResolver{account: &account},
+				Indexer: &BatchImageResultIndexer{Repo: repo, Config: cfg, Upscaler: upscaler, UpscaleStore: newBatchImageUpscaleTestStore()}}
+			_, err = processor.Process(t.Context(), job.ID)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantScales, mini.SubmittedScales())
+			require.Len(t, repo.items[job.ID], 1)
+			item := repo.items[job.ID][0]
+			require.Equal(t, BatchImageItemStatusSuccess, item.Status)
+			require.Equal(t, &BatchImagePreviewSize{Width: 2048, Height: 1024}, item.PreviewSize)
+		})
+	}
+}
+
 func TestImageStudioWalletSubmissionOwnsAndSettlesItsOwnBalanceOnce(t *testing.T) {
 	svc, repo, _, _, vertex := newTestBatchImagePublicService(true)
 	model := "gemini-2.5-flash-image"

@@ -35,6 +35,15 @@ stable ambiguous-submit identity. Subsequent edits use the selected output image
 and persisted root batch ID. Prompt previews are never replayed as complete prompts.
 The viewer's mouse image click stays open so double-click zoom is reachable.
 
+`DetailModal.tsx` keeps the native modal and the pinned Lightbox's focus, Escape,
+and gesture behavior. The host dialog reserves the first frame from gallery
+dimensions when available and uses each decoded original's aspect ratio for
+its final geometry. The resolution field shows the job's recorded request tier
+(`image_size`), never a pixel measurement; it is omitted if the tier is missing.
+Desktop portrait details use a side column; other shapes
+and small screens stack the information. Error/expired records have no image
+actions. The authorized original and explicit archive read paths are unchanged.
+
 The [session wallet path](../../../../docs/features/IMAGE_STUDIO_SESSION_API_20261107.md#session-only-wallet-generation)
 uses the same composer, owned task polling, previews and archive controls. Key
 IDs only select legacy history when the wallet catalogue is active. An old
