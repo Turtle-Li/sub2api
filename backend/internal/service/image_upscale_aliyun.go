@@ -36,7 +36,11 @@ func newAliyunImageUpscaler(cfg config.ImageUpscaleConfig) func(context.Context,
 	if limit <= 0 {
 		limit = 128 << 20
 	}
-	return (&aliyunUpscaler{http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, load: newImageUpscaleVaultLoader(cfg.VaultAgentSocket, aliyunUpscaleVaultRef), maxBytes: limit}).upscaleWithPaidGate
+	socket := cfg.AliyunAgentSocket
+	if socket == "" {
+		socket = cfg.VaultAgentSocket
+	}
+	return (&aliyunUpscaler{http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, load: newImageUpscaleVaultLoader(socket, aliyunUpscaleVaultRef), maxBytes: limit}).upscaleWithPaidGate
 }
 
 // The generated Advance method builds a second upload client without the caller's

@@ -601,6 +601,39 @@ if BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCE
 fi
 assert_contains "$OUTPUT" 'image upscale Vault agent failed hardened readiness verification'
 
+shanghai_release() {
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF" \
+    BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF" \
+    BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="$BATCH_IMAGE_DELIVERY_COS_SOCKET" \
+    IMAGE_UPSCALE_ENABLED=true IMAGE_UPSCALE_ALIYUN_ENABLED=true \
+    IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET=/run/sub2api-upscale-vault/aliyun/public.sock \
+    BATCH_IMAGE_SHANGHAI_DELIVERY_URL="$1" BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID="$2" \
+    BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS="$3" PRECREATE_ONLY=true run_helper
+}
+rm -rf "$(state_path sub2api-green)"
+if shanghai_release 'http://169.254.169.254:18486' 0 true >"$OUTPUT" 2>&1; then fail 'accepted non-Tailnet controller'; fi
+if shanghai_release 'http://100.70.0.1:18486' 42 true >"$OUTPUT" 2>&1; then fail 'accepted conflicting user admission profiles'; fi
+shanghai_release 'http://100.70.0.1:18486' 0 true >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_SHANGHAI_DELIVERY_URL=http://100.70.0.1:18486'
+assert_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID=0'
+assert_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS=true'
+assert_contains "$(state_path sub2api-green)/env" 'IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET=/run/sub2api-upscale-vault/aliyun/public.sock'
+
+# Revalidate the original off profile instead of forcing the failed rollout's
+# used-to-be-forward flags onto a historical rollback target.
+: >"$UPSCALE_HELPER_CALLS"
+IMAGE_UPSCALE_ENABLED=true IMAGE_UPSCALE_ALIYUN_ENABLED=true \
+  BATCH_IMAGE_SHANGHAI_DELIVERY_URL='http://100.70.0.1:18486' \
+  BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID=0 BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS=true \
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="$BATCH_IMAGE_DELIVERY_COS_SOCKET" \
+  HELPER_OLD_CONTAINER=sub2api-green HELPER_NEW_CONTAINER=sub2api PRESERVE_SOURCE_CONTAINER=sub2api \
+  ROUTE_CONTRACT_WARN_ONLY=true REMOVE_EXISTING_NEW_CONTAINER=false \
+  DUAL_NODE_RUNTIME_ENABLED=false VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$UPSCALE_HELPER_CALLS" 'ready-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+assert_not_contains "$UPSCALE_HELPER_CALLS" 'ready-aliyun-auto'
+
 # COS delivery credentials are runtime references only. They must be forwarded
 # exactly to the candidate, while a raw credential is rejected before Docker.
 rm -rf "$(state_path sub2api-green)"

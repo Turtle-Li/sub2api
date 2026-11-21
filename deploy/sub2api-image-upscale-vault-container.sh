@@ -17,6 +17,8 @@ PUBLIC_DIR=/run/sub2api-upscale-vault
 ADMIN_DIR=/run/sub2api-upscale-vault-admin
 UPSCAPE_API_KEY_VAULT_REF='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
 ALIYUN_CREDENTIALS_REF='vault://secret/data/sub2api/aliyun-image-upscale#credentials'
+ALIYUN_HOST_SOCKET="$PUBLIC_DIR/aliyun/public.sock"
+ALIYUN_HOST_PROFILE=false
 ALIYUN_AGENT_ARGS=()
 CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
 COS_ACCESS_KEY_VAULT_REF=''
@@ -96,8 +98,15 @@ load_root_runtime_configuration() {
   done
   [ "${IMAGE_UPSCALE_API_KEY_VAULT_REF:-}" = "$UPSCAPE_API_KEY_VAULT_REF" ] || die
   [ "${BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET:-}" = "$PUBLIC_DIR/public.sock" ] || die
-  case "${SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE:-${IMAGE_UPSCALE_ALIYUN_ENABLED:-false}}" in
-    true) ALIYUN_AGENT_ARGS=(--allowed-ref "$ALIYUN_CREDENTIALS_REF") ;;
+  case "${IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET:-}" in
+    '') ;;
+    "$ALIYUN_HOST_SOCKET") ALIYUN_HOST_PROFILE=true ;;
+    *) die ;;
+  esac
+  local profile_default="${IMAGE_UPSCALE_ALIYUN_ENABLED:-false}"
+  if [ "$ALIYUN_HOST_PROFILE" = true ]; then profile_default=false; fi
+  case "${SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE:-$profile_default}" in
+    true) [ "$ALIYUN_HOST_PROFILE" = false ] || die; ALIYUN_AGENT_ARGS=(--allowed-ref "$ALIYUN_CREDENTIALS_REF") ;;
     false) ;;
     *) die ;;
   esac
@@ -254,7 +263,10 @@ for command_name in docker flock id stat sed; do
   command -v "$command_name" >/dev/null 2>&1 || die
 done
 load_root_runtime_configuration
-case "$action" in load-aliyun|ready-aliyun-auto) [ "${#ALIYUN_AGENT_ARGS[@]}" -gt 0 ] || die ;; esac
+case "$action" in
+  load-aliyun) [ "${#ALIYUN_AGENT_ARGS[@]}" -gt 0 ] || die ;;
+  ready-aliyun-auto) [ "${#ALIYUN_AGENT_ARGS[@]}" -gt 0 ] || [ "$ALIYUN_HOST_PROFILE" = true ] || die ;;
+esac
 LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
 if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then
   die
@@ -316,6 +328,11 @@ verify_container "$image" || die
 case "$action" in
   ready|ready-auto|ready-aliyun-auto)
     [ "$(docker container inspect "$CONTAINER" --format '{{.State.Health.Status}}')" = healthy ] || die
+    if [ "$action" = ready-aliyun-auto ] && [ "$ALIYUN_HOST_PROFILE" = true ]; then
+      systemctl is-active --quiet sub2api-image-upscale-aliyun-credential.service || die
+      docker exec "$CONTAINER" /app/sub2api-vault-agent check \
+        --public-socket "$ALIYUN_HOST_SOCKET" >/dev/null 2>&1 || die
+    fi
     printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY'
     ;;
   load-api|load-aliyun|load-batch-cos|load-all)

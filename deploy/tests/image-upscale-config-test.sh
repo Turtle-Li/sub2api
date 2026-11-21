@@ -101,6 +101,18 @@ grep -qx 'EXISTING_SECRET=must-not-be-printed-or-rewritten' "$CONFIG_FILE" || fa
 
 # The optional one-line command manages only the new, fixed profile block.
 cloud() { printf 'IMAGE_UPSCALE_ALIYUN_ENABLED=%s\n' "$1" | run_config; }
+host_cloud() {
+  printf 'IMAGE_UPSCALE_ALIYUN_ENABLED=%s\nIMAGE_UPSCALE_ALIYUN_AGENT_SOCKET=%s\n' "$1" "$2" | run_config
+}
+cp "$CONFIG_FILE" "$CONFIG_FILE.pre-host"
+if host_cloud false /tmp/other.sock >"$OUTPUT" 2>&1; then fail 'allowed a different host socket'; fi
+host_cloud false /run/sub2api-upscale-vault/aliyun/public.sock >"$OUTPUT"
+grep -qx "SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE='false'" "$CONFIG_FILE" || fail 'host profile changed the Mini/COS agent'
+host_cloud true /run/sub2api-upscale-vault/aliyun/public.sock >"$OUTPUT"
+grep -qx "IMAGE_UPSCALE_ALIYUN_ENABLED='true'" "$CONFIG_FILE" || fail 'host cloud enable failed'
+if cloud false >"$OUTPUT" 2>&1; then fail 'one-line toggle attempted to replace the host profile'; fi
+host_cloud false /run/sub2api-upscale-vault/aliyun/public.sock >"$OUTPUT"
+mv -- "$CONFIG_FILE.pre-host" "$CONFIG_FILE"
 if cloud true >"$OUTPUT" 2>&1; then fail 'paid fallback activated without staging'; fi
 cloud false >"$OUTPUT"
 grep -qx "SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE='true'" "$CONFIG_FILE" || fail 'profile not staged'

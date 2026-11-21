@@ -16,8 +16,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAliyunHostCredentialIsScopedToItsFixedSocketAndReference(t *testing.T) {
+	require.NotNil(t, newImageUpscaleVaultLoader(config.ImageUpscaleAliyunHostAgentSocket, aliyunUpscaleVaultRef))
+	require.Nil(t, newImageUpscaleVaultLoader(config.ImageUpscaleAliyunHostAgentSocket, "vault://secret/data/unrelated#api_key"))
+	require.Nil(t, newImageUpscaleVaultLoader("/tmp/arbitrary.sock", aliyunUpscaleVaultRef))
+	require.NotNil(t, newImageUpscaleVaultLoader(imageUpscaleVaultSocket, aliyunUpscaleVaultRef))
+}
 
 type aliyunTestTransport func(*http.Request) (*http.Response, error)
 

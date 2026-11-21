@@ -101,3 +101,14 @@ func TestAliyunFallbackIsOptInAndRequiresMini(t *testing.T) {
 	require.ErrorContains(t, err, "raw Aliyun credentials are not accepted")
 	require.NotContains(t, err.Error(), "not-a-real-secret")
 }
+
+func TestAliyunHostSocketOnlyAcceptsFixedPath(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET", ImageUpscaleAliyunHostAgentSocket)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, ImageUpscaleAliyunHostAgentSocket, cfg.ImageUpscale.AliyunAgentSocket)
+	t.Setenv("IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET", "/tmp/other.sock")
+	_, err = Load()
+	require.ErrorContains(t, err, "must use the dedicated fixed host socket")
+}

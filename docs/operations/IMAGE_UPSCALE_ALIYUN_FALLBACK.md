@@ -61,6 +61,45 @@ retain the dependency license/notice. Reference methods: `client/client.go`
 
 ## Activation and rollback — separate authorized release required
 
+### AWS host-owned credential profile
+
+The owner authorized using the former VSO image site's exact Shanghai
+`HOSIERY_ALIYUN_UPSCALE` credential without a new Vault item. This exception
+does not change the existing Mini or COS credentials. The AWS host retains
+only `systemd-creds` ciphertext at
+`/etc/sub2api-credentials/sub2api-aliyun-image-upscale.cred` (`root:root`, `0600`);
+the original VSO runtime remains the recovery source. Re-provision on host
+replacement rather than copying the AWS systemd host key. Do not put the
+credential in the release `.env`, Docker environment, source, or backups.
+
+1. Validate the exact enabled VSO provider row, endpoint and the two fields on
+   the source host. Pipe only that JSON over the verified SSH paths to
+   `deploy/sub2api-image-upscale-aliyun-host-credential.sh` as root on AWS;
+   the installer rejects a pre-existing credential and duplicate JSON keys.
+2. Under the AWS maintenance lock, verify the local driver, exact canonical
+   mountpoint and `1000:1000` mode `0700` on `sub2api_image_upscale_vault`.
+   Create only its `aliyun` child directory (`1000:1000`, `0700`). Install
+   the reviewed `./cmd/sub2api-vault-agent` Linux AMD64 binary and the host
+   supervisor at the immutable paths in the dedicated systemd unit. Validate
+   and enable that unit after confirming a restart restores readiness from
+   the ciphertext. The systemd credential mount and admin socket are not
+   shared with Docker. Only the scoped public socket is on the named volume.
+3. Use the fixed config helper twice with `IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET=/run/sub2api-upscale-vault/aliyun/public.sock`
+   and `IMAGE_UPSCALE_ALIYUN_ENABLED=false`, then `true`. The socket selects
+   the independent one-ref host agent and leaves the three-ref Mini/COS
+   agent untouched. `ready-aliyun-auto` must prove both through the mounted
+   sockets before releasing the matching application image. Test a single
+   actual Aliyun upscale and a session-wallet Shanghai delivery before full
+   user admission; do not force an outage on the production Mini to test it.
+4. For rollback, stop new Shanghai admissions while keeping the controller
+   URL and both agents available until all pinned jobs and ACKs reconcile.
+   Only then disable/remove Shanghai routing and toggle Aliyun off with the
+   same two-field helper and a guarded blue-green release. A blue-green
+   reversal validates the retained target's previous admission and Aliyun
+   settings instead of imposing the failed release's desired settings.
+
+### Legacy combined Vault profile (not used by this host)
+
 1. **Default off.** Stage the root-owned release/guard/sidecar helpers alongside
    the matching build. Verify a dedicated RAM identity is entitled to Shanghai
    ImageEnhan and the SDK upload flow. Do not use Wan, CAPTCHA or Tencent COS

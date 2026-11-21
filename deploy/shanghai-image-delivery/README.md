@@ -116,7 +116,12 @@ services. The video workspace and upstream Video URL retention are out of scope.
 6. Install the compatible Mini and Shanghai builds before enabling the
    application flag. Keep `BATCH_IMAGE_SHANGHAI_DELIVERY_URL` unset by default.
    Require `ready-aliyun-auto` from the approved memory-only fallback profile
-   before setting the controller URL; the legacy Mini/COS agent is not enough.
+   before setting the controller URL; the legacy Mini/COS agent alone is not
+   enough. For the separate AWS host credential, use the documented
+   [Aliyun profile](../../docs/operations/IMAGE_UPSCALE_ALIYUN_FALLBACK.md#aws-host-owned-credential-profile).
+   Pass the URL, user ID, and all-users switch together through the root-owned
+   release environment. The blue-green helper validates the complete private
+   profile and checks that the activated container has those exact values.
    For a single test, set the URL to the verified Tailnet control origin and
    `BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID` to the approved user. After
    the live check passes, set the user ID to `0` and set

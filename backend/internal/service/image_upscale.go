@@ -799,7 +799,8 @@ func (s *ImageUpscaleService) endpoint(path string) string {
 func newImageUpscaleVaultLoader(socketPath, rawReference string) imageUpscaleAPIKeyLoader {
 	socketPath = strings.TrimSpace(socketPath)
 	rawReference = strings.TrimSpace(rawReference)
-	if socketPath != imageUpscaleVaultSocket || !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath {
+	isAliyunHostCredential := socketPath == config.ImageUpscaleAliyunHostAgentSocket && rawReference == aliyunUpscaleVaultRef
+	if (socketPath != imageUpscaleVaultSocket && !isAliyunHostCredential) || !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath {
 		return nil
 	}
 	path, field, ok := parseImageUpscaleVaultReference(rawReference)

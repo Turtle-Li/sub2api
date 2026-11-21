@@ -395,11 +395,14 @@ type BatchImageConfig struct {
 	ShanghaiDeliveryAllUsers           bool   `mapstructure:"shanghai_delivery_all_users"`
 }
 
-// ImageUpscaleConfig controls the private Image 2.5 post-processing gateway.
-// The bearer value is never accepted in configuration or environment; only an
-// exact Vault reference exposed by the colocated memory-only agent is stored.
+// ImageUpscaleAliyunHostAgentSocket is the fixed, separate host credential socket.
+const ImageUpscaleAliyunHostAgentSocket = "/run/sub2api-upscale-vault/aliyun/public.sock"
+
+// ImageUpscaleConfig controls the image post-processing gateways. Secret values
+// come from the memory agents rather than configuration or process environment.
 type ImageUpscaleConfig struct {
 	AliyunEnabled         bool   `mapstructure:"aliyun_enabled"`
+	AliyunAgentSocket     string `mapstructure:"aliyun_agent_socket"`
 	Enabled               bool   `mapstructure:"enabled"`
 	BaseURL               string `mapstructure:"base_url"`
 	APIKeyVaultRef        string `mapstructure:"api_key_vault_ref"`
@@ -2675,6 +2678,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
 	viper.SetDefault("image_upscale.enabled", false)
 	viper.SetDefault("image_upscale.aliyun_enabled", false)
+	viper.SetDefault("image_upscale.aliyun_agent_socket", "")
 	viper.SetDefault("image_upscale.base_url", "")
 	viper.SetDefault("image_upscale.api_key_vault_ref", "")
 	viper.SetDefault("image_upscale.vault_agent_socket", "/run/sub2api-upscale-vault/public.sock")
@@ -3743,7 +3747,10 @@ func (c *Config) Validate() error {
 		}
 	}
 	if _, raw := os.LookupEnv("IMAGE_UPSCALE_ALIYUN_CREDENTIALS"); raw {
-		return fmt.Errorf("image_upscale raw Aliyun credentials are not accepted; use the dedicated Vault agent")
+		return fmt.Errorf("image_upscale raw Aliyun credentials are not accepted; use a dedicated memory agent")
+	}
+	if c.ImageUpscale.AliyunAgentSocket != "" && c.ImageUpscale.AliyunAgentSocket != ImageUpscaleAliyunHostAgentSocket {
+		return fmt.Errorf("image_upscale.aliyun_agent_socket must use the dedicated fixed host socket")
 	}
 	if c.ImageUpscale.AliyunEnabled && !c.ImageUpscale.Enabled {
 		return fmt.Errorf("image_upscale.aliyun_enabled requires image_upscale.enabled")

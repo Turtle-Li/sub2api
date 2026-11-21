@@ -126,6 +126,7 @@ UNIFIED_PAYMENT_WEBHOOK_URL="${UNIFIED_PAYMENT_WEBHOOK_URL:-$APPROVED_UNIFIED_PA
 CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
 IMAGE_UPSCALE_ENABLED="${IMAGE_UPSCALE_ENABLED:-false}"
 IMAGE_UPSCALE_ALIYUN_ENABLED="${IMAGE_UPSCALE_ALIYUN_ENABLED:-false}"
+IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET="${IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET:-}"
 IMAGE_UPSCALE_BASE_URL="${IMAGE_UPSCALE_BASE_URL:-https://hcmac-mini.tailfc4ed7.ts.net}"
 IMAGE_UPSCALE_API_KEY_VAULT_REF="${IMAGE_UPSCALE_API_KEY_VAULT_REF:-vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key}"
 IMAGE_UPSCALE_VAULT_AGENT_SOCKET="${IMAGE_UPSCALE_VAULT_AGENT_SOCKET:-/run/sub2api-upscale-vault/public.sock}"
@@ -194,11 +195,15 @@ UNIFIED_PAYMENT_ENV_KEYS=(
   UNIFIED_PAYMENT_RETURN_URL UNIFIED_PAYMENT_WEBHOOK_URL
 )
 IMAGE_UPSCALE_ENV_KEYS=(
-  IMAGE_UPSCALE_ALIYUN_ENABLED
+  IMAGE_UPSCALE_ALIYUN_ENABLED IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET
   IMAGE_UPSCALE_ENABLED IMAGE_UPSCALE_BASE_URL IMAGE_UPSCALE_API_KEY_VAULT_REF IMAGE_UPSCALE_VAULT_AGENT_SOCKET
   IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS IMAGE_UPSCALE_POLL_INTERVAL_MS
   IMAGE_UPSCALE_RETRY_MAX IMAGE_UPSCALE_MAX_CONCURRENT IMAGE_UPSCALE_MAX_QUEUE IMAGE_UPSCALE_MAX_RESULT_BYTES
 )
+SHANGHAI_DELIVERY_ENV_KEYS=(
+  BATCH_IMAGE_SHANGHAI_DELIVERY_URL BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS
+)
+SHANGHAI_DELIVERY_OVERRIDE=false
 URL_ALLOWLIST_ENV_KEYS=(
   SECURITY_URL_ALLOWLIST_ENABLED
   SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP
@@ -474,6 +479,10 @@ validate_image_upscale_runtime() {
 	local value sidecar_image ready_action=ready-auto
 	require_bool IMAGE_UPSCALE_ALIYUN_ENABLED "$IMAGE_UPSCALE_ALIYUN_ENABLED"
 	[ "${IMAGE_UPSCALE_ALIYUN_CREDENTIALS+x}" != x ] || die "raw Aliyun image credentials are forbidden"
+	case "$IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET" in
+		''|"$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/aliyun/public.sock") ;;
+		*) die "invalid host Aliyun agent socket" ;;
+	esac
 	if [ "$IMAGE_UPSCALE_ALIYUN_ENABLED" = true ]; then
 		[ "$IMAGE_UPSCALE_ENABLED" = true ] || die "Aliyun fallback requires Mini upscaling"
 		ready_action=ready-aliyun-auto
@@ -520,6 +529,59 @@ validate_image_upscale_runtime() {
 			--mount "type=volume,source=$IMAGE_UPSCALE_VAULT_VOLUME,target=$CONTAINER_IMAGE_UPSCALE_VAULT_PATH,readonly"
 		)
 	fi
+}
+
+resolve_image_delivery_rollback_profile() {
+  # The rollback target already exists. Check its exact image profile, not the
+  # desired flags that may have caused this release to fail.
+  [ "$ROUTE_CONTRACT_WARN_ONLY" = true ] && [ "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" = "$NEW_CONTAINER" ] || return 0
+  local key value inspect_env
+  inspect_env="$(docker inspect "$NEW_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}')" \
+    || die "rollback image delivery target environment is unavailable"
+  for key in IMAGE_UPSCALE_ALIYUN_ENABLED IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET "${SHANGHAI_DELIVERY_ENV_KEYS[@]}"; do
+    if ! value="$(printf '%s\n' "$inspect_env" | awk -v key="$key" '
+      index($0, key "=") == 1 { value = substr($0, length(key) + 2); count++ }
+      END { if (count > 1) exit 1; if (count == 1) print "present:" value }
+    ')"; then die "rollback image delivery profile is ambiguous"; fi
+    if [ -n "$value" ]; then
+      printf -v "$key" '%s' "${value#present:}"
+    else
+      case "$key" in
+        IMAGE_UPSCALE_ALIYUN_ENABLED) IMAGE_UPSCALE_ALIYUN_ENABLED=false ;;
+        IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET) IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET='' ;;
+        *) unset "$key" ;;
+      esac
+    fi
+  done
+}
+
+validate_shanghai_delivery_runtime() {
+  local key count=0
+  for key in "${SHANGHAI_DELIVERY_ENV_KEYS[@]}"; do
+    if [ "${!key+x}" = x ]; then count=$((count + 1)); fi
+  done
+  [ "$count" -ne 0 ] || return 0
+  [ "$count" -eq "${#SHANGHAI_DELIVERY_ENV_KEYS[@]}" ] || die "incomplete Shanghai image delivery profile"
+  SHANGHAI_DELIVERY_OVERRIDE=true
+  require_bool BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS "$BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS"
+  python3 - "$BATCH_IMAGE_SHANGHAI_DELIVERY_URL" "$BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID" \
+    "$BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS" "${IMAGE_UPSCALE_ALIYUN_ENABLED}" <<'PY' || die "invalid Shanghai image delivery profile"
+import ipaddress
+import re
+import sys
+
+url, canary, all_users, aliyun = sys.argv[1:]
+if not re.fullmatch(r"0|[1-9][0-9]{0,18}", canary) or int(canary) > 2**63 - 1:
+    sys.exit(1)
+if not url:
+    sys.exit(0 if canary == "0" and all_users == "false" else 1)
+match = re.fullmatch(r"http://(100\.[0-9]+\.[0-9]+\.[0-9]+):18486", url)
+try:
+    allowed = match and ipaddress.IPv4Address(match[1]) in ipaddress.IPv4Network("100.64.0.0/10")
+except ValueError:
+    allowed = False
+sys.exit(0 if allowed and aliyun == "true" and (all_users == "false" or canary == "0") else 1)
+PY
 }
 
 validate_absolute_path() {
@@ -736,6 +798,7 @@ write_image_upscale_overrides() {
 	local key value
 	for key in "${IMAGE_UPSCALE_ENV_KEYS[@]}"; do
 		value="${!key-}"
+		if [ "$key" = IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET ] && [ -z "$value" ]; then continue; fi
 		printf '%s=%s\n' "$key" "$value" >>"$output_file"
 	done
 }
@@ -860,6 +923,7 @@ container_matches_image_upscale_env() {
 		# Pre-fallback containers are equivalent only to explicit fallback-off.
 		if [ "$key" = IMAGE_UPSCALE_ALIYUN_ENABLED ] && [ "$IMAGE_UPSCALE_ALIYUN_ENABLED" = false ] && ! grep -q "^${key}=" "$inspect_env"; then continue; fi
 		expected_value="${!key-}"
+		if [ "$key" = IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET ] && [ -z "$expected_value" ] && ! grep -q "^${key}=" "$inspect_env"; then continue; fi
 		if ! actual_value="$(awk -v expected_key="$key" '
 			index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
 			END { if (count != 1) exit 1; print value }
@@ -868,6 +932,18 @@ container_matches_image_upscale_env() {
 		fi
 		[ "$actual_value" = "$expected_value" ] || return 1
 	done
+}
+
+container_matches_shanghai_delivery_env() {
+  local inspect_env="$1" key actual_value
+  [ "$SHANGHAI_DELIVERY_OVERRIDE" = true ] || return 0
+  for key in "${SHANGHAI_DELIVERY_ENV_KEYS[@]}"; do
+    actual_value="$(awk -v key="$key" '
+      index($0, key "=") == 1 { value = substr($0, length(key) + 2); count++ }
+      END { if (count != 1) exit 1; print value }
+    ' "$inspect_env")" || return 1
+    [ "$actual_value" = "${!key}" ] || return 1
+  done
 }
 
 container_matches_fixed_egress_compatibility_env() {
@@ -1177,8 +1253,11 @@ make_runtime_env_file() {
 	  BATCH_IMAGE_DELIVERY_ENABLED)
 		continue
 		;;
-	  IMAGE_UPSCALE_ALIYUN_ENABLED|IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
+	  IMAGE_UPSCALE_ALIYUN_ENABLED|IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET|IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
 		continue
+		;;
+	  BATCH_IMAGE_SHANGHAI_DELIVERY_URL|BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID|BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS)
+		[ "$SHANGHAI_DELIVERY_OVERRIDE" = false ] || continue
 		;;
 	  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET)
 		continue
@@ -1231,6 +1310,11 @@ make_runtime_env_file() {
   fi
 	write_unified_payment_overrides "$output_file"
 	write_image_upscale_overrides "$output_file"
+	if [ "$SHANGHAI_DELIVERY_OVERRIDE" = true ]; then
+	  for key in "${SHANGHAI_DELIVERY_ENV_KEYS[@]}"; do
+		printf '%s=%s\n' "$key" "${!key}" >>"$output_file"
+	  done
+	fi
 	write_batch_image_delivery_cos_overrides "$output_file"
   write_url_allowlist_overrides "$output_file"
   printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
@@ -1306,6 +1390,7 @@ container_matches_external_runtime() {
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
   container_matches_image_upscale_env "$inspect_env" || return 1
+  container_matches_shanghai_delivery_env "$inspect_env" || return 1
   container_matches_batch_image_delivery_cos_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
@@ -1396,6 +1481,7 @@ container_matches_local_runtime() {
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
   container_matches_image_upscale_env "$inspect_env" || return 1
+	container_matches_shanghai_delivery_env "$inspect_env" || return 1
   container_matches_batch_image_delivery_cos_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
@@ -1996,7 +2082,9 @@ if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
 fi
 validate_unified_payment_runtime
 validate_batch_image_delivery_cos_runtime
+resolve_image_delivery_rollback_profile
 validate_image_upscale_runtime
+validate_shanghai_delivery_runtime
 validate_daypass_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env

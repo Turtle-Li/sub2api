@@ -199,11 +199,18 @@ case "$1:$2" in
     if [ "${2:-}" = -i ]; then
       cat >/dev/null
     fi
+    if [ "${6:-}" = "$public_dir/aliyun/public.sock" ]; then
+      [ "${MOCK_HOST_SOCKET_READY:-false}" = true ] || exit 1
+    fi
     ;;
   *) exit 1 ;;
 esac
 EOF_DOCKER
-chmod +x "$FAKE_BIN/flock" "$FAKE_BIN/id" "$FAKE_BIN/docker"
+cat >"$FAKE_BIN/systemctl" <<'EOF_SYSTEMCTL'
+#!/usr/bin/env bash
+[ "$*" = 'is-active --quiet sub2api-image-upscale-aliyun-credential.service' ] && [ "${MOCK_HOST_AGENT_ACTIVE:-false}" = true ]
+EOF_SYSTEMCTL
+chmod +x "$FAKE_BIN/flock" "$FAKE_BIN/id" "$FAKE_BIN/docker" "$FAKE_BIN/systemctl"
 
 image='sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 grep -A4 '^  image_upscale_vault:$' "$COMPOSE_FILE" | grep -qx '    driver: local' \
@@ -283,6 +290,15 @@ run_script ready-aliyun-auto "$image" >"$OUTPUT"
 grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'cloud profile not ready'
 unset MOCK_ALIYUN_PROFILE
 printf 'SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE=false\n' >>"$CONFIG_FILE"
+
+cp "$CONFIG_FILE" "$CONFIG_FILE.pre-host"
+printf 'IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET=/run/sub2api-upscale-vault/aliyun/public.sock\n' >>"$CONFIG_FILE"
+if run_script ready-aliyun-auto "$image" >"$OUTPUT" 2>&1; then fail 'accepted an inactive host agent'; fi
+if MOCK_HOST_AGENT_ACTIVE=true run_script ready-aliyun-auto "$image" >"$OUTPUT" 2>&1; then fail 'accepted an unready host socket'; fi
+MOCK_HOST_AGENT_ACTIVE=true MOCK_HOST_SOCKET_READY=true run_script ready-aliyun-auto "$image" >"$OUTPUT"
+grep -q -- 'exec sub2api-upscale-vault /app/sub2api-vault-agent check --public-socket /run/sub2api-upscale-vault/aliyun/public.sock' "$CALLS" || fail 'host socket was not checked from the existing mount'
+if printf '%s\n' "$aliyun_fixture" | run_script load-aliyun "$image" >"$OUTPUT" 2>&1; then fail 'allowed Vault injection into a separate host profile'; fi
+mv -- "$CONFIG_FILE.pre-host" "$CONFIG_FILE"
 
 before_runs="$(run_count)"
 if MOCK_NETWORK=bridge run_script ready "$image" >"$OUTPUT" 2>&1; then

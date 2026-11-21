@@ -49,6 +49,7 @@ fi
 vault_volume=''
 enabled=''
 aliyun=''
+aliyun_socket=''
 base_url=''
 vault_ref=''
 agent_socket=''
@@ -80,6 +81,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     SUB2API_IMAGE_UPSCALE_VAULT_VOLUME) vault_volume="$value" ;;
     IMAGE_UPSCALE_ENABLED) enabled="$value" ;;
     IMAGE_UPSCALE_ALIYUN_ENABLED) aliyun="$value" ;;
+    IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET) aliyun_socket="$value" ;;
     IMAGE_UPSCALE_BASE_URL) base_url="$value" ;;
     IMAGE_UPSCALE_API_KEY_VAULT_REF) vault_ref="$value" ;;
     IMAGE_UPSCALE_VAULT_AGENT_SOCKET) agent_socket="$value" ;;
@@ -98,7 +100,19 @@ if ! sub2api_maintenance_lock_open "$LOCK_FILE"; then die; fi
 flock -n "$SUB2API_MAINTENANCE_LOCK_FD" || die
 
 if [ -n "$aliyun" ]; then
-  [ "$line_count" -eq 1 ] || die
+  # The optional second field selects the separate host-only agent without
+  # upgrading or reloading the existing Mini/COS credential agent.
+  profile=true
+  socket_line=""
+  case "$line_count" in
+    1) ;;
+    2)
+      [ "$aliyun_socket" = /run/sub2api-upscale-vault/aliyun/public.sock ] || die
+      profile=false
+      socket_line="IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET='${aliyun_socket}'"$'\n'
+      ;;
+    *) die ;;
+  esac
   case "$aliyun" in true|false) ;; *) die ;; esac
   if [ "$aliyun" = true ]; then
     sed -n "/^${BEGIN_MARKER}$/,/^${END_MARKER}$/p" "$CONFIG_FILE" | grep -qxF "IMAGE_UPSCALE_ENABLED='true'" || die
@@ -108,16 +122,17 @@ if [ -n "$aliyun" ]; then
   flag=IMAGE_UPSCALE_ALIYUN_ENABLED
   enabled="$aliyun"
   desired="$BEGIN_MARKER
-SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE='true'
-${flag}='${enabled}'
+SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE='${profile}'
+${socket_line}${flag}='${enabled}'
 $END_MARKER"
   # Do not silently overlay hand-authored or duplicate switches elsewhere.
   awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
     $0 == begin { inside=1 }; $0 == end { inside=0 }
-    !inside && /^[[:space:]]*(export[[:space:]]+)?(IMAGE_UPSCALE_ALIYUN_ENABLED|SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE)=/ { exit 1 }
+    !inside && /^[[:space:]]*(export[[:space:]]+)?(IMAGE_UPSCALE_ALIYUN_ENABLED|IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET|SUB2API_IMAGE_UPSCALE_ALIYUN_VAULT_PROFILE)=/ { exit 1 }
   ' "$CONFIG_FILE" || die
 else
   flag=IMAGE_UPSCALE_ENABLED
+  [ -z "$aliyun_socket" ] || die
   if [ "$enabled" = false ] && grep -qxF "IMAGE_UPSCALE_ALIYUN_ENABLED='true'" "$CONFIG_FILE"; then die; fi
   [ "$line_count" -eq 12 ] || die
   [ "$vault_volume" = sub2api_image_upscale_vault ] || die

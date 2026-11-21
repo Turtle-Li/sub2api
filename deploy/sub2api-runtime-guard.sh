@@ -628,6 +628,14 @@ application_runtime_matches() {
   feature_flags="$(runtime_feature_flags_from_environment "$environment_json")" || return 1
   IFS='|' read -r unified_payment_enabled image_upscale_enabled feishu_enabled daypass_enabled daypass_product aliyun_enabled extra_feature_value <<<"$feature_flags"
   case "$aliyun_enabled" in true) ready_action=ready-aliyun-auto ;; false) ;; *) return 1 ;; esac
+  if [ "$aliyun_enabled" = true ]; then
+    local aliyun_agent_socket
+    aliyun_agent_socket="$(printf '%s\n' "$environment" | awk '
+      /^IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET=/ { value=substr($0, index($0,"=")+1); count++ }
+      END { if (count > 1) exit 1; print value }
+    ')" || return 1
+    [ "$aliyun_agent_socket" = "${IMAGE_UPSCALE_ALIYUN_AGENT_SOCKET:-}" ] || return 1
+  fi
   [ -z "${extra_feature_value:-}" ] || return 1
   case "$unified_payment_enabled" in true|false) ;; *) return 1 ;; esac
   case "$image_upscale_enabled" in true|false) ;; *) return 1 ;; esac
