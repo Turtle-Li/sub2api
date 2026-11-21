@@ -27,9 +27,11 @@ services. The video workspace and upstream Video URL retention are out of scope.
 - Private spool is bounded to 48 MiB per image, 2 GiB total in flight, and
   4,096 slots. Incoming images must have a supported MIME and bounded
   dimensions. The Mini direct grant binds the exact slot and expected
-  dimensions. The existing Mini upload contract was verified against the
-  deployed private Registry revision `aaaee866b147598026fb5fc6351d3e1857b5c9c9`,
-  under `deploy/office-mini-upscale-api`. Only a staged result and a
+  dimensions. The Mini direct-upload source contract is pinned at private
+  Registry revision `aaaee866b147598026fb5fc6351d3e1857b5c9c9`, under
+  `deploy/office-mini-upscale-api`. Do not infer the deployed version from this
+  reference: verify the running gateway's source checksum and capabilities.
+  Only a staged result and a
   verified exact COS object count as delivered. The Mini keeps the existing
   upload fields and never receives broad COS credentials.
 - Temp bytes are synced and renamed before acknowledging receipt. A failed
@@ -41,10 +43,11 @@ services. The video workspace and upstream Video URL retention are out of scope.
   the node, and AWS must hold its existing indexing write permit while issuing
   a publish. Pending bytes must not be manually deleted or recycled on timeout.
 
-## First canary contract (not activated)
+## Admission contract
 
-- AWS uses the existing source checkpoint only for a designated user's
-  session-wallet job, one image, exact Image 2.6 Flare or Sunburst, and 2K.
+- The Shanghai lane is for a session-wallet job with one image, exact Image
+  2.6 Flare or Sunburst, and 2K. Admission is off by default. An approved
+  single-user smoke or the all-users switch selects only jobs of this shape.
   The persisted output marker pins the route before Mini or COS work. Indexing
   then does not require the original account or a merged base64 JSONL object.
   This lane does not apply to API-key jobs, Gemini/Vertex, other
@@ -71,8 +74,9 @@ services. The video workspace and upstream Video URL retention are out of scope.
 - After exact COS verification and item indexing, the existing wallet ledger
   settles once. Access remains 360h from settlement. Only then does the active
   worker acknowledge and remove the Shanghai slot. The DB marker stays pending
-  until the idempotent ACK and its DB confirmation both succeed. Monitor spool
-  age and capacity; this is not sized or authorized for general traffic.
+  until the idempotent ACK and its DB confirmation both succeed. Monitor
+  spool age, occupancy, retries, and the Mini/Aliyun queues. Global user
+  admission does not widen the job shape or raise those limits.
 
 ## Install and validate without customer traffic
 
@@ -111,11 +115,17 @@ services. The video workspace and upstream Video URL retention are out of scope.
    does not enable Image Studio on AWS.
 6. Install the compatible Mini and Shanghai builds before enabling the
    application flag. Keep `BATCH_IMAGE_SHANGHAI_DELIVERY_URL` unset by default.
-   For the canary, set it to the verified Tailnet control origin and set
-   `BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID` to the approved user. Set
-   only the canary user to `0` to stop admission but continue recovering
-   existing jobs. Reconcile the pinned jobs and ACKs before removing the URL,
-   changing its object prefix, or activating an incompatible rollback image.
+   Require `ready-aliyun-auto` from the approved memory-only fallback profile
+   before setting the controller URL; the legacy Mini/COS agent is not enough.
+   For a single test, set the URL to the verified Tailnet control origin and
+   `BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID` to the approved user. After
+   the live check passes, set the user ID to `0` and set
+   `BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS=true` in one config change, then
+   activate it through the guarded blue-green release. These two admission
+   modes are mutually exclusive. To stop new admission, set the ID to `0` and
+   all-users to `false` while retaining the URL. Reconcile the pinned jobs and
+   ACKs before removing the URL, changing the prefix, or activating an
+   incompatible rollback image.
 
 ### Control-only smoke — 2026-11-21 Pacific time
 

@@ -50,6 +50,23 @@ func TestBatchImageRetentionDefaultsAndOverride(t *testing.T) {
 	})
 }
 
+func TestShanghaiDeliveryAllUsersRequiresController(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS", "true")
+	t.Setenv("BATCH_IMAGE_SHANGHAI_DELIVERY_URL", "")
+	_, err := Load()
+	require.ErrorContains(t, err, "batch_image.shanghai_delivery_all_users")
+}
+
+func TestShanghaiDeliveryAllUsersRejectsConflictingCanary(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS", "true")
+	t.Setenv("BATCH_IMAGE_SHANGHAI_DELIVERY_URL", "http://100.64.0.3:18486")
+	t.Setenv("BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID", "42")
+	_, err := Load()
+	require.ErrorContains(t, err, "batch_image.shanghai_delivery_all_users")
+}
+
 func TestAutoRequestBodyMemoryBudget(t *testing.T) {
 	require.Equal(t, int64(1<<30), autoRequestBodyMemoryBudget(0))
 	require.Equal(t, int64(1<<30), autoRequestBodyMemoryBudget(2<<30))

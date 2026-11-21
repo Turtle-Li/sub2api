@@ -226,8 +226,38 @@ func TestShanghaiCanaryUsesWalletSlotAndBypassesMergedArchive(t *testing.T) {
 	} {
 		outside := job
 		different(&outside)
-		require.False(t, batchImageShanghaiCanary(f.cfg, &outside))
+		require.False(t, batchImageShanghaiAdmitsNewJob(f.cfg, &outside))
 	}
+}
+
+func TestShanghaiAllUsersKeepsTheEligibleJobBoundary(t *testing.T) {
+	f := newShanghaiTestFixture(t)
+	f.cfg.BatchImage.ShanghaiDeliveryCanaryUserID = 0
+	job := *f.job
+	job.UserID++
+	require.False(t, batchImageShanghaiAdmitsNewJob(f.cfg, &job))
+	f.cfg.BatchImage.ShanghaiDeliveryAllUsers = true
+	require.True(t, batchImageShanghaiAdmitsNewJob(f.cfg, &job))
+	job.Model = "gpt-image-2.6-sunburst"
+	require.True(t, batchImageShanghaiAdmitsNewJob(f.cfg, &job))
+	key := int64(5)
+	for _, change := range []func(*BatchImageJob){
+		func(j *BatchImageJob) { j.APIKeyID = &key },
+		func(j *BatchImageJob) { j.UserID = 0 },
+		func(j *BatchImageJob) { j.StudioGroupID = nil },
+		func(j *BatchImageJob) { j.ItemCount++ },
+		func(j *BatchImageJob) { j.ImageSize = ImageBillingSize1K },
+		func(j *BatchImageJob) { j.Model = "gpt-image-2.5-flare" },
+	} {
+		outside := job
+		change(&outside)
+		require.False(t, batchImageShanghaiAdmitsNewJob(f.cfg, &outside))
+	}
+	f.cfg.BatchImage.ShanghaiDeliveryCanaryUserID = job.UserID
+	require.False(t, batchImageShanghaiAdmitsNewJob(f.cfg, &job), "conflicting modes fail closed")
+	f.cfg.BatchImage.ShanghaiDeliveryCanaryUserID = 0
+	f.cfg.BatchImage.ShanghaiDeliveryURL = ""
+	require.False(t, batchImageShanghaiAdmitsNewJob(f.cfg, &job))
 }
 
 func TestShanghaiReconcilesCOSAndAcknowledgesAfterWalletSettlement(t *testing.T) {

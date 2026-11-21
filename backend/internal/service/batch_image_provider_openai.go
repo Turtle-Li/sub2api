@@ -261,7 +261,7 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 	if batchImageUsesShanghai(job) {
 		return batchImageOpenAISucceededStatus(BatchImageShanghaiSourceRef), nil
 	}
-	shanghai := p.checkpoints != nil && batchImageProviderOutputRef(job) == "" && batchImageShanghaiCanary(p.config, job)
+	shanghai := p.checkpoints != nil && batchImageProviderOutputRef(job) == "" && batchImageShanghaiAdmitsNewJob(p.config, job)
 	if shanghai {
 		ready, err := p.checkpoints.ListBatchImageCheckpointIDs(ctx, batchID, BatchImageCheckpointSource)
 		if err != nil {

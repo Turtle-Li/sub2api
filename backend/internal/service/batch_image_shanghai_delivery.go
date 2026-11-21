@@ -38,9 +38,14 @@ type batchImageShanghaiSigner interface {
 	PresignHead(context.Context, string, time.Duration) (string, error)
 }
 
-func batchImageShanghaiCanary(cfg *config.Config, job *BatchImageJob) bool {
-	return cfg != nil && batchImageShanghaiJobShape(job) && cfg.BatchImage.ShanghaiDeliveryURL != "" &&
-		cfg.BatchImage.ShanghaiDeliveryCanaryUserID > 0 && job.UserID == cfg.BatchImage.ShanghaiDeliveryCanaryUserID
+func batchImageShanghaiAdmitsNewJob(cfg *config.Config, job *BatchImageJob) bool {
+	if cfg == nil || cfg.BatchImage.ShanghaiDeliveryURL == "" || !batchImageShanghaiJobShape(job) || job.UserID <= 0 {
+		return false
+	}
+	if cfg.BatchImage.ShanghaiDeliveryAllUsers {
+		return cfg.BatchImage.ShanghaiDeliveryCanaryUserID == 0
+	}
+	return job.UserID == cfg.BatchImage.ShanghaiDeliveryCanaryUserID
 }
 
 func batchImageShanghaiJobShape(job *BatchImageJob) bool {

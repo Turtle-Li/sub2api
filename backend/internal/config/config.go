@@ -392,6 +392,7 @@ type BatchImageConfig struct {
 	DeliveryCOSForcePathStyle          bool   `mapstructure:"delivery_cos_force_path_style"`
 	ShanghaiDeliveryURL                string `mapstructure:"shanghai_delivery_url"`
 	ShanghaiDeliveryCanaryUserID       int64  `mapstructure:"shanghai_delivery_canary_user_id"`
+	ShanghaiDeliveryAllUsers           bool   `mapstructure:"shanghai_delivery_all_users"`
 }
 
 // ImageUpscaleConfig controls the private Image 2.5 post-processing gateway.
@@ -2670,6 +2671,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_cos_prefix", "sub2-batch-image/prod/")
 	viper.SetDefault("batch_image.shanghai_delivery_url", "")
 	viper.SetDefault("batch_image.shanghai_delivery_canary_user_id", 0)
+	viper.SetDefault("batch_image.shanghai_delivery_all_users", false)
 	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
 	viper.SetDefault("image_upscale.enabled", false)
 	viper.SetDefault("image_upscale.aliyun_enabled", false)
@@ -3726,6 +3728,9 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.BatchImage.DeliveryCOSAccessKeyID) != "" || strings.TrimSpace(c.BatchImage.DeliveryCOSSecretAccessKey) != "" {
 		return fmt.Errorf("batch_image raw COS credentials are not accepted; configure exact Vault references")
 	}
+	if c.BatchImage.ShanghaiDeliveryAllUsers && (c.BatchImage.ShanghaiDeliveryURL == "" || c.BatchImage.ShanghaiDeliveryCanaryUserID != 0) {
+		return fmt.Errorf("batch_image.shanghai_delivery_all_users requires the private controller URL and no canary user ID")
+	}
 	if c.BatchImage.ShanghaiDeliveryURL != "" {
 		if err := shanghaidelivery.ValidateControlURL(c.BatchImage.ShanghaiDeliveryURL); err != nil {
 			return fmt.Errorf("batch_image.shanghai_delivery_url: %w", err)
@@ -3734,7 +3739,7 @@ func (c *Config) Validate() error {
 			c.BatchImage.ShanghaiDeliveryCanaryUserID < 0 || c.BatchImage.DeliveryCOSForcePathStyle ||
 			c.BatchImage.DeliveryCOSRegion != "ap-shanghai" || c.BatchImage.DeliveryCOSEndpoint != "https://cos.ap-shanghai.myqcloud.com" ||
 			time.Duration(c.ImageUpscale.JobTimeoutSeconds)*time.Second >= shanghaidelivery.TicketTTL {
-			return fmt.Errorf("Shanghai Image Studio canary requires an exact user, enabled Mini and Aliyun, a bounded job timeout, and virtual-hosted Shanghai COS")
+			return fmt.Errorf("Shanghai Image Studio delivery requires a non-negative canary user ID, enabled Mini and Aliyun, a bounded job timeout, and virtual-hosted Shanghai COS")
 		}
 	}
 	if _, raw := os.LookupEnv("IMAGE_UPSCALE_ALIYUN_CREDENTIALS"); raw {
