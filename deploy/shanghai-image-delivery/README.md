@@ -132,10 +132,10 @@ services. The video workspace and upstream Video URL retention are out of scope.
    ACKs before removing the URL, changing the prefix, or activating an
    incompatible rollback image.
 
-### Control-only smoke — 2026-11-21 Pacific time
+### Historical control-only smoke — 2026-11-21 Pacific time
 
-The dedicated systemd unit is running in control-only mode, not enabled at
-boot, and no app traffic is routed to it. A synthetic 5,153,193-byte image
+The dedicated systemd unit was running in control-only mode, not enabled at
+boot, and no app traffic was routed to it. A synthetic 5,153,193-byte image
 staged from AWS in 0.846 s. The service restart preserved the exact digest
 and byte count. The first publish including HEAD verification completed in
 0.616 s; repeating the publish against the already confirmed object took
@@ -161,11 +161,40 @@ always be more stable. Compare the same payloads, errors, and tail latencies
 before changing the cross-region control path. Keep the same-region COS leg
 internal unless measurements justify a change there too.
 
+### Production cutover — 2026-11-21 UTC
+
+- The Shanghai worker and dedicated private HTTPS ingress are enabled. The
+  Mini gateway reports `direct_upload_recovery=true`. The separate Aliyun
+  host credential agent passed restart and mounted-socket readiness. Its
+  real SDK smoke upscaled a synthetic 512×512 source to 1024×1024. Mini
+  failure-to-Aliyun routing is covered by integration tests; no production
+  Mini outage was induced.
+- GitHub Actions `44941485173` activated revision `21dc2cbed5a38e2a1ae91f16f2ee750d8b02f7f2`
+  for the owner-only smoke. The separate optional Caddy template upload was
+  rejected; the already-active application release was verified independently
+  against the host, startup, and live Caddy configuration.
+- A fresh session-authenticated Image 2.6 Sunburst **single 2K** job was
+  submitted in the workbench. The job had `api_key_id=0`, one item, and no
+  user grant to the routing/price group. Its 3072×2048 COS original and preview
+  opened in the gallery; the Shanghai ACK was recorded after the only wallet
+  capture (0.20 credits). The retention deadline was exactly 360 hours after
+  settlement. That was not the standalone Aliyun credential probe.
+- `shanghai-all-20261121T195011Z-21dc2cbe` reused that verified image through
+  the AWS server release wrapper. The Caddy-active `sub2api-blue` was healthy,
+  with the controller reachable and Aliyun fallback enabled. Its running
+  environment had `BATCH_IMAGE_SHANGHAI_DELIVERY_CANARY_USER_ID=0` and
+  `BATCH_IMAGE_SHANGHAI_DELIVERY_ALL_USERS=true`. Only the user restriction
+  was removed: sign-in and sufficient wallet balance still apply, and the
+  Shanghai lane remains scoped to the wallet's single Image 2.6 Flare and
+  Sunburst 2K outputs. No live generation was replayed for cutover.
+
 ## Stop or recover
 
-For canary rollback, only stop `sub2api-image-delivery.service` and, if one
-was installed for this service, remove its exact private Serve listener. Do
-not reset Tailnet Serve or Funnel globally. Retain private state. For an active
-production lane, drain or explicitly reconcile staged outputs before turning
-off the lane or promoting an incompatible AWS application. An ambiguous
-remote result is not authorization to rerun generation or remove a slot.
+For a control-only smoke with no application jobs pinned to Shanghai, only
+stop `sub2api-image-delivery.service` and remove its exact private Serve
+listener, if installed. Do not reset Tailnet Serve or Funnel globally. Retain
+private state. For an active production lane, first stop new admissions while
+keeping the URL and agents available, then reconcile staged outputs and ACKs
+before disabling services or promoting an incompatible AWS application. An
+ambiguous remote result is not authorization to rerun generation or remove a
+slot.
