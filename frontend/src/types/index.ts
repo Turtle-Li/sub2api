@@ -289,6 +289,10 @@ export interface PublicSettings {
   subscription_enabled: boolean
   /** Mirrors payment config BALANCE_PAYMENT_DISABLED; true = balance top-up closed (subscription-only site). */
   payment_balance_disabled: boolean
+  /** Opt-in navigation and new submissions; existing video history remains readable. */
+  video_studio_enabled?: boolean
+  /** Opt-in Creative Canvas workspace and gallery add-to-canvas entries. */
+  creative_canvas_enabled?: boolean
   model_plaza_enabled: boolean
   model_plaza_require_auth: boolean
   plugin_management_enabled: boolean

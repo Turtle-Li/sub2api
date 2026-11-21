@@ -750,6 +750,26 @@ const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
 const flagMCP = makeSidebarFlag(FeatureFlags.mcp)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
+const flagVideoStudio = makeSidebarFlag(FeatureFlags.videoStudio)
+const flagCreativeCanvas = makeSidebarFlag(FeatureFlags.creativeCanvas)
+const VideoStudioIcon = { render: () => h(Icon, { name: 'play' }) }
+const CreativeCanvasIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('rect', { x: '3', y: '4', width: '7', height: '6', rx: '1.5' }),
+        h('rect', { x: '14', y: '3', width: '7', height: '6', rx: '1.5' }),
+        h('rect', { x: '14', y: '15', width: '7', height: '6', rx: '1.5' }),
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M10 7h4M10 7c2 0 2 11 4 11'
+        })
+      ]
+    )
+}
 
 // 用户侧栏与管理员的「我的账户」共享个人导航；模型状态统一从顶部进入。
 function buildSelfNavItems(withDashboard: boolean): NavItem[] {
@@ -760,6 +780,8 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   items.push(
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/image-studio', label: '生图工作台', icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
+    { path: '/video-studio', label: '视频工作台', icon: VideoStudioIcon, hideInSimpleMode: true, featureFlag: flagVideoStudio },
+    { path: '/creative-canvas', label: t('nav.creativeCanvas'), icon: CreativeCanvasIcon, hideInSimpleMode: true, featureFlag: flagCreativeCanvas },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },

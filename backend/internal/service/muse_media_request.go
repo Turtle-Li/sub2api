@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	museMaxReferences       = 10
-	museMaxReferenceBytes   = 40 << 20
-	museMaxReferenceTotal   = 100 << 20
-	museMaxTextBytes        = 64 << 10
-	museVideoDefaultSeconds = 6
+	museMaxReferences     = 10
+	museMaxReferenceBytes = 40 << 20
+	museMaxReferenceTotal = 100 << 20
+	museMaxTextBytes      = 64 << 10
+	// MuseVideoDefaultSeconds is the native prompt default and Studio quote basis, not a delivered runtime.
+	MuseVideoDefaultSeconds = 6
 )
 
 // MuseMediaRequestMaxBytes fits 100 MiB of Base64 references, plus JSON fields.
@@ -132,7 +133,7 @@ func ParseMuseMediaRequest(endpoint GrokMediaEndpoint, contentType string, body 
 			return nil, errors.New("video duration for Muse must be positive")
 		}
 		if req.Duration == 0 {
-			req.Duration = museVideoDefaultSeconds
+			req.Duration = MuseVideoDefaultSeconds
 		}
 		if req.Async || req.ResponseFormat != "" || req.N != 0 {
 			return nil, errors.New("async, response_format and n are image parameters")

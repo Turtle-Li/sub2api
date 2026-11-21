@@ -28,7 +28,32 @@ func (displayPreviewChannelRepo) GetByID(_ context.Context, id int64) (*service.
 type displayPreviewGroupRepo struct{ service.GroupRepository }
 
 func (displayPreviewGroupRepo) ListActive(context.Context) ([]service.Group, error) {
-	return []service.Group{{ID: 11, Platform: service.PlatformAnthropic}}, nil
+	return []service.Group{{ID: 11, Platform: service.PlatformAnthropic}, {ID: 12, Platform: service.PlatformKimi}}, nil
+}
+
+func TestPlatformDisplayPreviewHTTP(t *testing.T) {
+	catalog := service.NewChannelModelCatalog(displayPreviewAccountRepo{}, nil)
+	h := NewChannelHandler(service.NewChannelService(displayPreviewChannelRepo{}, displayPreviewGroupRepo{}, nil, nil, nil, catalog), nil, nil)
+	router := gin.New()
+	const path = "/channels/display-models/preview"
+	router.POST(path, h.PreviewPlatformDisplayModels)
+	for _, tc := range []struct {
+		platform string
+		group    string
+		status   int
+		fragment string
+	}{
+		{"kimi", "12", http.StatusOK, `"models_by_group":{"12":[]}`},
+		{"kimi", "11", http.StatusOK, `"models_by_group":{}`},
+		{"unknown", "12", http.StatusBadRequest, "UNSUPPORTED_PLATFORM"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, path+"?platform="+tc.platform, strings.NewReader(`{"channel_id":7,"group_ids":[`+tc.group+`]}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, tc.status, w.Code)
+		require.Contains(t, w.Body.String(), tc.fragment)
+	}
 }
 
 type displayPreviewAccountRepo struct{ service.AccountRepository }

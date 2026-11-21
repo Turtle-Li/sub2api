@@ -205,6 +205,32 @@ func isOpenAIWSTerminalEvent(eventType string) bool {
 	}
 }
 
+// ErrOpenAIWSCPRUnavailable denotes a final failure emitted by CPR itself, not a generic WS error.
+var ErrOpenAIWSCPRUnavailable = errors.New("CPR ended the websocket turn: upstream_unavailable")
+
+// CPR's own 502/503 error_event carries its request ID in both fields, and its
+// execution body cannot emit a later usage frame. A provider error forwarded
+// through the relay (or the same envelope on another relay) is not that proof.
+// Called only for type=error, error.code=upstream_unavailable, after recovery decisions.
+func openAIWSCPRUnavailableRequestID(account *Account, message []byte) string {
+	frame := gjson.ParseBytes(message)
+	status := frame.Get("status").Raw
+	eventError := frame.Get("error")
+	if (status != "502" && status != "503") || eventError.Get("type").Str != "server_error" || eventError.Get("message").Type != gjson.String {
+		return ""
+	}
+	id, headers := frame.Get("request_id").Str, frame.Get("headers")
+	if strings.TrimSpace(id) == "" || headers.Get("x-gateway-request-id").Str != id ||
+		(strings.TrimSpace(headers.Get("x-request-id").Str) == "" && strings.TrimSpace(headers.Get("x-oai-request-id").Str) == "") {
+		return ""
+	}
+	// Unknown extensions (including usage or response) are not this contract.
+	if len(frame.Map()) != 5 || len(eventError.Map()) != 3 || !IsCPRQuotaSyncAccount(account) {
+		return ""
+	}
+	return id
+}
+
 func normalizeOpenAIWSTerminalEvent(eventType string) string {
 	switch strings.TrimSpace(eventType) {
 	case "response.completed":

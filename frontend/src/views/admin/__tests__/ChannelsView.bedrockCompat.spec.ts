@@ -4,12 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Channel, CreateChannelRequest, UpdateChannelRequest } from '@/api/admin/channels'
 import ChannelsView from '@/views/admin/ChannelsView.vue'
 
-const { listChannels, createChannel, updateChannel, previewGPTDisplayModels, previewClaudeDisplayModels, getGroups, showSuccess, showError } = vi.hoisted(() => ({
+const { listChannels, createChannel, updateChannel, previewPlatformDisplayModels, getGroups, showSuccess, showError } = vi.hoisted(() => ({
   listChannels: vi.fn(),
   createChannel: vi.fn(),
   updateChannel: vi.fn(),
-  previewGPTDisplayModels: vi.fn(),
-  previewClaudeDisplayModels: vi.fn(),
+  previewPlatformDisplayModels: vi.fn(),
   getGroups: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
@@ -17,7 +16,7 @@ const { listChannels, createChannel, updateChannel, previewGPTDisplayModels, pre
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
-    channels: { list: listChannels, create: createChannel, update: updateChannel, previewGPTDisplayModels, previewClaudeDisplayModels },
+    channels: { list: listChannels, create: createChannel, update: updateChannel, previewPlatformDisplayModels },
     groups: { getAll: getGroups },
     settings: { getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false }) }
   }
@@ -94,8 +93,7 @@ describe('ChannelsView channel feature configuration', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    previewGPTDisplayModels.mockReset()
-    previewClaudeDisplayModels.mockReset()
+    previewPlatformDisplayModels.mockReset()
     localStorage.clear()
     stored = []
     listChannels.mockImplementation(async () => ({ items: stored, total: stored.length }))
@@ -184,15 +182,16 @@ describe('ChannelsView channel feature configuration', () => {
     const channel = makeChannel({ gpt_display_models_by_group: { '22': ['gpt-6.1-sol'] }, future_feature: { enabled: true } })
     channel.model_mapping = { openai: { 'gpt-6-sol': 'gpt-6-sol' } }
     stored = [channel]
-    previewGPTDisplayModels.mockResolvedValue({ models_by_group: { '22': ['gpt-6.2-astra', 'gpt-6.2-sol'] } })
+    previewPlatformDisplayModels.mockResolvedValue({ previous_models_by_group: { '22': ['gpt-6.1-sol'] }, models_by_group: { '22': ['gpt-6.2-astra', 'gpt-6.2-sol'] } })
     const wrapper = mountView()
     await flushPromises()
     await clickButton(wrapper, 'common.edit')
     await clickButton(wrapper, 'admin.groups.platforms.openai')
-    expect(previewGPTDisplayModels).not.toHaveBeenCalled()
-    await clickButton(wrapper, 'admin.channels.form.gptDisplaySync')
-    expect(previewGPTDisplayModels).toHaveBeenCalledOnce()
-    expect(previewGPTDisplayModels.mock.calls[0][0]).toMatchObject({ group_ids: [22], model_mapping: channel.model_mapping })
+    expect(previewPlatformDisplayModels).not.toHaveBeenCalled()
+    await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
+    expect(previewPlatformDisplayModels).toHaveBeenCalledOnce()
+    expect(previewPlatformDisplayModels.mock.calls[0][0]).toBe('openai')
+    expect(previewPlatformDisplayModels.mock.calls[0][1]).toMatchObject({ channel_id: 1, group_ids: [22], model_mapping: channel.model_mapping })
     expect(updateChannel).not.toHaveBeenCalled()
     const preview = wrapper.get('details')
     expect(preview.text()).toContain('OpenAI group')
@@ -201,28 +200,57 @@ describe('ChannelsView channel feature configuration', () => {
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
     const payload = updateChannel.mock.calls[0][1]
-    expect(payload.features_config.gpt_display_models_by_group).toEqual({ '22': ['gpt-6.2-astra', 'gpt-6.2-sol'] })
+    expect(payload.features_config).not.toHaveProperty('gpt_display_models_by_group')
+    expect(payload.display_model_updates).toEqual({ openai: { '22': ['gpt-6.2-astra', 'gpt-6.2-sol'] } })
     expect(payload.features_config.future_feature).toEqual({ enabled: true })
     expect(payload.model_pricing).toEqual([])
     expect(payload.model_mapping).toEqual(channel.model_mapping)
     wrapper.unmount()
   })
 
+  it('syncs Kimi and a platform without a pricing catalog independently', async () => {
+    const channel = makeChannel({ claude_display_models_by_group: { '11': ['leave-alone'] } })
+    channel.group_ids = [33, 44]
+    stored = [channel]
+    getGroups.mockResolvedValue([{ id: 33, platform: 'kimi', name: 'Kimi via WorkBuddy' }, { id: 44, platform: 'cline', name: 'Cline' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await clickButton(wrapper, 'common.edit')
+    for (const [platform, id, models] of [['kimi', 33, ['kimi-k3']], ['cline', 44, []]] as const) {
+      await clickButton(wrapper, `admin.groups.platforms.${platform}`)
+      previewPlatformDisplayModels.mockResolvedValueOnce({ previous_models_by_group: { [id]: ['retired'] }, models_by_group: { [id]: models } })
+      await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
+      expect(previewPlatformDisplayModels).toHaveBeenLastCalledWith(platform, expect.objectContaining({ channel_id: 1, group_ids: [id] }), expect.any(AbortSignal))
+      expect(wrapper.get('details').text()).toContain('retired')
+    }
+    expect(updateChannel).not.toHaveBeenCalled()
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    const { features_config: features, display_model_updates, model_mapping, model_pricing } = updateChannel.mock.calls[0][1]
+    expect(display_model_updates).toEqual({ kimi: { 33: ['kimi-k3'] }, cline: { 44: [] } })
+    expect(features).not.toHaveProperty('claude_display_models_by_group')
+    expect(model_mapping).toEqual({})
+    expect(model_pricing).toEqual([])
+    wrapper.unmount()
+  })
+
   it('does not save a preview after the display filters change', async () => {
     const saved = { '22': ['gpt-6.1-sol'] }
     stored = [makeChannel({ gpt_display_models_by_group: saved })]
-    previewGPTDisplayModels.mockResolvedValue({ models_by_group: { '22': ['gpt-6.2-sol'] } })
+    previewPlatformDisplayModels.mockResolvedValue({ previous_models_by_group: { '22': ['gpt-6.1-sol'] }, models_by_group: { '22': ['gpt-6.2-sol'] } })
     const wrapper = mountView()
     await flushPromises()
     await clickButton(wrapper, 'common.edit')
     await clickButton(wrapper, 'admin.groups.platforms.openai')
-    await clickButton(wrapper, 'admin.channels.form.gptDisplaySync')
+    await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
     await clickButton(wrapper, 'admin.channels.form.basicSettings')
     await wrapper.get('textarea[placeholder="admin.channels.form.plazaHiddenModelsPlaceholder"]').setValue('gpt-6.2-sol')
     await clickButton(wrapper, 'admin.groups.platforms.openai')
     expect(wrapper.get('[role="status"]').text()).toBe('admin.channels.form.gptDisplayStale')
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
+    expect(updateChannel.mock.calls[0][1]).not.toHaveProperty('display_model_updates')
+    expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('openai_account_display_models_by_group')
     expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('gpt_display_models_by_group')
     wrapper.unmount()
   })
@@ -230,15 +258,17 @@ describe('ChannelsView channel feature configuration', () => {
   it('keeps the saved GPT list when the preview fails', async () => {
     const saved = { '22': ['gpt-6.1-sol'] }
     stored = [makeChannel({ gpt_display_models_by_group: saved })]
-    previewGPTDisplayModels.mockRejectedValue(new Error('Cannot read group models'))
+    previewPlatformDisplayModels.mockRejectedValue(new Error('Cannot read group models'))
     const wrapper = mountView()
     await flushPromises()
     await clickButton(wrapper, 'common.edit')
     await clickButton(wrapper, 'admin.groups.platforms.openai')
-    await clickButton(wrapper, 'admin.channels.form.gptDisplaySync')
+    await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
     expect(wrapper.get('[role="alert"]').text()).toBe('Cannot read group models')
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
+    expect(updateChannel.mock.calls[0][1]).not.toHaveProperty('display_model_updates')
+    expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('openai_account_display_models_by_group')
     expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('gpt_display_models_by_group')
     wrapper.unmount()
   })
@@ -247,17 +277,18 @@ describe('ChannelsView channel feature configuration', () => {
     const channel = makeChannel({ gpt_display_models_by_group: { '22': ['gpt-6.2-sol'] } })
     channel.model_mapping = { anthropic: { 'my-old-alias': 'claude-3-7-sonnet-20250219' } }
     stored = [channel]
-    previewClaudeDisplayModels.mockResolvedValue({
+    previewPlatformDisplayModels.mockResolvedValue({
       previous_models_by_group: { '11': ['my-old-alias'] }, models_by_group: { '11': [] }
     })
     const wrapper = mountView()
     await flushPromises()
     await clickButton(wrapper, 'common.edit')
     await clickButton(wrapper, 'admin.groups.platforms.anthropic')
-    expect(previewClaudeDisplayModels).not.toHaveBeenCalled()
-    await clickButton(wrapper, 'admin.channels.form.claudeDisplaySync')
-    expect(previewClaudeDisplayModels).toHaveBeenCalledOnce()
-    expect(previewClaudeDisplayModels.mock.calls[0][0]).toMatchObject({
+    expect(previewPlatformDisplayModels).not.toHaveBeenCalled()
+    await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
+    expect(previewPlatformDisplayModels).toHaveBeenCalledOnce()
+    expect(previewPlatformDisplayModels.mock.calls[0][0]).toBe('anthropic')
+    expect(previewPlatformDisplayModels.mock.calls[0][1]).toMatchObject({
       channel_id: 1, group_ids: [11], model_mapping: channel.model_mapping
     })
     expect(wrapper.get('details').text()).toContain('Anthropic group')
@@ -267,7 +298,7 @@ describe('ChannelsView channel feature configuration', () => {
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
     const payload = updateChannel.mock.calls[0][1]
-    expect(payload.features_config.claude_display_models_by_group).toEqual({ '11': [] })
+    expect(payload.display_model_updates).toEqual({ anthropic: { '11': [] } })
     expect(payload.features_config).not.toHaveProperty('gpt_display_models_by_group')
     expect(payload.group_ids).toEqual(channel.group_ids)
     expect(payload.model_mapping).toEqual(channel.model_mapping)
@@ -277,20 +308,21 @@ describe('ChannelsView channel feature configuration', () => {
 
   it('does not save a Claude preview after a display setting changes', async () => {
     stored = [makeChannel({ claude_display_models_by_group: { '11': ['claude-sonnet-4-6'] } })]
-    previewClaudeDisplayModels.mockResolvedValue({
+    previewPlatformDisplayModels.mockResolvedValue({
       previous_models_by_group: { '11': ['claude-sonnet-4-6'] }, models_by_group: { '11': [] }
     })
     const wrapper = mountView()
     await flushPromises()
     await clickButton(wrapper, 'common.edit')
     await clickButton(wrapper, 'admin.groups.platforms.anthropic')
-    await clickButton(wrapper, 'admin.channels.form.claudeDisplaySync')
+    await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
     await clickButton(wrapper, 'admin.channels.form.basicSettings')
     await wrapper.get('textarea[placeholder="admin.channels.form.plazaHiddenModelsPlaceholder"]').setValue('claude-sonnet-4-6')
     await clickButton(wrapper, 'admin.groups.platforms.anthropic')
     expect(wrapper.get('[role="status"]').text()).toBe('admin.channels.form.gptDisplayStale')
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
+    expect(updateChannel.mock.calls[0][1]).not.toHaveProperty('display_model_updates')
     expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('claude_display_models_by_group')
     wrapper.unmount()
   })
@@ -300,13 +332,13 @@ describe('ChannelsView channel feature configuration', () => {
     let complete: (value: { models_by_group: Record<string, string[]> }) => void = () => {
       throw new Error('Preview request was not started')
     }
-    previewClaudeDisplayModels.mockReturnValue(new Promise(resolve => { complete = resolve }))
+    previewPlatformDisplayModels.mockReturnValue(new Promise(resolve => { complete = resolve }))
     const wrapper = mountView()
     await flushPromises()
     await clickButton(wrapper, 'common.edit')
     await clickButton(wrapper, 'admin.groups.platforms.anthropic')
-    await clickButton(wrapper, 'admin.channels.form.claudeDisplaySync')
-    const signal: AbortSignal = previewClaudeDisplayModels.mock.calls[0][1]
+    await clickButton(wrapper, 'admin.channels.form.accountDisplaySync')
+    const signal: AbortSignal = previewPlatformDisplayModels.mock.calls[0][2]
     expect(signal.aborted).toBe(false)
     expect(wrapper.get('button[form="channel-form"]').attributes('disabled')).toBeDefined()
     await clickButton(wrapper, 'common.cancel')
@@ -316,6 +348,7 @@ describe('ChannelsView channel feature configuration', () => {
     await clickButton(wrapper, 'common.edit')
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
+    expect(updateChannel.mock.calls[0][1]).not.toHaveProperty('display_model_updates')
     expect(updateChannel.mock.calls[0][1].features_config).not.toHaveProperty('claude_display_models_by_group')
     wrapper.unmount()
   })

@@ -13,13 +13,18 @@ var _ service.GoodPutVideoJobRepository = (*usageBillingRepository)(nil)
 type videoJobTable string
 
 const (
-	goodPutVideoTable videoJobTable = "goodput_video_jobs"
-	hiAPIVideoTable   videoJobTable = "hiapi_video_jobs"
+	goodPutVideoTable    videoJobTable = "goodput_video_jobs"
+	hiAPIVideoTable      videoJobTable = "hiapi_video_jobs"
+	museStudioVideoTable videoJobTable = "muse_studio_video_jobs"
 )
 
 type videoJobLedger struct {
 	*usageBillingRepository
 	table videoJobTable
+}
+
+func (r *usageBillingRepository) MuseStudioVideoJobs() service.DurableVideoJobRepository {
+	return videoJobLedger{r, museStudioVideoTable}
 }
 
 func (r *usageBillingRepository) HiAPIVideoJobs() service.DurableVideoJobRepository {
@@ -55,13 +60,12 @@ func (r *usageBillingRepository) ReviewGoodPutVideoJob(ctx context.Context, id, 
 	if reason != service.GoodPutReviewUsageUnverified && reason != service.GoodPutReviewReceiptExpired {
 		return false, errors.New("invalid GoodPut video review reason")
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE goodput_video_jobs SET state='review',review_reason=$2,next_poll_at=NOW()+INTERVAL '5 minutes'
-		WHERE id=$1 AND native_id IS NOT NULL AND (state='pending' OR (state='review' AND review_reason=''))`, id, reason)
-	if err != nil {
-		return false, err
-	}
-	count, err := result.RowsAffected()
-	return count == 1, err
+	var applied bool
+	err := r.db.QueryRowContext(ctx, `WITH revised AS (UPDATE goodput_video_jobs SET state='review',review_reason=$2,next_poll_at=NOW()+INTERVAL '5 minutes'
+ WHERE id=$1 AND native_id IS NOT NULL AND (state='pending' OR (state='review' AND review_reason='')) RETURNING *),
+ studio AS (UPDATE video_studio_jobs j SET state='completed',billing_review=true FROM revised r
+ WHERE $2='completed_usage_unverified' AND r.api_key_id=0 AND j.id=r.studio_request_id AND j.user_id=r.user_id AND j.group_id=r.group_id AND j.api_key_id=0 AND j.model=r.model AND j.charged_amount IS NULL) SELECT EXISTS(SELECT 1 FROM revised)`, id, reason).Scan(&applied)
+	return applied, err
 }
 
 func (r *usageBillingRepository) RecordGoodPutContentOutcome(ctx context.Context, id string, failed bool) error {
@@ -97,11 +101,38 @@ func (r videoJobLedger) ReserveVideoJob(ctx context.Context, job service.Durable
 	} else if rows != 1 {
 		return service.ErrGoodPutVideoFunds
 	}
+	if job.APIKeyID == service.VideoStudioWalletSlot {
+		if err := r.checkStudioReservation(ctx, tx, job); err != nil {
+			return err
+		}
+	} else if err := r.checkBearerReservation(ctx, tx, job); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO `+string(r.table)+`
+		(id,user_id,api_key_id,group_id,account_id,model,seconds,hold_amount,reference_amount,rate_multiplier,currency,
+		account_rate,account_quota_cost,account_quota_daily,account_quota_weekly,account_request_count,resolution,next_poll_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()+INTERVAL '2 minutes')`, job.ID, job.UserID, job.APIKeyID, job.GroupID,
+		job.AccountID, job.Model, job.Seconds, job.HoldAmount, job.ReferenceAmount, job.Multiplier, job.Currency, job.AccountRate, job.AccountQuotaCost,
+		job.AccountQuotaDaily, job.AccountQuotaWeekly, job.AccountRequestCount, job.Resolution); err != nil {
+		return err
+	}
+	if job.APIKeyID == service.VideoStudioWalletSlot {
+		// Bind the hold to an already claimed session job under the same owner; a client UUID alone grants nothing.
+		var linked string
+		if err := tx.QueryRowContext(ctx, `UPDATE `+string(r.table)+` d SET studio_request_id=j.id FROM video_studio_jobs j WHERE d.id=$1 AND j.user_id=d.user_id AND j.group_id=d.group_id AND j.api_key_id=0 AND j.model=d.model AND j.seconds=d.seconds AND j.state='submitting' AND j.id=$2 RETURNING j.id`, job.ID, job.StudioRequestID).Scan(&linked); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Ordinary bearer-key quota, rate and outstanding-task limits remain unchanged.
+func (r videoJobLedger) checkBearerReservation(ctx context.Context, tx *sql.Tx, job service.DurableVideoJob) error {
 	var allowance bool
 	// A confirmed completion with unverified usage is not an in-flight job.
 	// Its still-frozen quote must nevertheless count against this key's limits.
 	goodPut := r.table == goodPutVideoTable
-	err = tx.QueryRowContext(ctx, `SELECT (quota = 0 OR quota_used + budget.amount <= quota)
+	err := tx.QueryRowContext(ctx, `SELECT (quota = 0 OR quota_used + budget.amount <= quota)
 		AND (rate_limit_5h = 0 OR (CASE WHEN window_5h_start + INTERVAL '5 hours' > NOW() THEN usage_5h ELSE 0 END) + budget.amount <= rate_limit_5h)
 		AND (rate_limit_1d = 0 OR (CASE WHEN window_1d_start + INTERVAL '24 hours' > NOW() THEN usage_1d ELSE 0 END) + budget.amount <= rate_limit_1d)
 		AND (rate_limit_7d = 0 OR (CASE WHEN window_7d_start + INTERVAL '7 days' > NOW() THEN usage_7d ELSE 0 END) + budget.amount <= rate_limit_7d)
@@ -125,23 +156,22 @@ func (r videoJobLedger) ReserveVideoJob(ctx context.Context, job service.Durable
 	if pending {
 		return service.ErrGoodPutVideoLimit
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO `+string(r.table)+`
-		(id,user_id,api_key_id,group_id,account_id,model,seconds,hold_amount,reference_amount,rate_multiplier,currency,
-		account_rate,account_quota_cost,account_quota_daily,account_quota_weekly,account_request_count,resolution,next_poll_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()+INTERVAL '2 minutes')`, job.ID, job.UserID, job.APIKeyID, job.GroupID,
-		job.AccountID, job.Model, job.Seconds, job.HoldAmount, job.ReferenceAmount, job.Multiplier, job.Currency, job.AccountRate, job.AccountQuotaCost,
-		job.AccountQuotaDaily, job.AccountQuotaWeekly, job.AccountRequestCount, job.Resolution); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (r videoJobLedger) AttachVideoReceipt(ctx context.Context, id, publicID, nativeID string) error {
 	var attached string
-	return r.db.QueryRowContext(ctx, `UPDATE `+string(r.table)+` SET public_id=$2,native_id=$3,
-		state=CASE WHEN native_id IS NULL THEN 'pending' ELSE state END,
-		next_poll_at=CASE WHEN native_id IS NULL THEN NOW() ELSE next_poll_at END
-		WHERE id=$1 AND ((native_id IS NULL AND state IN ('submitting','review')) OR (public_id=$2 AND native_id=$3)) RETURNING id`, id, publicID, nativeID).Scan(&attached)
+	query := `UPDATE ` + string(r.table) + ` SET public_id=$2,native_id=$3,
+ state=CASE WHEN native_id IS NULL THEN 'pending' ELSE state END, next_poll_at=CASE WHEN native_id IS NULL THEN NOW() ELSE next_poll_at END
+ WHERE id=$1 AND ((native_id IS NULL AND state IN ('submitting','review')) OR (public_id=$2 AND native_id=$3))`
+	if r.table == hiAPIVideoTable {
+		query += " RETURNING id"
+	} else {
+		query = `WITH bound AS (` + query + ` RETURNING *), studio AS (
+ UPDATE video_studio_jobs j SET receipt=b.public_id,state=CASE WHEN j.state IN ('submitting','uncertain') THEN 'queued' ELSE j.state END FROM bound b
+ WHERE j.id=b.studio_request_id AND j.user_id=b.user_id AND j.group_id=b.group_id AND j.api_key_id=0 AND j.model=b.model AND (j.receipt IS NULL OR j.receipt=b.public_id)) SELECT id FROM bound`
+	}
+	return r.db.QueryRowContext(ctx, query, id, publicID, nativeID).Scan(&attached)
 }
 
 const durableVideoJobColumns = `id,COALESCE(public_id,''),COALESCE(native_id,''),user_id,api_key_id,group_id,account_id,
@@ -150,16 +180,19 @@ const durableVideoJobColumns = `id,COALESCE(public_id,''),COALESCE(native_id,'')
 
 func (r videoJobLedger) jobColumns() string {
 	if r.table == goodPutVideoTable {
-		return durableVideoJobColumns + `,COALESCE(billed_seconds,0),content_failure_at IS NOT NULL`
+		return durableVideoJobColumns + `,COALESCE(billed_seconds,0),content_failure_at IS NOT NULL,COALESCE(studio_request_id::text,'')`
 	}
-	return durableVideoJobColumns + `,0,false`
+	if r.table == museStudioVideoTable {
+		return durableVideoJobColumns + `,0,false,COALESCE(studio_request_id::text,'')`
+	}
+	return durableVideoJobColumns + `,0,false,''`
 }
 
 func scanDurableVideoJob(row *sql.Row) (*service.DurableVideoJob, error) {
 	var job service.DurableVideoJob
 	err := row.Scan(&job.ID, &job.PublicID, &job.NativeID, &job.UserID, &job.APIKeyID, &job.GroupID, &job.AccountID,
 		&job.Model, &job.Seconds, &job.HoldAmount, &job.ReferenceAmount, &job.Multiplier, &job.Currency, &job.AccountRate, &job.AccountQuotaCost,
-		&job.AccountQuotaDaily, &job.AccountQuotaWeekly, &job.AccountRequestCount, &job.CreatedAt, &job.Resolution, &job.State, &job.BilledSeconds, &job.ContentFailed)
+		&job.AccountQuotaDaily, &job.AccountQuotaWeekly, &job.AccountRequestCount, &job.CreatedAt, &job.Resolution, &job.State, &job.BilledSeconds, &job.ContentFailed, &job.StudioRequestID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -252,6 +285,14 @@ func (r videoJobLedger) finishVideoJob(ctx context.Context, id, state string, bi
 			WHERE id=$1 AND frozen_balance >= $2 RETURNING id`, job.UserID, job.HoldAmount, debit).Scan(&ownerID); err != nil {
 			return false, err
 		}
+		if job.APIKeyID == service.VideoStudioWalletSlot {
+			// The ledger owns the charge; the history row is a private display snapshot in the same atomic commit.
+			if _, err := tx.ExecContext(ctx, `UPDATE video_studio_jobs SET state=$3,billing_review=false,
+    charged_amount=CASE WHEN $3='completed' THEN $4::numeric ELSE NULL END, charged_currency=CASE WHEN $3='completed' THEN $5::text ELSE NULL END
+    WHERE user_id=$1 AND id=$2 AND group_id=$6 AND api_key_id=0 AND model=$7 AND (receipt IS NULL OR receipt=$8)`, job.UserID, job.StudioRequestID, state, debit, job.Currency, job.GroupID, job.Model, job.PublicID); err != nil {
+				return false, err
+			}
+		}
 		if state == "completed" {
 			if err := r.recordVideoSettlement(ctx, tx, settlement); err != nil {
 				return false, err
@@ -264,11 +305,41 @@ func (r videoJobLedger) finishVideoJob(ctx context.Context, id, state string, bi
 	return true, nil
 }
 
+// The user row is already locked. A wallet slot is unique only within (user,group),
+// never a shared per-key quota. Recheck the live entitlement in the hold transaction.
+func (r videoJobLedger) checkStudioReservation(ctx context.Context, tx *sql.Tx, job service.DurableVideoJob) error {
+	if (r.table != museStudioVideoTable || job.Model != service.MuseVideoModel) && (r.table != goodPutVideoTable || !service.IsGoodPutVideoModel(job.Model)) {
+		return service.ErrGoodPutVideoGroup
+	}
+	var allowed bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM groups g JOIN users u ON u.id=$1 WHERE g.id=$2 AND g.deleted_at IS NULL AND g.status='active' AND g.subscription_type='standard' AND g.platform='openai' AND g.allow_image_generation AND COALESCE((g.models_list_config->>'enabled')::boolean,false) AND (g.models_list_config->'models') ? $3
+ AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(g.models_list_config->'models') AS model_id WHERE NOT (CASE WHEN $3='muse-video' THEN model_id IN ('muse-video','muse-image','muse-spark') ELSE model_id IN ('minimax/h3','minimax/h3-fast') END)) AND ((NOT g.is_exclusive OR $4) AND NOT u.restrict_public_groups OR EXISTS(SELECT 1 FROM user_allowed_groups a WHERE a.user_id=u.id AND a.group_id=g.id)))`, job.UserID, job.GroupID, job.Model, job.StudioGroupShared).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return service.ErrGoodPutVideoGroup
+	}
+	var pending bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+string(r.table)+` WHERE user_id=$1 AND group_id=$2 AND api_key_id=0 AND state IN ('submitting','pending','review'))`, job.UserID, job.GroupID).Scan(&pending); err != nil {
+		return err
+	}
+	if pending {
+		return service.ErrGoodPutVideoLimit
+	}
+	return nil
+}
+
 func (r videoJobLedger) recordVideoSettlement(ctx context.Context, tx *sql.Tx, job service.DurableVideoJob) error {
 	cmd := &service.UsageBillingCommand{UserID: job.UserID, APIKeyID: job.APIKeyID, AccountID: job.AccountID,
 		AccountType: service.AccountTypeAPIKey, AccountQuotaCost: job.AccountQuotaCost,
 		AccountQuotaHasDailyLimit: job.AccountQuotaDaily, AccountQuotaHasWeeklyLimit: job.AccountQuotaWeekly,
 		AccountRequestCount: job.AccountRequestCount}
+	// Like Image Studio, the durable row is the wallet usage record. usage_logs
+	// requires a real api_keys FK. Account counters still settle in this transaction.
+	if job.APIKeyID == service.VideoStudioWalletSlot {
+		return r.applyUsageBillingEffects(ctx, tx, cmd, &service.UsageBillingApplyResult{})
+	}
 	var hasQuota, hasRateLimit bool
 	err := tx.QueryRowContext(ctx, `SELECT quota > 0, rate_limit_5h > 0 OR rate_limit_1d > 0 OR rate_limit_7d > 0
 		FROM api_keys WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, job.APIKeyID).Scan(&hasQuota, &hasRateLimit)

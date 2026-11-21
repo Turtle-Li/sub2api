@@ -91,7 +91,7 @@ func TestClaudeDisplaySyncRemovesManualAndPreviouslySyncedRowsByGroup(t *testing
 	checkPublic([]string{retiredPriceRow, retiredAlias, keptAlias})
 
 	// Persist a generic JSON snapshot just as the admin update request does.
-	save := func(preview ClaudeDisplayPreview) {
+	save := func(preview ChannelDisplayPreview) {
 		t.Helper()
 		data, err := json.Marshal(map[string]any{featureKeyClaudeDisplayModels: preview.ModelsByGroup})
 		require.NoError(t, err)
@@ -104,8 +104,8 @@ func TestClaudeDisplaySyncRemovesManualAndPreviouslySyncedRowsByGroup(t *testing
 	available, err := channels.ListAvailable(ctx)
 	require.NoError(t, err)
 	require.Len(t, available, 1)
-	require.Equal(t, preview.ModelsByGroup[public], claudeDisplayNames(&ch, available[0].DisplayModelsByGroup[public]))
-	require.Equal(t, preview.ModelsByGroup[private], claudeDisplayNames(&ch, available[0].DisplayModelsByGroup[private]))
+	require.Equal(t, preview.ModelsByGroup[public], platformDisplayNames(&ch, PlatformAnthropic, available[0].DisplayModelsByGroup[public]))
+	require.Equal(t, preview.ModelsByGroup[private], platformDisplayNames(&ch, PlatformAnthropic, available[0].DisplayModelsByGroup[private]))
 	require.Empty(t, available[0].DisplayModelsByGroup[detached])
 	require.Len(t, available[0].AdditionalModelsByGroup[gpt], 1)
 	require.Equal(t, []int64{public, private}, accounts.calls, "catalog reads must not refresh from accounts")

@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,6 +15,10 @@ type accountRepoStubForCompositeModelsList struct {
 }
 
 func (s *accountRepoStubForCompositeModelsList) ListSchedulableByGroupID(_ context.Context, _ int64) ([]Account, error) {
+	return s.accounts, nil
+}
+
+func (s *accountRepoStubForCompositeModelsList) ListModelAvailabilityCandidates(_ context.Context, _ *int64, _ []string, _ bool) ([]Account, error) {
 	return s.accounts, nil
 }
 
@@ -169,6 +172,7 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 			{
 				ID:       1,
 				Platform: PlatformOpenAI,
+				Status:   StatusActive, Schedulable: true, Type: AccountTypeAPIKey,
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{"gpt-custom": "gpt-5"},
 				},
@@ -176,6 +180,7 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 			{
 				ID:       2,
 				Platform: PlatformGemini,
+				Status:   StatusActive, Schedulable: true, Type: AccountTypeAPIKey,
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{"gemini-custom": "gemini-2.5-flash"},
 				},
@@ -183,6 +188,7 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 			{
 				ID:       3,
 				Platform: PlatformKimi,
+				Status:   StatusActive, Schedulable: true, Type: AccountTypeAPIKey,
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{"kimi-custom": "kimi-k2"},
 				},
@@ -199,21 +205,22 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 	candidates, err := svc.GetGroupModelsListCandidates(context.Background(), 99, PlatformComposite)
 
 	require.NoError(t, err)
-	require.Contains(t, candidates, "gpt-custom")
-	require.Contains(t, candidates, "gemini-custom")
-	require.Contains(t, candidates, "kimi-custom")
-	require.Contains(t, candidates, "gpt-5.5")
-	require.Contains(t, candidates, "gemini-2.5-flash")
+	require.Equal(t, []string{"gemini-custom", "gpt-custom", "kimi-custom"}, candidates)
 }
 
-// 独立 CN 分组的模型列表候选沿用 default 分支的 Claude 默认列表；
-// composite 支持不得改变独立分组的候选语义。
-func TestAdminService_CNProviderModelsListCandidatesKeepClaudeDefaults(t *testing.T) {
-	want := make([]string, 0, len(claude.DefaultModels))
-	for _, model := range claude.DefaultModels {
-		want = append(want, model.ID)
-	}
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax} {
-		require.Equal(t, want, defaultModelsListCandidateIDs(platform), "platform=%s", platform)
+func TestGroupPickerKimiUsesOnlyBoundWorkBuddyModels(t *testing.T) {
+	group := &Group{ID: 9, Platform: PlatformKimi, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"old-choice"}}}
+	account := claudeCatalogAccount(map[string]any{"kimi-k3": "cn:kimi-k3", "fast": "cn:kimi-k3.1", "kimi-misleading": "cn:deepseek-v4", "claude-sonnet": "claude-sonnet", "kimi-*": "kimi-k3"})
+	account.Platform = PlatformWorkbuddy
+	repo := &accountRepoStubForCompositeModelsList{accounts: []Account{account}}
+	s := &adminServiceImpl{accountRepo: repo, groupRepo: &groupRepoStubForAdmin{getByID: group}}
+	models, err := s.GetGroupModelsListCandidates(t.Context(), 9, PlatformKimi)
+	require.NoError(t, err)
+	require.Equal(t, []string{"fast", "kimi-k3"}, models)
+	repo.accounts = nil
+	for _, id := range []int64{0, 9} {
+		models, err = s.GetGroupModelsListCandidates(t.Context(), id, PlatformKimi)
+		require.NoError(t, err)
+		require.Equal(t, []string{}, models)
 	}
 }

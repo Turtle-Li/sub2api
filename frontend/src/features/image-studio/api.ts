@@ -1,4 +1,4 @@
-import apiClient from '@/api/client'
+import apiClient, { boundedBlobConfig } from '@/api/client'
 import type { BatchImageJob, BatchImageItem, BatchImageModel, BatchImageResultFilesResponse, BatchImageSubmitRequest } from '@/api/batchImage'
 import { loadBatchImageArchivePreview } from '@/utils/batchImageArchive'
 
@@ -104,8 +104,11 @@ export function studioAPI(route: number, signal: AbortSignal) {
     async submit(body: BatchImageSubmitRequest, idempotencyKey: string) {
       return (await apiClient.post<BatchImageJob>(`${base}/batches`, body, { ...config, timeout: 120000, headers: { ...config.headers, 'Idempotency-Key': idempotencyKey } })).data
     },
-    async image(task: StudioTask, index = 0) {
-      return (await apiClient.get<Blob>(`${base}/batches/${encodeURIComponent(task.job.id)}/items/${encodeURIComponent(task.item.custom_id)}/content`, { ...config, responseType: 'blob', params: { image_index: index } })).data
+    async image(task: { job: Pick<BatchImageJob, 'id'>; item: Pick<BatchImageItem, 'custom_id'> }, index = 0, limit?: { maxBytes: number; userId: number }) {
+      return (await apiClient.get<Blob>(`${base}/batches/${encodeURIComponent(task.job.id)}/items/${encodeURIComponent(task.item.custom_id)}/content`, {
+        ...config, responseType: 'blob', params: { image_index: index },
+        ...(limit && { ...boundedBlobConfig(limit.maxBytes), sessionUserId: limit.userId }),
+      })).data
     },
     archivePreview(task: StudioTask, requestSignal: AbortSignal) {
       return withImageReadSignal(signal, requestSignal, readSignal => loadBatchImageArchivePreview(async () => {
@@ -157,9 +160,14 @@ function waitForThumbnail(ms: number, signal: AbortSignal): Promise<void> {
     if (signal.aborted) abort()
   })
 }
-export function readImage(file: Blob): Promise<string> {
+export function readImage(file: Blob, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted()
     const reader = new FileReader()
+    const abort = () => reader.abort()
+    signal?.addEventListener('abort', abort, { once: true })
+    reader.onloadend = () => signal?.removeEventListener('abort', abort)
+    reader.onabort = () => reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
     reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('无法读取图片'))
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(file)

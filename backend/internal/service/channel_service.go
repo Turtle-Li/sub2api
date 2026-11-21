@@ -983,16 +983,22 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 		channel.BillingModelSource = input.BillingModelSource
 	}
 	if input.FeaturesConfig != nil {
-		features := mergeWebSearchEmulationDimensions(channel.FeaturesConfig, input.FeaturesConfig)
-		for _, key := range []string{featureKeyGPTDisplayModels, featureKeyClaudeDisplayModels} {
+		features := maps.Clone(mergeWebSearchEmulationDimensions(channel.FeaturesConfig, input.FeaturesConfig))
+		keys := []string{featureKeyGPTDisplayModels}
+		for _, platform := range domain.ConcretePlatformIDs() {
+			keys = append(keys, platformDisplayFeature(platform))
+		}
+		for _, key := range keys {
 			if _, replace := features[key]; !replace {
 				if saved, ok := channel.FeaturesConfig[key]; ok {
-					features = maps.Clone(features)
 					features[key] = saved
 				}
 			}
 		}
 		channel.FeaturesConfig = features
+	}
+	if err := channel.applyDisplayModelUpdates(input.DisplayModelUpdates); err != nil {
+		return err
 	}
 	if input.ApplyPricingToAccountStats != nil {
 		channel.ApplyPricingToAccountStats = *input.ApplyPricingToAccountStats
@@ -1268,6 +1274,7 @@ type UpdateChannelInput struct {
 	RestrictModels             *bool
 	Features                   *string
 	FeaturesConfig             map[string]any
+	DisplayModelUpdates        map[string]map[int64][]string
 	ApplyPricingToAccountStats *bool
 	AccountStatsPricingRules   *[]AccountStatsPricingRule
 }

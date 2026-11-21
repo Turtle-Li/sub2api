@@ -112,6 +112,11 @@ export default defineConfig(({ mode }) => {
          */
         manualChunks(id: string) {
           if (id.includes('node_modules')) {
+            // 无限画布独立懒加载，避免 /@xyflow/vue/ 被下方 '/vue/' 误归入 vendor-vue
+            if (id.includes('/@xyflow/vue/') || id.includes('/@xyflow/system/')) {
+              return 'vendor-canvas'
+            }
+
             // Vue 核心库
             if (
               id.includes('/vue/') ||
@@ -140,6 +145,11 @@ export default defineConfig(({ mode }) => {
             // Stripe 仅在支付流程中按需加载，避免进入首页公共依赖。
             if (id.includes('/@stripe/stripe-js/')) {
               return 'vendor-stripe'
+            }
+
+            // Airwallex 仅在支付流程中按需加载，避免随 vendor-misc 在其他页面执行副作用。
+            if (id.includes('/@airwallex/')) {
+              return 'vendor-airwallex'
             }
 
             // 其他小型第三方库合并

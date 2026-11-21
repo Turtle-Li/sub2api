@@ -25,9 +25,19 @@ type openAIWSPassthroughHandlerHarness struct {
 	moderationRepo *contentModerationHandlerTestRepo
 	gatewayCache   service.GatewayCache
 	apiKey         *service.APIKey
+	usageLogs      <-chan *service.UsageLog
 }
 
 func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, settings ...map[string]string) *openAIWSPassthroughHandlerHarness {
+	t.Helper()
+	cache := &concurrencyCacheMock{
+		acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
+		acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
+	}
+	return newOpenAIWSModeHandlerHarness(t, upstreamURL, service.OpenAIWSIngressModePassthrough, 3, cache, settings...)
+}
+
+func newOpenAIWSModeHandlerHarness(t *testing.T, upstreamURL, mode string, readTimeoutSeconds int, concurrencyCache service.ConcurrencyCache, settings ...map[string]string) *openAIWSPassthroughHandlerHarness {
 	t.Helper()
 	gatewayCache := testutil.NewRedisGatewayCache(t)
 
@@ -57,7 +67,7 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 		Credentials: map[string]any{"api_key": "sk-test", "base_url": upstreamURL},
 		Extra: map[string]any{
 			"openai_apikey_responses_websockets_v2_enabled": true,
-			"openai_apikey_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
+			"openai_apikey_responses_websockets_v2_mode":    mode,
 		},
 	}
 	cfg := &config.Config{}
@@ -70,28 +80,25 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
-	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = readTimeoutSeconds
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 3
 
 	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
 	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 2)}
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	concurrencySvc := service.NewConcurrencyService(concurrencyCache)
 	gatewaySvc := service.NewOpenAIGatewayService(
-		accountRepo, usageRepo, nil, nil, nil, nil, gatewayCache, cfg, nil, nil,
+		accountRepo, usageRepo, nil, nil, nil, nil, gatewayCache, cfg, nil, concurrencySvc,
 		service.NewBillingService(cfg, nil), nil, billingCacheSvc, nil, &service.DeferredService{},
 		nil, nil, nil, nil, nil, settingSvc, nil,
 	)
-	concurrencyCache := &concurrencyCacheMock{
-		acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
-		acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
-	}
 	h := &OpenAIGatewayHandler{
 		gatewayService:           gatewaySvc,
 		billingCacheService:      billingCacheSvc,
 		apiKeyService:            &service.APIKeyService{},
 		contentModerationService: moderationSvc,
-		concurrencyHelper:        NewConcurrencyHelper(service.NewConcurrencyService(concurrencyCache), SSEPingFormatNone, time.Second),
+		concurrencyHelper:        NewConcurrencyHelper(concurrencySvc, SSEPingFormatNone, time.Second),
 	}
 
 	apiKey := &service.APIKey{
@@ -129,6 +136,7 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 		moderationRepo: moderationRepo,
 		gatewayCache:   gatewayCache,
 		apiKey:         apiKey,
+		usageLogs:      usageRepo.created,
 	}
 }
 

@@ -353,3 +353,15 @@ func TestAuditRecordsEveryMCPOAuthReadWithGrant(t *testing.T) {
 	require.Equal(t, "grant-1", logs[0].Extra["mcp_grant_id"])
 	require.Equal(t, "admin_list_users", logs[0].Extra["mcp_tool"])
 }
+
+func TestVideoStudioSubmitDoesNotAuditPromptOrImageBytes(t *testing.T) {
+	require.True(t, shouldOmitAuditRequestBody("POST /api/v1/video-studio/jobs"))
+}
+
+func TestCreativeCanvasPrivateLayoutDoesNotEnterAuditBody(t *testing.T) {
+	for _, key := range []string{"POST /api/v1/creative-canvases", "PUT /api/v1/creative-canvases/:id", "POST /api/v1/creative-canvases/:id/nodes/:node/attempts"} {
+		if !shouldOmitAuditRequestBody(key) {
+			t.Errorf("unexpected audit of private input: %s", key)
+		}
+	}
+}

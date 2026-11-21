@@ -263,3 +263,8 @@ func fetchMuseReference(ctx context.Context, rawURL string) ([]byte, string, str
 	}
 	return data, resp.Header.Get("Content-Type"), resp.Request.URL.Path, nil
 }
+
+// Studio only accepts local uploads. Never treat a declared media type or filename as proof of content.
+func MatchesVideoStudioMediaType(data []byte, declared string) bool {
+	return declared != "" && sniffMuseMedia(data) == declared
+}

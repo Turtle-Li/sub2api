@@ -111,6 +111,7 @@ export interface UpdateChannelRequest {
   billing_model_source?: string
   restrict_models?: boolean
   features_config?: Record<string, unknown>
+  display_model_updates?: Record<string, DisplayModelsByGroup>
   apply_pricing_to_account_stats?: boolean
   account_stats_pricing_rules?: AccountStatsPricingRule[]
 }
@@ -246,5 +247,12 @@ export async function previewClaudeDisplayModels(
   return data
 }
 
-const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, syncPricingModels, previewGPTDisplayModels, previewClaudeDisplayModels }
+export async function previewPlatformDisplayModels(
+  platform: string, req: DisplayPreviewRequest & { channel_id?: number }, signal?: AbortSignal
+): Promise<Required<DisplayPreviewResponse>> {
+  const { data } = await apiClient.post<Required<DisplayPreviewResponse>>('/admin/channels/display-models/preview', req, { params: { platform }, signal })
+  return data
+}
+
+const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, syncPricingModels, previewGPTDisplayModels, previewClaudeDisplayModels, previewPlatformDisplayModels }
 export default channelsAPI

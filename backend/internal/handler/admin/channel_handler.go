@@ -55,6 +55,7 @@ type updateChannelRequest struct {
 	RestrictModels             *bool                             `json:"restrict_models"`
 	Features                   *string                           `json:"features"`
 	FeaturesConfig             map[string]any                    `json:"features_config"`
+	DisplayModelUpdates        map[string]map[int64][]string     `json:"display_model_updates"`
 	ApplyPricingToAccountStats *bool                             `json:"apply_pricing_to_account_stats"`
 	AccountStatsPricingRules   *[]accountStatsPricingRuleRequest `json:"account_stats_pricing_rules"`
 }
@@ -568,6 +569,7 @@ func (h *ChannelHandler) Update(c *gin.Context) {
 		RestrictModels:             req.RestrictModels,
 		Features:                   req.Features,
 		FeaturesConfig:             req.FeaturesConfig,
+		DisplayModelUpdates:        req.DisplayModelUpdates,
 		ApplyPricingToAccountStats: req.ApplyPricingToAccountStats,
 	}
 	if req.ModelPricing != nil {
@@ -722,6 +724,14 @@ func (h *ChannelHandler) PreviewGPTDisplayModels(c *gin.Context) {
 }
 
 func (h *ChannelHandler) PreviewClaudeDisplayModels(c *gin.Context) {
+	h.previewPlatformDisplayModels(c, service.PlatformAnthropic)
+}
+
+func (h *ChannelHandler) PreviewPlatformDisplayModels(c *gin.Context) {
+	h.previewPlatformDisplayModels(c, c.Query("platform"))
+}
+
+func (h *ChannelHandler) previewPlatformDisplayModels(c *gin.Context, platform string) {
 	var req struct {
 		displayPreviewRequest
 		ChannelID int64 `json:"channel_id" binding:"omitempty,gt=0"`
@@ -730,7 +740,7 @@ func (h *ChannelHandler) PreviewClaudeDisplayModels(c *gin.Context) {
 		response.ErrorFrom(c, infraerrors.BadRequest("VALIDATION_ERROR", err.Error()))
 		return
 	}
-	preview, err := h.channelService.PreviewClaudeDisplayModels(c.Request.Context(), req.channelDraft(), req.ChannelID)
+	preview, err := h.channelService.PreviewPlatformDisplayModels(c.Request.Context(), req.channelDraft(), req.ChannelID, platform)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
