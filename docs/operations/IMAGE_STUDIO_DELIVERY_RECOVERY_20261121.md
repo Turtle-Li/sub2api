@@ -1,7 +1,7 @@
 # Image Studio: recover paid results without replay
 
-2026-11-21 — local implementation; not a production release or a replay of
-historical tasks.
+2026-11-21 — recovery implementation and AWS release evidence. Historical
+tasks were not replayed.
 
 ## Incident and scope
 
@@ -122,3 +122,28 @@ after recovery, Vertex transport-only replay, and outbox claim/deduplication.
 The real PostgreSQL wallet test also records a successful capture followed by
 six failed finalization writes; after restart-style reconstruction it checks
 the original debit, cleared reservation, and exact 360-hour deadline.
+
+### Production release evidence
+
+- GitHub Actions run `44933759691` successfully activated immutable revision
+  `718229815ef3b0d01b2d45d44ef390a24596e5cd` on AWS with `deploy_caddy=false`.
+  The live and startup Caddy views selected `sub2api-blue`. It was healthy
+  with zero restarts and the sole active background generation. The prior
+  `f89d19620` generation was standby at the first observation.
+- Migrations 289 and 290 were present in read-only PostgreSQL verification.
+  The shared private spool parent was writable. Application output retention
+  uses the 360-hour default with no runtime override. The configured Feishu
+  agent was healthy; no live test notification was sent. Public API and www
+  health returned 200; anonymous `/v1/models` returned the expected 401.
+- The signed-in production browser loaded the workbench with Image 2.6 and
+  the 2K option. It could read the prior failed 2K item and open a completed
+  work's details and download control. The historical 2K job had zero
+  successful outputs, zero captured amount and no recovery checkpoint. It
+  was not reopened. No new paid image was submitted in this release check.
+- The Shanghai controller URL and all-users admission remain off. The healthy
+  production Mini/COS agent does not allow the required Aliyun ImageEnhan
+  reference, and the installed helper does not have `ready-aliyun-auto`.
+  The Mini does not yet advertise recovery and Shanghai still has only its
+  private control listener. Do not treat the AWS release or browser read
+  smoke as validation of Shanghai delivery, a live wallet capture, or the
+  Aliyun fallback. Follow the Shanghai runbook for the cutover.
