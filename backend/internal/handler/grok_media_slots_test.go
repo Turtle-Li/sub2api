@@ -119,15 +119,18 @@ func (s *grokMediaSlotsCache) assertReleased(t *testing.T) {
 }
 
 type grokMediaSlotBindings struct {
+	posters map[string][]byte // enabled only by the poster journey fixture
 	testutil.StubGatewayCache
-	owner   int64
-	writes  int
-	key     string
-	billed  map[string]bool
-	pending map[string][]byte
-	usage   []*service.UsageLog
-	goodPut *goodPutVideoTestJobs
-	hiAPI   *hiAPIVideoTestJobs
+	owner       int64
+	writes      int
+	key         string
+	billed      map[string]bool
+	pending     map[string][]byte
+	usage       []*service.UsageLog
+	museCharges []*service.UsageBillingCommand
+	museLedger  *journeyMuseLedger
+	goodPut     *goodPutVideoTestJobs
+	hiAPI       *hiAPIVideoTestJobs
 }
 
 type grokMediaSlotUsage struct {
@@ -268,6 +271,14 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 		bindings.goodPut = &goodPutVideoTestJobs{}
 		billingRepo = bindings.goodPut
 		cfg.Gateway.GoodPutVideoPublicGroupID = 24
+		usage = grokMediaSlotUsage{bindings: bindings}
+		pricing = service.NewBillingService(cfg, nil)
+		resolver = service.NewModelPricingResolver(nil, pricing)
+		deferred = service.NewDeferredService(repo, nil, 0)
+	}
+	if len(platforms) > 1 && platforms[1] == service.MuseVideoModel {
+		bindings.museLedger = &journeyMuseLedger{}
+		billingRepo = studioJourneyBilling{bindings: bindings}
 		usage = grokMediaSlotUsage{bindings: bindings}
 		pricing = service.NewBillingService(cfg, nil)
 		resolver = service.NewModelPricingResolver(nil, pricing)

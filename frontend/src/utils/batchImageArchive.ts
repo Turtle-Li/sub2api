@@ -411,7 +411,7 @@ function decodeBase64(value: string): Uint8Array {
   return output
 }
 
-function hasRasterSignature(bytes: Uint8Array, mimeType: string): boolean {
+export function hasRasterSignature(bytes: Uint8Array, mimeType: string): boolean {
   switch (mimeType) {
     case 'image/png':
       return bytes.length >= 8

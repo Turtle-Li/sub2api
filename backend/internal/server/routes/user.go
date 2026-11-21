@@ -23,6 +23,10 @@ func RegisterUserRoutes(
 ) {
 	authenticated := registerUserAuthenticatedRoutes(v1, h, jwtAuth, auditLog, settingService, panelRateLimiter)
 	registerImageStudioRoutes(authenticated, h, apiKeyService, subscriptionService, cfg, settingService)
+	registerVideoStudioRoutes(authenticated, h, apiKeyService, subscriptionService, cfg, settingService)
+	if h.CreativeCanvas != nil {
+		registerCreativeCanvasRoutes(authenticated, h.CreativeCanvas)
+	}
 }
 
 func registerUserAuthenticatedRoutes(

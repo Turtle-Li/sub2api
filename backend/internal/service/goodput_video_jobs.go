@@ -26,6 +26,8 @@ var (
 )
 
 type DurableVideoJob struct {
+	StudioRequestID                         string
+	StudioGroupShared                       bool // Transaction input only, never restored or inherited from a receipt.
 	ID, PublicID, NativeID, Model, Currency string
 	Resolution, State                       string
 	UserID, APIKeyID, GroupID, AccountID    int64
@@ -108,6 +110,9 @@ func (s *OpenAIGatewayService) SubmitGoodPutVideoJob(ctx context.Context, key *A
 	if err != nil {
 		return GoodPutVideoTask{}, &GoodPutVideoError{Status: 503, Code: "goodput_video_price_unavailable", Message: "GoodPut H3 requires a positive wallet quote"}
 	}
+	if !acceptsStudioQuote(ctx, job.HoldAmount, job.Currency) {
+		return GoodPutVideoTask{}, &GoodPutVideoError{Status: 409, Code: "studio_quote_changed", Message: "Video studio quote changed; confirm the new price"}
+	}
 	if err := repo.ReserveVideoJob(ctx, job, s.goodPutPublicGroup(key.Group)); err != nil {
 		if errors.Is(err, ErrGoodPutVideoGroup) {
 			return GoodPutVideoTask{}, &GoodPutVideoError{Status: 403, Code: "goodput_video_group_not_enabled", Message: err.Error()}
@@ -167,9 +172,12 @@ func (s *OpenAIGatewayService) quoteDurableVideoJob(ctx context.Context, key *AP
 	if !finitePositiveVideoCost(amount) || !finitePositiveVideoCost(reference) || !finitePositiveVideoCost(factor) {
 		return DurableVideoJob{}, errors.New("video requires a positive wallet quote")
 	}
-	job := DurableVideoJob{ID: uuid.NewString(), UserID: key.UserID, APIKeyID: key.ID, GroupID: *key.GroupID,
+	job := DurableVideoJob{StudioGroupShared: key.ID == VideoStudioWalletSlot && studioSharedGroup(s.cfg, key.Group), ID: uuid.NewString(), UserID: key.UserID, APIKeyID: key.ID, GroupID: *key.GroupID,
 		AccountID: account.ID, Model: info.Model, Seconds: info.DurationSeconds, Resolution: info.Resolution, HoldAmount: amount,
 		ReferenceAmount: reference, Multiplier: factor, Currency: costCurrency(cost), AccountRate: account.BillingRateMultiplier()}
+	if q, ok := ctx.Value(videoStudioQuoteKey{}).(videoStudioQuote); ok && key.ID == VideoStudioWalletSlot {
+		job.StudioRequestID = q.requestID
+	}
 	if account.SupportsAccountQuota() && account.HasAnyQuotaLimit() {
 		job.AccountQuotaCost = QuantizeUsageBillingAmount(accountQuotaBasis(cost) * job.AccountRate)
 		job.AccountQuotaDaily = account.GetQuotaDailyLimit() > 0
@@ -232,6 +240,11 @@ func (s *OpenAIGatewayService) reconcileGoodPutVideo(ctx context.Context) {
 	}
 	switch {
 	case task.Completed():
+		if job.APIKeyID == VideoStudioWalletSlot && job.StudioRequestID != "" {
+			posterCtx, src := WatchStudioPosterSource(ctx)
+			s.BindGoodPutStudioPoster(posterCtx, account, task)
+			defer s.CaptureVideoStudioPoster(ctx, VideoStudioJob{ID: job.StudioRequestID, UserID: job.UserID, GroupID: job.GroupID, KeyID: job.APIKeyID, Model: job.Model, Receipt: job.PublicID, Status: "completed", CreatedAt: job.CreatedAt}, src, s.studioMediaWriter())
+		}
 		if seconds := task.BillableSeconds(job.Model, job.Seconds); seconds > 0 {
 			applied, err := repo.CompleteGoodPutVideoJob(ctx, job.ID, seconds)
 			s.afterDurableVideoFinish(ctx, *job, "completed", applied, err)
@@ -255,6 +268,9 @@ func (s *OpenAIGatewayService) afterDurableVideoFinish(ctx context.Context, job 
 	}
 	if applied && s.billingCacheService != nil {
 		s.invalidateGoodPutWallet(ctx, job.UserID)
+		if job.APIKeyID == VideoStudioWalletSlot {
+			return
+		}
 		if err := s.billingCacheService.InvalidateAPIKeyRateLimit(ctx, job.APIKeyID); err != nil {
 			slog.Warn("goodput video key rate cache invalidation failed", "key_id", job.APIKeyID)
 		}
@@ -266,6 +282,9 @@ func (s *OpenAIGatewayService) startDurableVideoReconciliation() {
 		return
 	}
 	var stops []func()
+	if s.museStudioLedger() != nil {
+		stops = append(stops, startVideoReconciliation(s.reconcileMuseStudioWallet))
+	}
 	if s.goodPutVideoJobs() != nil {
 		stops = append(stops, startVideoReconciliation(s.reconcileGoodPutVideo))
 	}

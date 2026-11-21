@@ -431,11 +431,23 @@ func isAsyncImageTaskRead(method, path string) bool {
 	return strings.HasPrefix(path, "/v1/images/tasks/") || strings.HasPrefix(path, "/images/tasks/")
 }
 
+const VideoStudioBoundReadKey = "video_studio_bound_read_key"
+
 func isBoundOpenAIVideoTaskRead(c *gin.Context, key *service.APIKey) bool {
-	if c.Request.Method != http.MethodGet || key.Group == nil || key.Group.Platform != service.PlatformOpenAI || key.Group.IsSubscriptionType() {
+	if key.Group == nil || key.Group.Platform != service.PlatformOpenAI || key.Group.IsSubscriptionType() {
 		return false
 	}
-	switch c.FullPath() {
+	path := c.FullPath()
+	if (c.Request.Method == http.MethodGet && (path == "/api/v1/video-studio/jobs/:id" || path == "/api/v1/video-studio/jobs/:id/content" || path == "/api/v1/video-studio/jobs/:id/poster")) ||
+		(c.Request.Method == http.MethodPost && path == "/api/v1/video-studio/jobs") {
+		// Set only by a server-side owner lookup. An identical POST returning an existing
+		// receipt is a read; a new POST (including a different ID) never sets this key.
+		return key.ID > 0 && c.GetInt64(VideoStudioBoundReadKey) == key.ID && (key.Group.IsMuseMediaOnly() || service.IsGoodPutVideoGroup(key.Group))
+	}
+	if c.Request.Method != http.MethodGet {
+		return false
+	}
+	switch path {
 	case "/v1/videos/:request_id", "/v1/videos/:request_id/content",
 		"/v1/videos/generations/:request_id", "/v1/videos/generations/:request_id/content",
 		"/videos/:request_id", "/videos/:request_id/content",
@@ -532,6 +544,23 @@ func abortIfAPIKeyGroupUnavailable(c *gin.Context, apiKey *service.APIKey) bool 
 	}
 	AbortWithError(c, 403, code, message)
 	return true
+}
+
+// StudioMetadataKeyAllowed checks a private board reference without touching last-used,
+// subscribing, downloading, or entering the paid admission path. Media reads still use full middleware.
+func StudioMetadataKeyAllowed(c *gin.Context, cfg *config.Config, k *service.APIKey, user int64) bool {
+	if k == nil || k.UserID != user || k.User == nil || k.User.ID != user || !k.User.IsActive() || k.GroupID == nil || k.Group == nil || k.Group.ID != *k.GroupID || k.IsExpired() || (!k.IsActive() && k.Status != service.StatusAPIKeyQuotaExhausted) {
+		return false
+	}
+	if _, _, ok := validateAPIKeyGroupAvailable(k); !ok || !validateAPIKeyGroupAllowed(k) {
+		return false
+	}
+	if len(k.IPWhitelist)+len(k.IPBlacklist) == 0 {
+		return true
+	}
+	client := ip.GetSecurityClientIP(c, cfg.TrustForwardedIPForAPIKeyACL())
+	ok, _ := ip.CheckIPRestrictionWithCompiledRules(client, k.CompiledIPWhitelist, k.CompiledIPBlacklist)
+	return ok
 }
 
 func abortIfAPIKeyGroupNotAllowed(c *gin.Context, apiKey *service.APIKey) bool {

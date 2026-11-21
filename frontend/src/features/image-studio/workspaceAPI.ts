@@ -1,10 +1,26 @@
 import type { BatchImageJob, BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
-import { studioAPI, type StudioTask, type GalleryFilters } from './api'
+import { studioAPI, taskDisplay, type StudioTask, type GalleryFilters } from './api'
 import { cachedStudioModels, cacheStudioModels, forgetStudioModels } from './cache'
 import { createThumbnailLoader } from './thumbnailLoader'
 
 export const modelIdentity = (model: Pick<BatchImageModel, 'provider' | 'id'>) => `${model.provider}:${model.id}`
 type Client = ReturnType<typeof studioAPI>
+
+export interface StudioOriginal {
+  readonly route: number // 0 = session wallet; otherwise the original public key ID, never its value.
+  readonly batchId: string
+  readonly itemId: string
+  readonly index: number
+  readonly expiresAt?: number // Unix milliseconds
+}
+
+// Legacy custom IDs are arbitrary text. Only opaque, single-segment IDs can cross workspaces.
+const safeAssetId = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/
+export function isSafeStudioOriginal({ route, batchId, itemId, index, expiresAt }: StudioOriginal): boolean {
+  return Number.isSafeInteger(route) && route >= 0 && Number.isSafeInteger(index) && index >= 0 &&
+    typeof batchId === 'string' && safeAssetId.test(batchId) && typeof itemId === 'string' && safeAssetId.test(itemId) &&
+    (expiresAt === undefined || (Number.isFinite(expiresAt) && expiresAt > Date.now()))
+}
 
 // Discovery is read-only. Each mutation and asset stays in its server-owned
 // wallet or legacy-key scope; a model choice never grants access to another task.
@@ -137,6 +153,13 @@ export function workspaceAPI(keys: readonly number[], signal: AbortSignal, acces
       historyKeys.add(key)
       attempts.delete(idempotencyKey)
       return job
+    },
+    originalLocator(task: StudioTask, index: number): StudioOriginal | null {
+      const route = owners.get(task.job.id)
+      if (signal.aborted || route === undefined || !taskDisplay(task).canViewOutput || index >= task.item.image_count) return null
+      const locator = { route, batchId: task.job.id, itemId: task.item.custom_id, index,
+        ...(task.job.output_expires_at != null && { expiresAt: task.job.output_expires_at * 1000 }) }
+      return isSafeStudioOriginal(locator) ? locator : null
     },
     image(task: StudioTask, index = 0) {
       // Download admission is shared by user, including reads from different keys.

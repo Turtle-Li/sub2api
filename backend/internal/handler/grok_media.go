@@ -128,6 +128,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	var requestInfo service.GrokMediaRequestInfo
 	var museRequest *service.MuseMediaRequest
 	var museIdempotencyKey string
+	var museWalletJob *service.DurableVideoJob
 	var goodPutRequest *service.GoodPutVideoRequest
 	var goodPutPending *service.GrokVideoPendingBilling
 	var goodPutJob *service.DurableVideoJob
@@ -213,6 +214,18 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
+	walletMuse := endpoint.IsMuseVideo() && apiKey.ID == service.VideoStudioWalletSlot
+	if walletMuse && endpoint.IsTaskLookupRequest() {
+		museWalletJob, err = h.gatewayService.FindMuseStudioJob(c.Request.Context(), apiKey, requestID)
+		if err != nil {
+			h.errorResponse(c, 503, "upstream_error", "Could not verify video receipt")
+			return
+		}
+		if museWalletJob == nil {
+			h.errorResponse(c, 404, "not_found_error", "Video task not found")
+			return
+		}
+	}
 	if endpoint.IsGoodPutVideo() && endpoint.IsTaskLookupRequest() {
 		if service.IsGoodPutVideoTaskID(requestID) {
 			goodPutJob, err = h.gatewayService.FindGoodPutVideoJob(c.Request.Context(), apiKey, requestID)
@@ -267,6 +280,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 		if endpoint == service.MuseVideoCreate && !h.gatewayService.HasMuseVideoPrice(c.Request.Context(), apiKey) {
 			h.errorResponse(c, http.StatusServiceUnavailable, "muse_video_price_unavailable", "Muse video pricing is not configured for this group")
+			return
+		}
+		if endpoint == service.MuseVideoCreate && !h.gatewayService.StudioMuseQuoteMatches(c.Request.Context(), apiKey, requestInfo.DurationSeconds) {
+			h.errorResponse(c, http.StatusConflict, "studio_quote_changed", "Video studio quote changed; confirm the new price")
 			return
 		}
 		if endpoint.IsMuseImage() && !h.gatewayService.HasMuseImagePrice(c.Request.Context(), apiKey, requestInfo.SizeTier) {
@@ -362,7 +379,12 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	boundLookupAccountID := int64(0)
 	if endpoint.IsTaskLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
-		if goodPutJob != nil {
+		if apiKey.ID == service.VideoStudioWalletSlot && (museWalletJob != nil || goodPutJob != nil) {
+			sessionHash = service.StudioBoundVideoHash(requestID, apiKey)
+		}
+		if museWalletJob != nil {
+			boundLookupAccountID = museWalletJob.AccountID
+		} else if goodPutJob != nil {
 			boundLookupAccountID = goodPutJob.AccountID
 		} else if hiAPIJob != nil {
 			boundLookupAccountID = hiAPIJob.AccountID
@@ -570,6 +592,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+		if walletMuse {
+			h.forwardStudioWalletMuse(c, requestCtx, endpoint, requestID, museWalletJob, apiKey, account, requestInfo, body)
+			return
+		}
 		if endpoint.IsGoodPutVideo() {
 			h.forwardGoodPutVideo(requestCtx, c, goodPutVideoDispatch{
 				endpoint: endpoint, id: requestID, request: goodPutRequest, pending: goodPutPending, job: goodPutJob,

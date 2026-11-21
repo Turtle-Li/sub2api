@@ -147,6 +147,7 @@ LABEL org.opencontainers.image.source="https://github.com/Wei-Shaw/sub2api"
 
 # Install runtime dependencies
 RUN apk add --no-cache \
+    ffmpeg \
     ca-certificates \
     tzdata \
     su-exec \

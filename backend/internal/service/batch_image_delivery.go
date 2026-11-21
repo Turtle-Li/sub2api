@@ -432,7 +432,8 @@ func batchImageCOSArchiveFileCount(item *BatchImageItem) (int, bool) {
 	return count, true
 }
 
-func isBatchImageCOSArchivedItem(item *BatchImageItem) bool {
+// IsArchivedBatchImageItem reports whether the item can only be addressed via its archive.
+func IsArchivedBatchImageItem(item *BatchImageItem) bool {
 	_, ok := batchImageCOSArchiveFileCount(item)
 	return ok
 }

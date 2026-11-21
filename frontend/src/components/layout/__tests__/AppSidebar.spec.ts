@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AppSidebar from '../AppSidebar.vue'
 
-const { appStore, adminSettingsStore } = vi.hoisted(() => ({
+const { appStore, adminSettingsStore, access } = vi.hoisted(() => ({
+  access: { admin: true, images: false },
   appStore: {
     sidebarCollapsed: false,
     mobileOpen: false,
@@ -16,7 +17,7 @@ const { appStore, adminSettingsStore } = vi.hoisted(() => ({
     siteVersion: 'test',
     publicSettingsLoaded: true,
     sidebarScrollTop: 0,
-    cachedPublicSettings: { payment_enabled: false },
+    cachedPublicSettings: { payment_enabled: false } as { payment_enabled: boolean; video_studio_enabled?: boolean },
   },
   adminSettingsStore: {
     paymentEnabled: false,
@@ -28,7 +29,7 @@ const { appStore, adminSettingsStore } = vi.hoisted(() => ({
 vi.mock('@/stores', () => ({
   useAppStore: () => appStore,
   useAdminSettingsStore: () => adminSettingsStore,
-  useAuthStore: () => ({ isAdmin: true, isSimpleMode: false }),
+  useAuthStore: () => ({ isAdmin: access.admin, isSimpleMode: false }),
   useOnboardingStore: () => ({}),
 }))
 
@@ -55,7 +56,7 @@ vi.mock('vue-i18n', async (importOriginal) => {
 
 vi.mock('@/composables/useBatchImageAccess', () => ({
   useBatchImageAccess: () => ({
-    canUseBatchImage: { value: false },
+    canUseBatchImage: { get value() { return access.images } },
     refreshBatchImageAccess: vi.fn(),
   }),
 }))
@@ -186,5 +187,21 @@ describe('AppSidebar MCP entry', () => {
     expect(componentSource).toMatch(/path: '\/settings\/mcp'[^\n]*icon: MCPIcon, featureFlag: flagMCP/)
     expect(componentSource).toMatch(/if \(flagMCP\(\)\) filtered\.push\(\{ path: '\/settings\/mcp'[^\n]*icon: MCPIcon/)
     expect(componentSource).not.toMatch(/path: '\/settings\/mcp'[^\n]*PluginIcon/)
+  })
+})
+
+
+describe('personal studio navigation', () => {
+  afterEach(() => { access.admin = true; access.images = false; appStore.cachedPublicSettings = { payment_enabled: false } })
+  it.each([
+    [false, undefined], [true, false], [false, true], [true, true],
+  ] as const)('keeps image=%s independent from the video opt-in=%s', (images, video) => {
+    access.admin = false; access.images = images
+    appStore.cachedPublicSettings = { payment_enabled: false, video_studio_enabled: video }
+    const wrapper = mount(AppSidebar, { global: { stubs: { RouterLink: RouterLinkStub, VersionBadge: true } } })
+    const paths = wrapper.findAllComponents(RouterLinkStub).map(link => link.props('to'))
+    expect(paths.includes('/image-studio')).toBe(images)
+    expect(paths.includes('/video-studio')).toBe(video === true)
+    if (images && video) expect(paths.indexOf('/video-studio')).toBe(paths.indexOf('/image-studio') + 1)
   })
 })

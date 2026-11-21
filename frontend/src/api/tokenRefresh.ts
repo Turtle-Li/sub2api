@@ -33,8 +33,7 @@ interface AuthSnapshot {
 
 let inFlightRefresh: Promise<RefreshTokenResponse> | null = null
 
-function getStoredUserID(): number | null {
-  const rawUser = localStorage.getItem(AUTH_USER_KEY)
+export function getStoredUserID(rawUser = localStorage.getItem(AUTH_USER_KEY)): number | null {
   if (!rawUser) {
     return null
   }

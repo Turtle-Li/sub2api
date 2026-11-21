@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BatchImageModel, BatchImageSubmitRequest } from '@/api/batchImage'
 import { errorMessage, listKeys, outputErrorMessage, readImage, studioWalletRoute, taskDisplay, taskPending, taskRoot, type GalleryFilters, type StudioTask, type StudioKey, type StudioWalletMode } from './api'
-import { modelIdentity, workspaceAPI } from './workspaceAPI'
+import { modelIdentity, workspaceAPI, type StudioOriginal } from './workspaceAPI'
 import { cachedStudioKeys, cachedStudioWalletMode, cacheStudioKeys } from './cache'
 import TaskCard from './upstream/components/TaskCard'
 import TaskGrid from './upstream/components/TaskGrid'
@@ -15,6 +15,12 @@ import GalleryTail from './GalleryTail'
 import { DetailModal } from './DetailModal'
 import './studio.css'
 
+type OriginalAction = (original: StudioOriginal) => Promise<void>
+interface StudioProps {
+  readonly userId: number
+  readonly onVideo?: OriginalAction
+  readonly onCanvas?: OriginalAction
+}
 const galleryFilters = [['all', '全部'], ['pending', '生成中'], ['completed', '可查看'], ['failed', '失败'], ['expired', '已过期']] as const
 type GalleryFilter = (typeof galleryFilters)[number][0]
 function defaultStudioModel(models: readonly BatchImageModel[]) {
@@ -23,11 +29,11 @@ function defaultStudioModel(models: readonly BatchImageModel[]) {
     ?? models[0]
   return preferred ? modelIdentity(preferred) : ''
 }
-export function Studio({ userId }: { readonly userId: number }) {
-  return <StudioSession key={userId} userId={userId} />
+export function Studio(props: StudioProps) {
+  return <StudioSession key={props.userId} {...props} />
 }
 
-function StudioSession({ userId }: { readonly userId: number }) {
+function StudioSession({ userId, onVideo, onCanvas }: StudioProps) {
   useGlobalClickSuppression()
   const [directory, setDirectory] = useState<{ keys: StudioKey[] | null; wallet: StudioWalletMode; current: boolean }>(() => ({ keys: cachedStudioKeys(userId) ?? null, wallet: cachedStudioWalletMode(userId), current: false }))
   const [error, setError] = useState('')
@@ -45,12 +51,12 @@ function StudioSession({ userId }: { readonly userId: number }) {
   return <div className="image-studio">
     {error && <p className="studio-error" role="alert">{error}</p>}
     {keys && (keys.length || wallet !== 'legacy')
-      ? <Workspace key={`${userId}:${wallet}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} wallet={wallet} directoryCurrent={current} userId={userId} />
+      ? <Workspace key={`${userId}:${wallet}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} wallet={wallet} directoryCurrent={current} userId={userId} onVideo={onVideo} onCanvas={onCanvas} />
       : <div className="studio-empty" role="status">{keys === null && !error ? '正在读取可用模型…' : <p>暂无可用的生图权限，请联系管理员。</p>}</div>}
   </div>
 }
 
-function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: readonly StudioKey[]; readonly wallet: StudioWalletMode; readonly directoryCurrent: boolean; readonly userId: number }) {
+function Workspace({ keys, wallet, directoryCurrent, userId, onVideo, onCanvas }: StudioProps & { readonly keys: readonly StudioKey[]; readonly wallet: StudioWalletMode; readonly directoryCurrent: boolean }) {
   const [api] = useState(() => {
     const controller = new AbortController()
     const walletRoutes = wallet === 'legacy' ? [] : [studioWalletRoute]
@@ -174,7 +180,7 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     if (!files?.length) return
     if (capabilities && refs.length + files.length > capabilities.max_reference_images) { setError(`当前模型最多支持 ${capabilities.max_reference_images} 张参考图，请减少选择或先移除已有图片。`); return }
     const selection = continuation.beginSelection()
-    try { const picked = Array.from(files); if (picked.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024)) throw new Error('请选择 8 MB 以内的 PNG、JPEG 或 WebP 图片'); const images = await Promise.all(picked.map(readImage)); if (continuation.isCurrent(selection)) setRefs(previous => [...previous, ...images]) } catch (error) { setError(errorMessage(error)) }
+    try { const picked = Array.from(files); if (picked.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024)) throw new Error('请选择 8 MB 以内的 PNG、JPEG 或 WebP 图片'); const images = await Promise.all(picked.map(file => readImage(file))); if (continuation.isCurrent(selection)) setRefs(previous => [...previous, ...images]) } catch (error) { setError(errorMessage(error)) }
   }
   async function submit() {
     const selected = models.find(item => modelIdentity(item) === model)
@@ -198,7 +204,8 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     catch (error) { if (!api.controller.signal.aborted) setError(`${errorMessage(error)}。请求结果未确认时，保持内容重试会复用同一提交编号。`) }
     finally { if (!api.controller.signal.aborted) setBusy(false) }
   }
-  const selectedDetail = detail ? tasks.find(task => task.id === detail.id) || detail : null
+  const currentDetail = detail && tasks.find(task => task.id === detail.id)
+  const selectedDetail = currentDetail || detail
   const visible = useMemo(() => tasks.filter(task => {
     if (parent && taskRoot(task) !== taskRoot(parent)) return false
     const display = taskDisplay(task)
@@ -245,6 +252,6 @@ function Workspace({ keys, wallet, directoryCurrent, userId }: { readonly keys: 
     />}
     </section>
     <button className="studio-mobile-create" onClick={() => { composer.current?.showModal(); composer.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus() }}><span>{parent ? '继续修改这张图' : '描述想要的画面…'}</span><strong>展开 ↑</strong></button>
-    {selectedDetail && <DetailModal key={selectedDetail.id} task={selectedDetail} api={api.client} cancel={cancel} close={() => setDetail(null)} edit={(index, image) => void edit(selectedDetail, index, image)} />}
+    {selectedDetail && <DetailModal key={selectedDetail.id} task={selectedDetail} api={api.client} onVideo={directoryCurrent && currentDetail ? onVideo : undefined} onCanvas={directoryCurrent && currentDetail ? onCanvas : undefined} cancel={cancel} close={() => setDetail(null)} edit={(index, image) => void edit(selectedDetail, index, image)} />}
   </div>
 }

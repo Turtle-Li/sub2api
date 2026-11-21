@@ -1246,7 +1246,12 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
-	GoodPutVideoPublicGroupID int64 `mapstructure:"goodput_video_public_group_id"`
+	VideoStudioH3GroupID             int64 `mapstructure:"video_studio_h3_group_id"`
+	VideoStudioShareConfiguredGroups bool  `mapstructure:"video_studio_share_configured_groups"`
+	VideoStudioMuseGroupID           int64 `mapstructure:"video_studio_muse_group_id"`
+	VideoStudioEnabled               bool  `mapstructure:"video_studio_enabled"`
+	CreativeCanvasEnabled            bool  `mapstructure:"creative_canvas_enabled"`
+	GoodPutVideoPublicGroupID        int64 `mapstructure:"goodput_video_public_group_id"`
 
 	// MinOutputTokens is the minimum max_output_tokens used when
 	// converting Chat Completions or Anthropic requests to Responses.
@@ -2377,6 +2382,11 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
+	viper.SetDefault("gateway.video_studio_enabled", false)
+	viper.SetDefault("gateway.creative_canvas_enabled", false)
+	viper.SetDefault("gateway.video_studio_muse_group_id", 0)
+	viper.SetDefault("gateway.video_studio_h3_group_id", 0)
+	viper.SetDefault("gateway.video_studio_share_configured_groups", false)
 	viper.SetDefault("gateway.goodput_video_public_group_id", 0)
 	viper.SetDefault("gateway.min_output_tokens", 128)
 	viper.SetDefault("simple_mode.auto_create_default_groups", true)
@@ -3166,6 +3176,16 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.Gateway.VideoStudioMuseGroupID < 0 || c.Gateway.VideoStudioH3GroupID < 0 {
+		return fmt.Errorf("video studio group IDs must be non-negative")
+	}
+	if c.Gateway.VideoStudioH3GroupID > 0 && c.Gateway.VideoStudioH3GroupID != c.Gateway.GoodPutVideoPublicGroupID {
+		return fmt.Errorf("video_studio_h3_group_id must match the approved goodput_video_public_group_id")
+	}
+	if c.Gateway.VideoStudioMuseGroupID > 0 && c.Gateway.VideoStudioMuseGroupID == c.Gateway.VideoStudioH3GroupID {
+		return fmt.Errorf("video studio providers must use different dedicated groups")
+	}
+
 	if c.ShopDaypass.MaxConcurrency != 0 && c.ShopDaypass.MaxConcurrency != 2 && c.ShopDaypass.MaxConcurrency != 3 {
 		return fmt.Errorf("shop_daypass.max_concurrency must be 2 or 3")
 	}

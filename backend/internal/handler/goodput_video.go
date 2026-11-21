@@ -50,6 +50,7 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 		model := info.Model
 		h.gatewayService.ReportOpenAIAccountScheduleResult(opts.account, model, true, nil)
 		c.Header("Cache-Control", "private, no-store")
+		h.gatewayService.BindGoodPutStudioPoster(ctx, opts.account, task)
 		c.JSON(http.StatusAccepted, task.Public(model, task.BillableSeconds(model, info.DurationSeconds)))
 		return
 	}
@@ -95,6 +96,7 @@ func (h *OpenAIGatewayHandler) forwardGoodPutVideo(ctx context.Context, c *gin.C
 		}
 		return
 	}
+	h.gatewayService.BindGoodPutStudioPoster(ctx, opts.account, task)
 	c.JSON(http.StatusOK, task.Public(pending.Model, billedSeconds))
 }
 

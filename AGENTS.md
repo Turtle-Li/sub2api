@@ -81,6 +81,14 @@
   H3. Settle successful tasks independently of reads and never replay an
   uncertain paid submission. Drain HiAPI holds before rollback.
 
+## Session video workspace
+
+- Read `docs/features/VIDEO_STUDIO_20261120.md` and `docs/features/VIDEO_STUDIO_GALLERY_20261121.md` (real output frames, private cache and submitted parameters) before changing the session catalogue, receipt index, image handoff or video UI. The newer `docs/features/VIDEO_STUDIO_WALLET_CONTROLS.md` owns group-paid zero-key sessions, the parameter matrix, picker and video details. Keep explicit workspace-only sharing separate from public keys, never replay a paid POST or poll providers while listing history. Historical bearer work keeps its original binding. The owner assigns frontend design and implementation to an external client, not Codex.
+
+## Creative canvas
+
+- Read `docs/features/CREATIVE_CANVAS_INTEGRATION.md` for the opt-in private board API, revision/ownership checks, and offline tests; `docs/features/CREATIVE_CANVAS_OPEN_SOURCE_20261121.md` pins the upstream sources, tests and licenses. Preserve Gemini's design (`docs/features/CREATIVE_CANVAS_20261121.md`), original studio media access, and explicit group-paid submissions. Never send a paid request from a board read, save, restore or edge. No deployment is implied by a merge.
+
 ## Image Studio integration
 
 - For group-based image administration, read

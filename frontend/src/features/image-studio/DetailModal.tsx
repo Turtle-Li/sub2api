@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { errorMessage, outputErrorMessage, taskDisplay, taskPending, type StudioTask } from './api'
-import type { workspaceAPI } from './workspaceAPI'
+import type { StudioOriginal, workspaceAPI } from './workspaceAPI'
+import { acceptsVideoImage } from '../video-studio/api'
 import Lightbox from './upstream/components/Lightbox'
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, DownloadIcon, EditIcon, ExpandIcon } from './upstream/components/icons'
 import { useCloseOnEscape } from './upstream/hooks/useCloseOnEscape'
@@ -9,6 +10,7 @@ import { dismissAllTooltips } from './upstream/lib/tooltipDismiss'
 import './detailDialog.css'
 
 type API = ReturnType<typeof workspaceAPI>
+type OriginalAction = (original: StudioOriginal) => Promise<void>
 type OutputSize = { readonly width: number; readonly height: number }
 type StatusTone = 'success' | 'running' | 'danger' | 'muted'
 type ImageAssetProps = {
@@ -17,6 +19,7 @@ type ImageAssetProps = {
   readonly image?: Blob
   readonly index: number
   readonly measure: (size: OutputSize) => void
+  readonly onReadable?: (index: number | null) => void
 }
 type DetailProps = {
   readonly task: StudioTask
@@ -24,6 +27,8 @@ type DetailProps = {
   readonly close: () => void
   readonly edit: (index: number, image?: Blob) => void
   readonly cancel: (task: StudioTask) => Promise<void>
+  readonly onVideo?: OriginalAction
+  readonly onCanvas?: OriginalAction
 }
 const expiryFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -34,21 +39,22 @@ function statusTone(status: string, pending: boolean, canViewOutput: boolean): S
   return 'muted'
 }
 
-function ImageAsset({ task, api, image, index, measure }: ImageAssetProps) {
+function ImageAsset({ task, api, image, index, measure, onReadable }: ImageAssetProps) {
   const [src, setSrc] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
     let url = ''
-    setSrc(''); setError('')
+    setSrc(''); setError(''); onReadable?.(null)
     const request = image ? Promise.resolve(image) : api.image(task, index)
     request.then(blob => {
       if (!active) return
       url = URL.createObjectURL(blob)
       setSrc(url)
+      if (!image && acceptsVideoImage(blob)) onReadable?.(index)
     }).catch(error => { if (active) setError(outputErrorMessage(error)) })
     return () => { active = false; if (url) URL.revokeObjectURL(url) }
-  }, [task.id, api, image, index])
+  }, [task.id, api, image, index, onReadable])
   if (!src) {
     return <span role={error ? 'alert' : 'status'} className={error ? 'studio-detail-image-error' : 'studio-detail-loading'}>
       {error || '正在加载原图…'}
@@ -57,16 +63,20 @@ function ImageAsset({ task, api, image, index, measure }: ImageAssetProps) {
   return <img src={src} alt={task.item.prompt_preview || '生成图片'} onLoad={({ currentTarget }) => {
     const { naturalWidth: width, naturalHeight: height } = currentTarget
     if (width > 0 && height > 0) measure({ width, height })
-  }} onError={() => { setSrc(''); setError('无法显示这张图片。') }} />
+  }} onError={() => { onReadable?.(null); setSrc(''); setError('无法显示这张图片。') }} />
 }
 
-export function DetailModal({ task, api, close, edit, cancel }: DetailProps) {
+export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas }: DetailProps) {
   const [archive, setArchive] = useState<Awaited<ReturnType<API['archivePreview']>> | null>(null)
   const [openingArchive, setOpeningArchive] = useState(false)
   const archiveRequest = useRef<AbortController | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   const opener = useRef<HTMLElement | null>(null)
+  const closed = useRef(false)
   const [index, setIndex] = useState(0)
+  const [readableIndex, setReadableIndex] = useState<number | null>(null)
+  const [handoff, setHandoff] = useState<'video' | 'canvas' | null>(null)
+  const handoffPending = useRef(false)
   const [sizes, setSizes] = useState<Readonly<Partial<Record<number, OutputSize>>>>({})
   const [viewer, setViewer] = useState('')
   const viewerURL = useRef('')
@@ -83,6 +93,7 @@ export function DetailModal({ task, api, close, edit, cancel }: DetailProps) {
   const frameStyle: React.CSSProperties & { readonly '--detail-aspect': number } = { '--detail-aspect': aspect }
 
   function dismiss() {
+    closed.current = true
     if (dialog.current?.open) dialog.current.close()
     close()
     const target = opener.current
@@ -94,8 +105,49 @@ export function DetailModal({ task, api, close, edit, cancel }: DetailProps) {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     dialog.current?.showModal()
   }, [])
-  useEffect(() => () => archiveRequest.current?.abort(), [])
+  useEffect(() => {
+    closed.current = false
+    return () => { closed.current = true; archiveRequest.current?.abort() }
+  }, [])
   useEffect(() => () => { if (viewerURL.current) URL.revokeObjectURL(viewerURL.current) }, [])
+
+  // Opened archive items are synthesized from a signed archive, not indexed originals.
+  const videoOriginal = () => onVideo && !archive && readableIndex === index ? api.originalLocator(task, index) : null
+  const canvasOriginal = () => onCanvas && !archive ? api.originalLocator(task, index) : null
+
+  async function openVideo() {
+    if (handoffPending.current) return
+    const original = videoOriginal()
+    if (!original || !onVideo) { setError('原图不可用，请重新选择。'); return }
+    handoffPending.current = true
+    setHandoff('video')
+    setError('')
+    try {
+      await onVideo(original)
+    } catch (error) {
+      if (!closed.current && dialog.current?.isConnected) setError(errorMessage(error))
+    } finally {
+      handoffPending.current = false
+      if (!closed.current && dialog.current?.isConnected) setHandoff(null)
+    }
+  }
+
+  async function openCanvas() {
+    if (handoffPending.current) return
+    const original = canvasOriginal()
+    if (!original || !onCanvas) { setError('原图不可用或已过期，无法加入画布。'); return }
+    handoffPending.current = true
+    setHandoff('canvas')
+    setError('')
+    try {
+      await onCanvas(original)
+    } catch (error) {
+      if (!closed.current && dialog.current?.isConnected) setError(errorMessage(error))
+    } finally {
+      handoffPending.current = false
+      if (!closed.current && dialog.current?.isConnected) setHandoff(null)
+    }
+  }
 
   async function openArchive() {
     if (archiveRequest.current) return
@@ -150,9 +202,12 @@ export function DetailModal({ task, api, close, edit, cancel }: DetailProps) {
 
   const expiry = (display.canViewOutput || display.canOpenArchive) ? task.job.output_expires_at : undefined
   const noticeMessage = display.message || (display.canOpenArchive ? '图片或失败详情保存在归档中，打开后按需读取。' : '')
-  const showCallout = Boolean(noticeMessage || display.error?.code)
+  const archiveVideoHint = onVideo && taskDisplay(task).canOpenArchive ? '归档结果不支持直接带入视频工作台；可下载原图后手动上传。' : ''
+  const showCallout = Boolean(noticeMessage || archiveVideoHint || display.error?.code)
   const calloutTone = display.status === 'failed' ? 'danger' : 'neutral'
   const showPagination = display.canViewOutput && item.image_count > 1
+  const canVideo = Boolean(videoOriginal())
+  const canCanvas = Boolean(canvasOriginal())
   const hasActions = display.canViewOutput || display.canOpenArchive || pending
 
   return <dialog
@@ -179,13 +234,14 @@ export function DetailModal({ task, api, close, edit, cancel }: DetailProps) {
     <div className="studio-detail-content">
       {display.canViewOutput && <figure className="studio-detail-media">
         <button type="button" className="studio-detail-image" onClick={() => void view()} aria-label="放大图片">
-          <ImageAsset key={index} task={task} api={api} image={archive?.images[index]} index={index} measure={next => setSizes(sizes => ({ ...sizes, [index]: next }))} />
+          <ImageAsset key={index} task={task} api={api} image={archive?.images[index]} index={index} measure={next => setSizes(sizes => ({ ...sizes, [index]: next }))} onReadable={setReadableIndex} />
           <span className="studio-detail-expand" aria-hidden="true"><ExpandIcon /></span>
         </button>
       </figure>}
       <section className="studio-detail-info" aria-label="生成信息">
         {showCallout && <div className="studio-detail-callout" data-tone={calloutTone} role={calloutTone === 'danger' ? 'status' : undefined}>
           {noticeMessage && <p className="studio-detail-message">{noticeMessage}</p>}
+          {archiveVideoHint && <p className="studio-detail-message">{archiveVideoHint}</p>}
           {display.error?.code && <details className="studio-detail-error">
             <summary>错误详情</summary>
             <p className="studio-detail-error-body">
@@ -220,6 +276,8 @@ export function DetailModal({ task, api, close, edit, cancel }: DetailProps) {
       {display.canViewOutput && <>
         <button type="button" className="studio-detail-action-quiet" onClick={() => void download()}><DownloadIcon aria-hidden="true" />下载图片</button>
         <button type="button" className="studio-detail-action-soft" onClick={editCurrent}><EditIcon aria-hidden="true" />引用此图继续修改</button>
+        {canCanvas && <button type="button" className="studio-detail-action-soft" disabled={handoff !== null} onClick={() => void openCanvas()}>{handoff === 'canvas' ? '正在加入画布…' : '加入画布'}</button>}
+        {canVideo && <button type="button" className="studio-detail-action-soft" disabled={handoff !== null} onClick={() => void openVideo()}>{handoff === 'video' ? '正在打开视频工作台…' : '用这张图生成视频'}</button>}
       </>}
     </footer>}
     {display.canViewOutput && viewer && <Lightbox src={viewer} imageId={`${task.id}/${index}`} onClose={() => setViewer('')} currentIndex={index} total={item.image_count} showNav={item.image_count > 1} onPrev={() => void view((index - 1 + item.image_count) % item.image_count)} onNext={() => void view((index + 1) % item.image_count)} onDownload={() => void download()} onEdit={editCurrent} />}

@@ -139,7 +139,7 @@ func (s *BatchImageDownloadService) OpenItemContent(ctx context.Context, owner B
 	if err != nil {
 		return nil, err
 	}
-	if isBatchImageCOSArchivedItem(item) {
+	if IsArchivedBatchImageItem(item) {
 		return nil, ErrBatchImageArchiveClientRequired
 	}
 	if item.Status != BatchImageItemStatusSuccess {
@@ -246,7 +246,7 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 	if err != nil {
 		return nil, err
 	}
-	if len(archiveItems) > 0 && isBatchImageCOSArchivedItem(archiveItems[0]) {
+	if len(archiveItems) > 0 && IsArchivedBatchImageItem(archiveItems[0]) {
 		return nil, ErrBatchImageArchiveClientRequired
 	}
 	maxItems := opts.MaxItems
