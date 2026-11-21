@@ -179,7 +179,7 @@ func TestImageUpscaleFallbackSkipsAndFailsTruthfully(t *testing.T) {
 	cfg := imageUpscaleTestConfig("https://mini.invalid")
 	s := newImageUpscaleTestService(cfg, &http.Client{}, func(context.Context) ([]byte, error) { loads++; return nil, errors.New("mini credential unavailable") })
 	s.cloudSlots = make(chan struct{}, 1)
-	s.cloudUpscale = func(context.Context, []byte, int) (*ImageUpscaleResult, error) {
+	s.cloudUpscale = func(context.Context, []byte, int, func() error) (*ImageUpscaleResult, error) {
 		cloud++
 		return nil, aliFailure("PROCESS")
 	}

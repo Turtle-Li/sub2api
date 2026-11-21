@@ -281,6 +281,12 @@ func (s *batchImageCOSDeliveryStore) Put(ctx context.Context, key, contentType s
 	return nil
 }
 
+type batchImageCOSOperationFailure string
+
+func (e batchImageCOSOperationFailure) Error() string { return string(e) }
+
+func (e batchImageCOSOperationFailure) BatchImageStorageDiagnostic() string { return string(e) }
+
 func batchImageCOSOperationError(operation string, err error) error {
 	operation = strings.TrimSpace(operation)
 	if operation == "" {
@@ -304,7 +310,7 @@ func batchImageCOSOperationError(operation string, err error) error {
 		}
 	}
 	details = append(details, "category="+batchImageCOSErrorCategory(err))
-	return fmt.Errorf("%s failed (%s)", operation, strings.Join(details, ","))
+	return batchImageCOSOperationFailure(fmt.Sprintf("%s failed (%s)", operation, strings.Join(details, ",")))
 }
 
 func batchImageCOSDiagnosticToken(value string, maximum int) string {
@@ -448,6 +454,17 @@ func (s *batchImageCOSDeliveryStore) PresignPut(ctx context.Context, key string,
 		// SDK errors can include the full signed request. Never return them to a
 		// caller that may log the error.
 		return "", errors.New("presign COS upload failed")
+	}
+	return result.URL, nil
+}
+
+func (s *batchImageCOSDeliveryStore) PresignHead(ctx context.Context, key string, expires time.Duration) (string, error) {
+	if err := s.ready(); err != nil {
+		return "", err
+	}
+	result, err := s.presign.PresignHeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &key}, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", errors.New("presign COS head failed")
 	}
 	return result.URL, nil
 }

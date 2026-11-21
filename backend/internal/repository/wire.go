@@ -104,6 +104,7 @@ var ProviderSet = wire.NewSet(
 	NewIdempotencyRepository,
 	NewUnifiedPaymentWebhookInboxStore,
 	NewFeishuPaymentIncidentStore,
+	NewOperationalAlertOutbox,
 	NewPaidFallbackOpsStore,
 	NewUsageCleanupRepository,
 	NewDashboardAggregationRepository,

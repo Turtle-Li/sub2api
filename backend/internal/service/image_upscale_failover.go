@@ -13,9 +13,10 @@ import (
 const imageUpscaleCloudMaxQueue = 8
 
 type upscaleSourceRequest struct {
-	scale int
-	tier  string
-	owned bool
+	scale    int
+	tier     string
+	owned    bool
+	shanghai *shanghaiUpscaleAttempt
 }
 
 // Keep the shared Mini admission limit ahead of potentially large source loads.
@@ -52,6 +53,9 @@ func (s *ImageUpscaleService) routeUpscale(ctx context.Context, class imageUpsca
 		}
 	}()
 	if !hasMini {
+		if req.shanghai != nil && req.shanghai.state.MiniExpires != nil && !req.shanghai.state.MiniFailed {
+			return nil, miniErr
+		}
 		if err := s.acquireCloud(job, miniErr); err != nil {
 			return nil, err
 		}
@@ -86,9 +90,18 @@ func (s *ImageUpscaleService) routeUpscale(ctx context.Context, class imageUpsca
 		return nil, err
 	}
 	if hasMini {
-		result, err := s.runMiniUpscale(mini, source, width, height, req.scale)
+		var result *ImageUpscaleResult
+		if req.shanghai != nil {
+			result, err = s.runShanghaiMini(mini, req.shanghai, source, width, height, req.scale)
+		} else {
+			result, err = s.runMiniUpscale(mini, source, width, height, req.scale)
+		}
 		if err == nil {
 			return result, nil
+		}
+		var deliveryFailure *batchImageDeliveryFailure
+		if req.shanghai != nil && errors.As(err, &deliveryFailure) {
+			return nil, err
 		}
 		miniErr = err
 		// Hold Mini admission until cloud admission succeeds: waiting failovers must
@@ -105,7 +118,24 @@ func (s *ImageUpscaleService) routeUpscale(ctx context.Context, class imageUpsca
 	}
 	reason := upscaleFailureCode(miniErr)
 	logger.L().Info("image_upscale.aliyun_fallback", zap.String("mini_code", reason), zap.Int("scale", req.scale))
-	result, err := s.cloudUpscale(job, source, req.scale)
+	var beforePaid func() error
+	var winner *ImageUpscaleResult
+	if a := req.shanghai; a != nil {
+		beforePaid = func() error {
+			return a.withWrite(job, 5*time.Second, func(gateCtx context.Context) error {
+				result, err := a.slot.claimCloud(gateCtx)
+				winner = result
+				if err == nil && winner != nil {
+					return errShanghaiMiniWon
+				}
+				return err
+			})
+		}
+	}
+	result, err := s.cloudUpscale(job, source, req.scale, beforePaid)
+	if errors.Is(err, errShanghaiMiniWon) && winner != nil {
+		return winner, nil
+	}
 	if err != nil {
 		logger.L().Warn("image_upscale.aliyun_fallback_failed", zap.String("mini_code", reason), zap.String("cloud_code", upscaleFailureCode(err)), zap.Int("scale", req.scale))
 		return nil, err

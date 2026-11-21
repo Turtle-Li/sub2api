@@ -31,18 +31,22 @@ type aliyunUpscaler struct {
 	maxBytes int64
 }
 
-func newAliyunImageUpscaler(cfg config.ImageUpscaleConfig) func(context.Context, []byte, int) (*ImageUpscaleResult, error) {
+func newAliyunImageUpscaler(cfg config.ImageUpscaleConfig) func(context.Context, []byte, int, func() error) (*ImageUpscaleResult, error) {
 	limit := cfg.MaxResultBytes
 	if limit <= 0 {
 		limit = 128 << 20
 	}
-	return (&aliyunUpscaler{http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, load: newImageUpscaleVaultLoader(cfg.VaultAgentSocket, aliyunUpscaleVaultRef), maxBytes: limit}).upscale
+	return (&aliyunUpscaler{http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, load: newImageUpscaleVaultLoader(cfg.VaultAgentSocket, aliyunUpscaleVaultRef), maxBytes: limit}).upscaleWithPaidGate
 }
 
 // The generated Advance method builds a second upload client without the caller's
 // context. Use its AuthorizeFileUpload/OSS contract explicitly, then the signed
 // generated WithContext method. No retries or redirects on the paid request.
 func (a *aliyunUpscaler) upscale(ctx context.Context, source []byte, scale int) (*ImageUpscaleResult, error) {
+	return a.upscaleWithPaidGate(ctx, source, scale, nil)
+}
+
+func (a *aliyunUpscaler) upscaleWithPaidGate(ctx context.Context, source []byte, scale int, beforePaid func() error) (*ImageUpscaleResult, error) {
 	if ctx.Err() != nil {
 		return nil, imageUpscaleError("JOB_TIMEOUT", 0, false, ctx.Err())
 	}
@@ -63,6 +67,11 @@ func (a *aliyunUpscaler) upscale(ctx context.Context, source []byte, scale int) 
 	client, err := imageenhan.NewClient(cfg)
 	if err != nil {
 		return nil, aliFailure("CLIENT")
+	}
+	if beforePaid != nil {
+		if err := beforePaid(); err != nil {
+			return nil, err
+		}
 	}
 	resp, err := client.MakeSuperResolutionImageWithContext(ctx, &imageenhan.MakeSuperResolutionImageRequest{Url: &sourceURL, UpscaleFactor: dara.Int64(int64(scale)), OutputFormat: dara.String("png"), OutputQuality: dara.Int64(95)}, runtime)
 	if err != nil || resp == nil || resp.Body == nil || resp.Body.Data == nil {

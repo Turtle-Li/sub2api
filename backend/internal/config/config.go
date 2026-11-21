@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shanghaidelivery"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
@@ -389,6 +390,8 @@ type BatchImageConfig struct {
 	DeliveryCOSVaultAgentSocket        string `mapstructure:"delivery_cos_vault_agent_socket"`
 	DeliveryCOSPrefix                  string `mapstructure:"delivery_cos_prefix"`
 	DeliveryCOSForcePathStyle          bool   `mapstructure:"delivery_cos_force_path_style"`
+	ShanghaiDeliveryURL                string `mapstructure:"shanghai_delivery_url"`
+	ShanghaiDeliveryCanaryUserID       int64  `mapstructure:"shanghai_delivery_canary_user_id"`
 }
 
 // ImageUpscaleConfig controls the private Image 2.5 post-processing gateway.
@@ -2655,6 +2658,8 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_cos_secret_access_key_vault_ref", "")
 	viper.SetDefault("batch_image.delivery_cos_vault_agent_socket", "/run/sub2api-upscale-vault/public.sock")
 	viper.SetDefault("batch_image.delivery_cos_prefix", "sub2-batch-image/prod/")
+	viper.SetDefault("batch_image.shanghai_delivery_url", "")
+	viper.SetDefault("batch_image.shanghai_delivery_canary_user_id", 0)
 	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
 	viper.SetDefault("image_upscale.enabled", false)
 	viper.SetDefault("image_upscale.aliyun_enabled", false)
@@ -3700,6 +3705,17 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.BatchImage.DeliveryCOSAccessKeyID) != "" || strings.TrimSpace(c.BatchImage.DeliveryCOSSecretAccessKey) != "" {
 		return fmt.Errorf("batch_image raw COS credentials are not accepted; configure exact Vault references")
+	}
+	if c.BatchImage.ShanghaiDeliveryURL != "" {
+		if err := shanghaidelivery.ValidateControlURL(c.BatchImage.ShanghaiDeliveryURL); err != nil {
+			return fmt.Errorf("batch_image.shanghai_delivery_url: %w", err)
+		}
+		if !c.BatchImage.Enabled || !c.ImageUpscale.Enabled || !c.ImageUpscale.AliyunEnabled ||
+			c.BatchImage.ShanghaiDeliveryCanaryUserID < 0 || c.BatchImage.DeliveryCOSForcePathStyle ||
+			c.BatchImage.DeliveryCOSRegion != "ap-shanghai" || c.BatchImage.DeliveryCOSEndpoint != "https://cos.ap-shanghai.myqcloud.com" ||
+			time.Duration(c.ImageUpscale.JobTimeoutSeconds)*time.Second >= shanghaidelivery.TicketTTL {
+			return fmt.Errorf("Shanghai Image Studio canary requires an exact user, enabled Mini and Aliyun, a bounded job timeout, and virtual-hosted Shanghai COS")
+		}
 	}
 	if _, raw := os.LookupEnv("IMAGE_UPSCALE_ALIYUN_CREDENTIALS"); raw {
 		return fmt.Errorf("image_upscale raw Aliyun credentials are not accepted; use the dedicated Vault agent")

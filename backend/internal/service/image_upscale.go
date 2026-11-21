@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shanghaidelivery"
 	"github.com/google/uuid"
 	_ "golang.org/x/image/webp"
 )
@@ -71,6 +72,7 @@ type ImageUpscaleResult struct {
 	Width    int
 	Height   int
 	Scale    int
+	shanghai *shanghaidelivery.Image
 }
 
 type imageUpscaleAPIKeyLoader func(context.Context) ([]byte, error)
@@ -90,7 +92,7 @@ type imageUpscaleWaiter struct {
 }
 
 type ImageUpscaleService struct {
-	cloudUpscale         func(context.Context, []byte, int) (*ImageUpscaleResult, error)
+	cloudUpscale         func(context.Context, []byte, int, func() error) (*ImageUpscaleResult, error)
 	cloudSlots           chan struct{}
 	cloudWaiting         atomic.Int64
 	cfg                  config.ImageUpscaleConfig
@@ -579,6 +581,7 @@ func (s *ImageUpscaleService) removeWaiterLocked(target *imageUpscaleWaiter) boo
 type imageUpscaleSubmitOptions struct {
 	resultUploadURL string
 	resultURL       string
+	noSubmitRetry   bool
 }
 
 func (s *ImageUpscaleService) submit(ctx context.Context, source []byte, scale int, apiKey []byte) (string, error) {
@@ -638,7 +641,7 @@ func (s *ImageUpscaleService) submitWithOptions(ctx context.Context, source []by
 			return strings.TrimSpace(envelope.Job.ID), nil
 		}
 		lastErr = imageUpscaleError(upscaleHTTPErrorCode("SUBMIT", resp.StatusCode), resp.StatusCode, resp.StatusCode == 429 || resp.StatusCode >= 500, nil)
-		if s.cloudUpscale != nil || resp.StatusCode != http.StatusTooManyRequests || attempt == s.cfg.RetryMax {
+		if options.noSubmitRetry || s.cloudUpscale != nil || resp.StatusCode != http.StatusTooManyRequests || attempt == s.cfg.RetryMax {
 			return "", lastErr
 		}
 		if err := waitUpscaleRetry(ctx, resp.Header.Get("Retry-After"), attempt); err != nil {
@@ -655,6 +658,7 @@ func (s *ImageUpscaleService) waitForCompletion(ctx context.Context, jobID strin
 
 type imageUpscaleCompletion struct {
 	ResultUploaded    bool
+	ResultReady       *bool
 	ResultURL         string
 	ResultContentType string
 	OutputWidth       int
@@ -688,6 +692,7 @@ func (s *ImageUpscaleService) waitForCompletionDetails(ctx context.Context, jobI
 							State             string `json:"state"`
 							Error             string `json:"error"`
 							ResultUploaded    bool   `json:"result_uploaded"`
+							ResultReady       *bool  `json:"result_ready"`
 							ResultURL         string `json:"result_url"`
 							ResultContentType string `json:"result_content_type"`
 							OutputWidth       int    `json:"output_width"`
@@ -701,6 +706,7 @@ func (s *ImageUpscaleService) waitForCompletionDetails(ctx context.Context, jobI
 					case "completed":
 						return &imageUpscaleCompletion{
 							ResultUploaded:    envelope.Job.ResultUploaded,
+							ResultReady:       envelope.Job.ResultReady,
 							ResultURL:         envelope.Job.ResultURL,
 							ResultContentType: envelope.Job.ResultContentType,
 							OutputWidth:       envelope.Job.OutputWidth,
@@ -712,7 +718,7 @@ func (s *ImageUpscaleService) waitForCompletionDetails(ctx context.Context, jobI
 						if temporary {
 							statusCode = http.StatusServiceUnavailable
 						}
-						return nil, imageUpscaleError("REMOTE_JOB_FAILED", statusCode, temporary, nil)
+						return &imageUpscaleCompletion{ResultReady: envelope.Job.ResultReady}, imageUpscaleError("REMOTE_JOB_FAILED", statusCode, temporary, nil)
 					case "queued", "running":
 						lastErr = nil
 					default:

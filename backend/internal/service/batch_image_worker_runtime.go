@@ -13,6 +13,8 @@ type BatchImageWorkerRuntime struct {
 	worker          *BatchImageWorker
 	billingRecovery *BatchImageBillingRecoveryService
 	queueRecovery   *BatchImageQueueRecoveryService
+	shanghaiAcks    batchImageShanghaiAcknowledgementStore
+	alerts          *OperationalAlerts
 	cfg             *config.Config
 
 	mu     sync.Mutex
@@ -35,6 +37,7 @@ func ProvideBatchImageWorkerRuntime(
 	deliveryStore BatchImageDeliveryObjectStore,
 	openAIGateway *OpenAIGatewayService,
 	cfg *config.Config,
+	alerts *OperationalAlerts,
 ) *BatchImageWorkerRuntime {
 	upscaler := SharedImageUpscaleService(cfg)
 	upscaleStore, _ := deliveryStore.(BatchImageUpscaleObjectStore)
@@ -45,10 +48,20 @@ func ProvideBatchImageWorkerRuntime(
 			highResolutionFinalizeRequeue = time.Duration(cfg.BatchImage.HighResolutionFinalizeRequeueSeconds) * time.Second
 		}
 	}
+	registry := NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, openAIGateway)
+	if checkpoints, ok := repo.(BatchImageResultCheckpointStore); ok {
+		for _, provider := range registry.providers {
+			if local, ok := provider.(*OpenAIImagesBatchProvider); ok {
+				local.checkpoints = checkpoints
+				local.config = cfg
+			}
+		}
+	}
 	processor := &BatchImagePipelineProcessor{
 		ProviderProcessor: &BatchImageProviderProcessor{
 			Repo:             repo,
-			ProviderRegistry: NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, openAIGateway),
+			ProviderRegistry: registry,
+			Alerts:           alerts,
 			AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 			Delivery:         NewBatchImageDeliveryService(repo, deliveryStore, cfg),
 			Indexer: &BatchImageResultIndexer{
@@ -57,6 +70,7 @@ func ProvideBatchImageWorkerRuntime(
 				Upscaler:     upscaler,
 				UpscaleStore: upscaleStore,
 				Thumbnails:   newBatchImageThumbnailService(repo, deliveryStore, cfg),
+				Alerts:       alerts,
 			},
 			BillingRepo:                   billingRepo,
 			AuthCache:                     authCache,
@@ -64,6 +78,7 @@ func ProvideBatchImageWorkerRuntime(
 			HighResolutionFinalizeRequeue: highResolutionFinalizeRequeue,
 		},
 		SettlementService: &BatchImageSettlementService{
+			Alerts:       alerts,
 			Repo:         repo,
 			BillingRepo:  billingRepo,
 			UsageLogRepo: usageLogRepo,
@@ -74,6 +89,8 @@ func ProvideBatchImageWorkerRuntime(
 	}
 	workerOptions := NewBatchImageWorkerOptionsFromConfig(cfg)
 	runtime := NewBatchImageWorkerRuntime(NewBatchImageWorker(queue, processor, workerOptions), cfg)
+	runtime.shanghaiAcks, _ = repo.(batchImageShanghaiAcknowledgementStore)
+	runtime.alerts = alerts
 	runtime.billingRecovery = &BatchImageBillingRecoveryService{
 		Repo:       repo,
 		Billing:    billingRepo,
@@ -185,6 +202,7 @@ func (r *BatchImageWorkerRuntime) runBillingRecovery(ctx context.Context) {
 		}
 		if runtimegate.SharedWorkAllowed() {
 			_, _ = r.billingRecovery.ReleaseStaleUnsubmittedOnce(ctx)
+			reconcileBatchImageShanghaiAcknowledgements(ctx, r.cfg, r.shanghaiAcks, r.alerts)
 		}
 		sleepOrDone(ctx, interval)
 	}

@@ -62,6 +62,7 @@ func (r *BatchImageModelPricingResolver) BatchImageUnitPrice(ctx context.Context
 }
 
 type BatchImageSettlementService struct {
+	Alerts       *OperationalAlerts
 	Repo         BatchImageRepository
 	BillingRepo  UsageBillingRepository
 	UsageLogRepo UsageLogRepository
@@ -113,23 +114,17 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	if job.AccountID == nil || *job.AccountID <= 0 {
 		return nil, ErrBatchImageSettlementMissingAccountID
 	}
-	// 重试耗尽检查必须先于各类可重复失败的校验（counts/manifest/定价/超冻结），
-	// 否则这些错误路径会绕过耗尽出口，settling job 无限 requeue、冻结余额永不释放。
+	// Jobs without usable output can still take the legacy exhausted path.
+	// Once output was indexed, never release its hold for a local settlement error.
 	if isBatchImageSettlementRetryExhausted(job) {
 		return nil, s.failExhaustedSettlement(ctx, job, "settlement retry limit reached: "+batchImageDerefString(job.LastErrorCode))
 	}
 	if job.SuccessCount < 0 || job.FailCount < 0 || job.ItemCount < 0 || job.SuccessCount+job.FailCount > job.ItemCount {
-		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_INVALID_COUNTS",
-			fmt.Sprintf("success=%d fail=%d item_count=%d", job.SuccessCount, job.FailCount, job.ItemCount)); failErr != nil {
-			return nil, failErr
-		}
-		return nil, ErrBatchImageSettlementInvalidCounts
+		return nil, s.settlementFailure(ctx, job, "SETTLEMENT_INVALID_COUNTS",
+			fmt.Sprintf("success=%d fail=%d item_count=%d", job.SuccessCount, job.FailCount, job.ItemCount), ErrBatchImageSettlementInvalidCounts)
 	}
 	if strings.TrimSpace(batchImageDerefString(job.ManifestHash)) != "" && batchImageDerefString(job.ManifestHash) != manifestHash {
-		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_MANIFEST_CONFLICT", "manifest hash conflict"); failErr != nil {
-			return nil, failErr
-		}
-		return nil, ErrBatchImageSettlementManifestConflict
+		return nil, s.settlementFailure(ctx, job, "SETTLEMENT_MANIFEST_CONFLICT", "manifest hash conflict", ErrBatchImageSettlementManifestConflict)
 	}
 
 	unitPrice, err := s.settlementUnitPrice(ctx, job)
@@ -137,10 +132,7 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 		err = ErrBatchImageSettlementPricingMissing
 	}
 	if err != nil {
-		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_PRICING_MISSING", err.Error()); failErr != nil {
-			return nil, failErr
-		}
-		return nil, err
+		return nil, s.settlementFailure(ctx, job, "SETTLEMENT_PRICING_MISSING", err.Error(), err)
 	}
 	actualCost := float64(job.SuccessCount) * unitPrice
 	result.ActualCost = actualCost
@@ -150,18 +142,11 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	}
 	if actualCost-holdAmount > batchImageCostEpsilon {
 		msg := fmt.Sprintf("actual cost %.10f exceeds held amount %.10f", actualCost, holdAmount)
-		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_COST_EXCEEDS_HOLD", msg); failErr != nil {
-			return nil, failErr
-		}
-		return nil, ErrBatchImageSettlementCostExceedsHold
+		return nil, s.settlementFailure(ctx, job, "SETTLEMENT_COST_EXCEEDS_HOLD", msg, ErrBatchImageSettlementCostExceedsHold)
 	}
 
 	if err := captureBatchImageBalanceHold(ctx, s.BillingRepo, job, actualCost, manifestHash); err != nil {
-		msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
-		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_BILLING_FAILED", msg); failErr != nil {
-			return nil, failErr
-		}
-		return nil, err
+		return nil, s.settlementFailure(ctx, job, "SETTLEMENT_BILLING_FAILED", err.Error(), err)
 	}
 	s.invalidateAuthCache(ctx, job.UserID)
 
@@ -182,27 +167,33 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 			"manifest_hash": manifestHash,
 		},
 	}); err != nil {
-		return nil, err
+		return nil, s.settlementFailure(ctx, job, "SETTLEMENT_FINALIZATION_FAILED", "settlement state write failed", err)
 	}
 	s.recordUsageLog(ctx, job, actualCost, result.RequestID, now)
 
 	return result, nil
 }
 
-// isBatchImageSettlementRetryExhausted 判断 settling job 是否已达重试上限。
-// 必须覆盖所有 SETTLEMENT_* 失败码（而非仅 SETTLEMENT_BILLING_FAILED），
-// 否则 SETTLEMENT_COST_EXCEEDS_HOLD / SETTLEMENT_INVALID_COUNTS 等错误会无限 requeue。
+func (s *BatchImageSettlementService) settlementFailure(ctx context.Context, job *BatchImageJob, code, message string, cause error) error {
+	if err := s.recordSettlementFailure(ctx, job, code, message); err != nil {
+		return err
+	}
+	if job.SuccessCount > 0 {
+		return batchImageDeliveryError("settlement", code, cause)
+	}
+	return cause
+}
+
 func isBatchImageSettlementRetryExhausted(job *BatchImageJob) bool {
 	return job != nil &&
 		job.Status == BatchImageJobStatusSettling &&
+		job.SuccessCount <= 0 &&
 		job.RetryCount >= batchImageSettlementMaxRetries &&
 		strings.HasPrefix(batchImageDerefString(job.LastErrorCode), "SETTLEMENT_")
 }
 
-// recordSettlementFailure 记录一次结算失败并递增 retry_count。
-// 重试达到上限时立即走耗尽出口（释放冻结余额并转 failed）；
-// 返回非 nil 时调用方应直接返回该错误。
 func (s *BatchImageSettlementService) recordSettlementFailure(ctx context.Context, job *BatchImageJob, code, message string) error {
+	s.Alerts.observeBatchImage(ctx, job.BatchID, "settlement", code)
 	retryCount, recordErr := s.Repo.SetBatchImageJobSettlementFailed(ctx, job.BatchID, code, truncateBatchImageMessage(message, batchImageMaxErrorMessageLength))
 	if recordErr != nil {
 		logger.L().Warn("batch_image.settlement_failure_record_failed",
@@ -214,7 +205,7 @@ func (s *BatchImageSettlementService) recordSettlementFailure(ctx context.Contex
 	}
 	job.RetryCount = retryCount
 	job.LastErrorCode = &code
-	if retryCount >= batchImageSettlementMaxRetries {
+	if isBatchImageSettlementRetryExhausted(job) {
 		return s.failExhaustedSettlement(ctx, job, message)
 	}
 	return nil
@@ -385,10 +376,20 @@ func (p *BatchImagePipelineProcessor) Process(ctx context.Context, batchID strin
 	}
 	if job.Status == BatchImageJobStatusSettling {
 		if p.SettlementService == nil {
-			return BatchImageProcessResult{Terminal: true}, nil
+			return BatchImageProcessResult{}, errors.New("batch image settlement service is not configured")
+		}
+		if delay, err := p.ProviderProcessor.deliveryDelay(ctx, batchID); err != nil || delay > 0 {
+			return BatchImageProcessResult{RequeueAfter: delay}, err
 		}
 		_, err := p.SettlementService.Settle(ctx, batchID)
 		if err != nil {
+			if job.SuccessCount > 0 {
+				var failure *batchImageDeliveryFailure
+				if !errors.As(err, &failure) {
+					failure = &batchImageDeliveryFailure{stage: "settlement", code: "SETTLEMENT_RETRY", cause: err}
+				}
+				return p.ProviderProcessor.retryDelivery(ctx, job, failure)
+			}
 			if errors.Is(err, ErrBatchImageSettlementBillingFailed) {
 				updated, getErr := p.ProviderProcessor.Repo.GetBatchImageJobByBatchID(ctx, batchID)
 				if getErr == nil && IsTerminalBatchImageJobStatus(updated.Status) {

@@ -1109,6 +1109,7 @@ var ProviderSet = wire.NewSet(
 	NewShopService,
 	ProvideShopNotificationService,
 	ProvideFeishuPaymentIncidentService,
+	ProvideOperationalAlerts,
 	ProvidePaidFallbackOpsService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,

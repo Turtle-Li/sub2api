@@ -7,24 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
-	"image/draw"
-	"image/jpeg"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/studiothumbnail"
 	"go.uber.org/zap"
-	xdraw "golang.org/x/image/draw"
 	"golang.org/x/sync/singleflight"
 )
 
-const studioThumbnailEdge = 480
 const studioThumbnailMaxBytes = 32 << 20
 const studioThumbnailCacheBytes = 32 << 20
 const studioThumbnailCacheEntries = 256
-const studioThumbnailMaxPixels = 40_000_000
 
 // Bound source decoding across users as well as the per-user download limiter.
 var studioThumbnailDecoders = make(chan struct{}, 2)
@@ -182,35 +177,12 @@ func (s *BatchImageDownloadService) thumbnailJob(ctx context.Context, owner Batc
 // Read a bounded header, not the pixels. Unsupported media has no layout hint.
 func readBatchImagePreviewSize(r io.Reader) *BatchImagePreviewSize {
 	cfg, _, err := image.DecodeConfig(io.LimitReader(r, 1<<20))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width) > studioThumbnailMaxPixels/int64(cfg.Height) {
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width) > studiothumbnail.MaxPixels/int64(cfg.Height) {
 		return nil
 	}
 	return &BatchImagePreviewSize{Width: cfg.Width, Height: cfg.Height}
 }
 
 func encodeStudioThumbnail(data []byte) ([]byte, error) {
-	config, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	if config.Width <= 0 || config.Height <= 0 || int64(config.Width) > studioThumbnailMaxPixels/int64(config.Height) {
-		return nil, fmt.Errorf("image thumbnail source exceeds pixel limit")
-	}
-	source, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	w, h := config.Width, config.Height
-	if longest := max(w, h); longest > studioThumbnailEdge {
-		w = max(1, w*studioThumbnailEdge/longest)
-		h = max(1, h*studioThumbnailEdge/longest)
-	}
-	output := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.Draw(output, output.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
-	xdraw.ApproxBiLinear.Scale(output, output.Bounds(), source, source.Bounds(), draw.Over, nil)
-	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, output, &jpeg.Options{Quality: 80}); err != nil {
-		return nil, err
-	}
-	return encoded.Bytes(), nil
+	return studiothumbnail.Encode(bytes.NewReader(data))
 }

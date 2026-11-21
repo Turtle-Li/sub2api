@@ -237,9 +237,30 @@ transitions serialize on that same row, so a Redis-lease-expired worker cannot
 begin or resume a write after terminal cleanup. The 150-second delay remains
 defense-in-depth beyond the 120-second write timeout. Manual deletion observes
 the same delay. Completed jobs retain the configured output-retention window.
-Each COS write is capped at 120 seconds. Authenticated item and ZIP reads use
-a 10-minute per-object context that is cancelled when the stream closes, so a
-stalled object-store connection cannot pin a worker or download indefinitely.
+Each COS write attempt, including permit acquisition, is capped at 120 seconds.
+If a result `Put` exhausts that attempt while the parent operation is still
+active, indexing retries storage once with the same bytes and deterministic
+key and a fresh write permit. It never resubmits generation or upscaling.
+An explicit rejection before the write deadline does not receive this extra
+retry. An exhausted or cancelled operation cannot extend its deadline. Failed
+attempts log only the batch ID, attempt, byte count, duration, deadline/retry
+flags, and sanitized COS diagnostics. Authenticated item and ZIP reads use a
+10-minute per-object context that is cancelled when the stream closes.
+
+Production evidence on `f89d19620` (2026-11-21 UTC): the Image 2.6 2K canary
+had a matching 2048×3072 Mini PNG and a successful result GET, but failed
+`IMAGE_UPSCALE_STORE_FAILED` after 133.4 seconds of indexing and paid zero.
+A historical native 2K result failed after 120.3 seconds, while another took
+119.0 seconds to succeed. This supports a write-budget failure, not an upstream
+generation failure. The original COS transport/service error was not logged.
+The local regression reproduces a fully elapsed first write deadline without
+incurring real provider work and requires exactly one Mini submission and a
+successful second write of the same output.
+
+The durable cross-worker recovery contract is now recorded in
+[`IMAGE_STUDIO_DELIVERY_RECOVERY_20261121.md`](IMAGE_STUDIO_DELIVERY_RECOVERY_20261121.md).
+It preserves the Mini/Aliyun boundary and adds checkpoint recovery before
+reusing the existing private COS write and settlement paths.
 
 The same private batch object store is the durable control plane for
 `openai_images`: it holds the normalized manifest, deterministic per-item
@@ -250,11 +271,11 @@ an atomic first-writer-wins create. If recovery sees an attempt without a
 result, it records that item as `PROVIDER_ATTEMPT_OUTCOME_UNKNOWN` and does not
 replay the request; an older worker cannot later overwrite that outcome. Other
 items continue and settlement charges successful items only.
-If the selected upstream account is soft-deleted while the job is active, the
-processor terminally fails the job and idempotently releases its remaining hold
-instead of requeueing forever. OpenAI batch cleanup can then delete its exact
-deterministic COS keys without the deleted credential. Temporary account lookup
-errors still requeue and do not take this permanent-failure path.
+If the selected upstream account is soft-deleted before there is staged output
+or indexing, the processor terminally fails the job and idempotently releases
+its remaining hold. OpenAI batch cleanup can then delete its exact deterministic
+COS keys without the deleted credential. Already staged or indexing work stays
+pending for repair. Temporary account lookup errors still requeue.
 
 ## Credential and deployment boundary
 

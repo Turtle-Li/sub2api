@@ -203,6 +203,9 @@ func TestBatchImageCOSPutReportsSanitizedServiceDiagnostics(t *testing.T) {
 	providerStore := testBatchImageCOSStore(t, server.URL)
 	err := providerStore.Put(context.Background(), "provider/openai/output", "application/x-ndjson", bytes.NewReader([]byte("result\n")), 7)
 	require.Error(t, err)
+	var diagnostic interface{ BatchImageStorageDiagnostic() string }
+	require.ErrorAs(t, err, &diagnostic)
+	require.Equal(t, err.Error(), diagnostic.BatchImageStorageDiagnostic())
 	require.Contains(t, err.Error(), "put COS delivery object failed")
 	require.Contains(t, err.Error(), "status=403")
 	require.Contains(t, err.Error(), "code=AccessDenied")

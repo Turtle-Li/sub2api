@@ -83,6 +83,10 @@
 
 ## Image Studio integration
 
+- For the isolated Shanghai delivery node on the former image-site 4C8G host,
+  read `deploy/shanghai-image-delivery/README.md`. Preserve old-site and
+  Daypass workloads, private scope, stable COS receipt and write fence, and
+  the AWS task/ledger authority. The worker is not a release or video origin.
 - For group-based image administration, read
   `docs/features/IMAGE_STUDIO_ADMIN_20261107.md`. Reuse group/account updates,
   preserve shared non-image allowlist rules, and distinguish configuration
@@ -108,6 +112,10 @@
   For eligible-key loading, Gemini output-token conversion and native per-model
   CNY tariffs/activation, read
   `docs/features/IMAGE_STUDIO_LOAD_AND_NATIVE_PRICES_20261108.md`.
+  For paid results awaiting delivery or settlement, read
+  `docs/operations/IMAGE_STUDIO_DELIVERY_RECOVERY_20261121.md`. Repair the
+  existing delivery, not generation; preserve staged bytes, holds and claims
+  until the original deadline and ledger rules can be applied.
 
 ## Codex OAuth relay Fast compatibility
 

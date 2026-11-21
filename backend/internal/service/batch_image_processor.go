@@ -89,6 +89,7 @@ type BatchImageProviderProcessor struct {
 	DefaultRequeue                time.Duration
 	HighResolutionFinalizer       batchImageHighResolutionFinalizer
 	HighResolutionFinalizeRequeue time.Duration
+	Alerts                        *OperationalAlerts
 }
 
 func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID string) (BatchImageProcessResult, error) {
@@ -105,6 +106,18 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 			return BatchImageProcessResult{}, err
 		}
 		return BatchImageProcessResult{Terminal: true}, nil
+	}
+
+	if delay, err := p.deliveryDelay(ctx, batchID); err != nil || delay > 0 {
+		return BatchImageProcessResult{RequeueAfter: delay}, err
+	}
+	if batchImageUsesShanghai(job) && (job.Status == BatchImageJobStatusSubmitted || job.Status == BatchImageJobStatusRunning || job.Status == BatchImageJobStatusIndexing) {
+		if job.Status != BatchImageJobStatusIndexing {
+			if err := p.startIndexing(ctx, job, "SUCCEEDED"); err != nil {
+				return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "result_index", code: "INDEXING_STATE_SAVE_FAILED", cause: err})
+			}
+		}
+		return p.indexAndSettle(ctx, job, nil, nil)
 	}
 
 	provider, ok := p.ProviderRegistry.Get(job.Provider)
@@ -141,6 +154,10 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		status, err = provider.Get(ctx, job, account)
 	}
 	if err != nil {
+		var failure *batchImageDeliveryFailure
+		if errors.As(err, &failure) {
+			return p.retryDelivery(ctx, job, failure)
+		}
 		logger.L().Warn("batch_image.provider_status_check_failed",
 			zap.String("batch_id", job.BatchID),
 			zap.String("provider", job.Provider),
@@ -153,7 +170,7 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		return BatchImageProcessResult{RequeueAfter: p.requeueDelay(0)}, nil
 	}
 	if err := p.persistProviderOutputRef(ctx, job, status.ProviderOutputRef); err != nil {
-		return BatchImageProcessResult{}, err
+		return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "result_index", code: "PROVIDER_OUTPUT_REFERENCE_SAVE_FAILED", cause: err})
 	}
 
 	switch status.InternalState {
@@ -172,13 +189,9 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		return BatchImageProcessResult{RequeueAfter: p.requeueDelay(status.SuggestedRequeueAfter)}, nil
 	case BatchProviderStateSucceeded:
 		if job.Status != BatchImageJobStatusIndexing {
-			if err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusIndexing, BatchImageTransitionOptions{
-				EventType:    "indexing_started",
-				EventPayload: map[string]any{"provider_state": status.RawState},
-			}); err != nil {
-				return BatchImageProcessResult{}, err
+			if err := p.startIndexing(ctx, job, status.RawState); err != nil {
+				return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "result_index", code: "INDEXING_STATE_SAVE_FAILED", cause: err})
 			}
-			job.Status = BatchImageJobStatusIndexing
 		}
 		return p.indexAndSettle(ctx, job, provider, account)
 	case BatchProviderStateFailed, BatchProviderStateExpired:
@@ -220,7 +233,27 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 	}
 }
 
+func (p *BatchImageProviderProcessor) startIndexing(ctx context.Context, job *BatchImageJob, rawState string) error {
+	err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusIndexing, BatchImageTransitionOptions{
+		EventType:    "indexing_started",
+		EventPayload: map[string]any{"provider_state": rawState},
+	})
+	if err == nil {
+		job.Status = BatchImageJobStatusIndexing
+	}
+	return err
+}
+
 func (p *BatchImageProviderProcessor) failForMissingAccount(ctx context.Context, job *BatchImageJob) (BatchImageProcessResult, error) {
+	if store, ok := p.Repo.(BatchImageResultCheckpointStore); ok {
+		staged, err := store.ListBatchImageCheckpointIDs(ctx, job.BatchID, BatchImageCheckpointSource)
+		if err != nil {
+			return BatchImageProcessResult{}, err
+		}
+		if len(staged) > 0 || job.Status == BatchImageJobStatusIndexing {
+			return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "provider_archive", code: "BATCH_IMAGE_ACCOUNT_REMOVED"})
+		}
+	}
 	const (
 		code    = "BATCH_IMAGE_ACCOUNT_REMOVED"
 		message = "batch image provider account is no longer available"
@@ -280,16 +313,26 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 		result, err = indexer.Index(ctx, job, provider, account)
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return BatchImageProcessResult{}, ctx.Err()
+		}
 		if errors.Is(err, ErrBatchImageIndexOutputMissing) {
-			return BatchImageProcessResult{}, err
+			return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "result_read", code: "BATCH_IMAGE_INDEX_OUTPUT_MISSING"})
 		}
 		if errors.Is(err, ErrBatchImageUpscaleCleanupFailed) || errors.Is(err, ErrBatchImageUpscaleWriteFenceFailed) {
-			return BatchImageProcessResult{}, err
+			var failure *batchImageDeliveryFailure
+			if !errors.As(err, &failure) {
+				return BatchImageProcessResult{}, err
+			}
 		}
 		// job 状态已被并发方推进（如已进入 settling/终态）：不是索引数据问题，
 		// 短延迟 requeue 让下一轮按最新状态处理，不能误转 failed。
 		if errors.Is(err, ErrBatchImageIndexStateConflict) {
 			return BatchImageProcessResult{RequeueAfter: time.Millisecond}, nil
+		}
+		var failure *batchImageDeliveryFailure
+		if errors.As(err, &failure) {
+			return p.retryDelivery(ctx, job, failure)
 		}
 		code := "INDEX_PARSE_FAILED"
 		if errors.Is(err, ErrBatchImageDuplicateCustomID) {
@@ -297,6 +340,7 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 		} else if deliveryMode {
 			code = "RESULT_DELIVERY_FAILED"
 		}
+		p.Alerts.observeBatchImage(ctx, job.BatchID, "result_index", code)
 		msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
 		transitionErr := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
 			EventType:    "indexing_failed",
@@ -304,6 +348,9 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 			ErrorCode:    batchImageStringPtr(code),
 			ErrorMessage: batchImageOptionalStringPtr(msg),
 		})
+		if errors.Is(transitionErr, ErrBatchImageDeliveryPending) {
+			return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "result_index", code: code})
+		}
 		if transitionErr != nil {
 			return BatchImageProcessResult{}, transitionErr
 		}
@@ -322,7 +369,7 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 			"total_count":   result.TotalCount,
 		},
 	}); err != nil {
-		return BatchImageProcessResult{}, err
+		return p.retryDelivery(ctx, job, &batchImageDeliveryFailure{stage: "result_index", code: "SETTLING_STATE_SAVE_FAILED", cause: err})
 	}
 	return BatchImageProcessResult{RequeueAfter: time.Millisecond}, nil
 }
@@ -385,38 +432,56 @@ type BatchImageResultIndexer struct {
 	UpscaleStore       BatchImageUpscaleObjectStore
 	UpscaleWriteFencer BatchImageUpscaleWriteFencer
 	Thumbnails         *BatchImageThumbnailService
+	Alerts             *OperationalAlerts
 }
 
 func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (*BatchImageIndexResult, error) {
-	if i == nil || i.Repo == nil || job == nil || provider == nil {
+	if i == nil || i.Repo == nil || job == nil || (provider == nil && !batchImageUsesShanghai(job)) {
 		return nil, ErrBatchImageIndexOutputMissing
 	}
+	checkpoints, _ := i.Repo.(BatchImageResultCheckpointStore)
 	expected, err := i.listExpectedCustomIDs(ctx, job.BatchID)
 	if err != nil {
-		return nil, err
+		return nil, batchImageDeliveryError("result_index", "RESULT_ITEM_LIST_FAILED", err)
+	}
+
+	thumbnails := &batchImageThumbnailCapture{service: i.Thumbnails, parent: ctx, remaining: 10 * time.Second}
+	writeFencer := i.UpscaleWriteFencer
+	if writeFencer == nil {
+		writeFencer, _ = i.Repo.(BatchImageUpscaleWriteFencer)
+	}
+	upscaleDelivery := batchImageUpscaleDelivery{
+		config: i.Config, upscaler: i.Upscaler, store: i.UpscaleStore,
+		writeFencer: writeFencer, checkpoints: checkpoints, thumbnails: thumbnails,
+	}
+	if batchImageJobRequiresUpscale(job) && writeFencer == nil {
+		return nil, ErrBatchImageUpscaleWriteFenceFailed
+	}
+	if batchImageUsesShanghai(job) {
+		return i.indexShanghai(ctx, job, expected, upscaleDelivery)
 	}
 
 	r, _, err := provider.OpenResult(ctx, job, account)
 	if err != nil {
+		// Once every final image is staged, the originals are no longer needed
+		// for delivery. This also works after a provider's source URL expires.
+		if batchImageJobRequiresUpscale(job) && checkpoints != nil && len(expected) == job.ItemCount && len(expected) > 0 {
+			if result, recoverErr := i.recoverFinalCheckpoints(ctx, job, expected, upscaleDelivery); recoverErr != nil || result != nil {
+				return result, recoverErr
+			}
+		}
 		return nil, ErrBatchImageIndexOutputMissing.WithCause(err)
 	}
 	defer func() { _ = r.Close() }()
-	thumbnails := &batchImageThumbnailCapture{service: i.Thumbnails, parent: ctx, remaining: 10 * time.Second}
 
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), batchImageDownloadScannerMaxLineBytes)
 
 	seen := make(map[string]int)
 	unknownCount := 0
 	var items []CreateBatchImageItemParams
 	result := &BatchImageIndexResult{}
-	writeFencer := i.UpscaleWriteFencer
-	if writeFencer == nil {
-		writeFencer, _ = i.Repo.(BatchImageUpscaleWriteFencer)
-	}
-	if batchImageJobRequiresUpscale(job) && writeFencer == nil {
-		return nil, ErrBatchImageUpscaleWriteFenceFailed
-	}
+
 	upscaleCtx := ctx
 	cancelUpscale := func() {}
 	if batchImageJobRequiresUpscale(job) && i.Upscaler != nil {
@@ -465,15 +530,17 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 		}
 		if parsed.Status == BatchImageParsedStatusSucceeded {
 			if _, upscaleRequired := RequestedImageUpscaleScale(job.ImageSize); upscaleRequired {
-				output, upscaleErr := upscaleBatchImageResultLine(
-					upscaleCtx, i.Config, i.Upscaler, i.UpscaleStore, writeFencer, job, []byte(line),
-					thumbnails,
-				)
+				output, upscaleErr := upscaleDelivery.process(ctx, upscaleCtx, job, []byte(line))
 				if upscaleErr != nil {
-					if errors.Is(upscaleErr, ErrBatchImageIndexStateConflict) || errors.Is(upscaleErr, ErrBatchImageUpscaleWriteFenceFailed) {
+					var deliveryFailure *batchImageDeliveryFailure
+					if ctx.Err() != nil || errors.As(upscaleErr, &deliveryFailure) || errors.Is(upscaleErr, ErrBatchImageIndexStateConflict) || errors.Is(upscaleErr, ErrBatchImageUpscaleWriteFenceFailed) {
 						return nil, upscaleErr
 					}
 					code, message := batchImageUpscaleFailure(upscaleErr)
+					if checkpoints != nil && safeBatchImageUpscaleRetry(upscaleErr) {
+						return nil, batchImageDeliveryError("upscale", code, upscaleErr)
+					}
+					i.Alerts.observeBatchImage(ctx, job.BatchID, "upscale", code)
 					item.ImageCount = 0
 					item.ErrorCode = batchImageOptionalStringPtr(code)
 					item.ErrorMessage = batchImageOptionalStringPtr(message)
@@ -504,6 +571,9 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 		result.TotalCount++
 	}
 	if err := scanner.Err(); err != nil {
+		if checkpoints != nil && !errors.Is(err, bufio.ErrTooLong) {
+			return nil, batchImageDeliveryError("result_read", "RESULT_STREAM_READ_FAILED", err)
+		}
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil, ErrBatchImageIndexParseFailed.WithCause(err)
 		}
@@ -555,13 +625,55 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 			)
 		}
 	}
+	return i.commitItems(ctx, job, items, result)
+}
+
+func (i *BatchImageResultIndexer) commitItems(ctx context.Context, job *BatchImageJob, items []CreateBatchImageItemParams, result *BatchImageIndexResult) (*BatchImageIndexResult, error) {
 	if err := i.Repo.ReplaceBatchImageItemsForJob(ctx, job.BatchID, items, BatchImageCounts{
 		SuccessCount: result.SuccessCount,
 		FailCount:    result.FailCount,
 	}); err != nil {
+		if _, ok := i.Repo.(BatchImageResultCheckpointStore); ok && !errors.Is(err, ErrBatchImageIndexStateConflict) {
+			return nil, batchImageDeliveryError("result_index", "RESULT_ITEM_SAVE_FAILED", err)
+		}
 		return nil, err
 	}
 	return result, nil
+}
+
+func (i *BatchImageResultIndexer) recoverFinalCheckpoints(ctx context.Context, job *BatchImageJob, expected map[string]struct{}, delivery batchImageUpscaleDelivery) (*BatchImageIndexResult, error) {
+	staged, err := delivery.checkpoints.ListBatchImageCheckpointIDs(ctx, job.BatchID, BatchImageCheckpointFinal)
+	if err != nil {
+		return nil, batchImageDeliveryError("final_checkpoint", "IMAGE_FINAL_CHECKPOINT_READ_FAILED", err)
+	}
+	ids := make([]string, 0, len(expected))
+	for id := range expected {
+		if _, ok := staged[id]; !ok {
+			return nil, nil
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	now := time.Now()
+	items := make([]CreateBatchImageItemParams, 0, len(ids))
+	for _, id := range ids {
+		checkpoint, readErr := delivery.checkpoints.GetBatchImageCheckpoint(ctx, job.BatchID, id, BatchImageCheckpointFinal)
+		if readErr != nil || checkpoint == nil {
+			return nil, batchImageDeliveryError("final_checkpoint", "IMAGE_FINAL_CHECKPOINT_READ_FAILED", readErr)
+		}
+		output, publishErr := delivery.publish(ctx, job, id, checkpoint)
+		clearBytes(checkpoint.Data)
+		if publishErr != nil {
+			return nil, publishErr
+		}
+		items = append(items, CreateBatchImageItemParams{
+			JobID: job.BatchID, CustomID: id, Status: BatchImageItemStatusSuccess,
+			ProviderSourceObject: batchImageOptionalStringPtr(batchImageUpscaleMarker),
+			MimeType:             batchImageOptionalStringPtr(output.mimeType), FileExtension: batchImageOptionalStringPtr(output.extension),
+			ImageCount: output.imageCount, PreviewSize: output.previewSize, IndexedAt: &now,
+		})
+	}
+	return i.commitItems(ctx, job, items, &BatchImageIndexResult{SuccessCount: len(items), TotalCount: len(items)})
 }
 
 // listExpectedCustomIDs 返回该 job 当前 item 表中的全部 custom_id 集合，

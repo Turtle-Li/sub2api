@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -75,6 +76,21 @@ func (s *pausedBatchImageUpscalePutStore) Put(ctx context.Context, key, contentT
 	case <-s.resumePut:
 	}
 	return s.batchImageUpscaleTestStore.Put(ctx, key, contentType, body, size)
+}
+
+type batchImageUpscaleTestRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f batchImageUpscaleTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type scriptedBatchImageUpscalePutStore struct {
+	*batchImageUpscaleTestStore
+	put func(context.Context, string, string, io.Reader, int64) error
+}
+
+func (s *scriptedBatchImageUpscalePutStore) Put(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
+	return s.put(ctx, key, contentType, body, size)
 }
 
 func TestBatchImageUpscaleObjectKey_DeterministicAndSafe(t *testing.T) {
@@ -223,7 +239,7 @@ func TestBatchImageUpscaleWriteFenceSerializesTerminalCleanupAndRejectsPostClean
 
 	firstResult := make(chan error, 1)
 	go func() {
-		_, callErr := upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, fencer, job, line)
+		_, callErr := (batchImageUpscaleDelivery{config: cfg, upscaler: upscaler, store: store, writeFencer: fencer}).process(context.Background(), context.Background(), job, line)
 		firstResult <- callErr
 	}()
 	select {
@@ -255,7 +271,7 @@ func TestBatchImageUpscaleWriteFenceSerializesTerminalCleanupAndRejectsPostClean
 	require.Empty(t, baseStore.objects)
 	require.Len(t, baseStore.puts, 1)
 
-	_, err = upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, fencer, job, line)
+	_, err = (batchImageUpscaleDelivery{config: cfg, upscaler: upscaler, store: store, writeFencer: fencer}).process(context.Background(), context.Background(), job, line)
 	require.ErrorIs(t, err, ErrBatchImageIndexStateConflict)
 	require.Len(t, baseStore.puts, 1, "a stale worker must be rejected before its post-cleanup Put")
 	require.Empty(t, baseStore.objects)
@@ -300,7 +316,7 @@ func TestUpscaleBatchImageResultLine_RejectsSurplusImagesBeforeSideEffects(t *te
 	job := &BatchImageJob{BatchID: "imgbatch_surplus", Model: "gemini-2.5-flash-image", ImageSize: "2K"}
 	line := batchImageUpscaleTestResultLine("two-images", source, source)
 
-	output, err := upscaleBatchImageResultLine(context.Background(), cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	output, err := (batchImageUpscaleDelivery{config: cfg, upscaler: upscaler, store: store, writeFencer: noopBatchImageUpscaleWriteFencer{}}).process(context.Background(), context.Background(), job, line)
 	require.Error(t, err)
 	var upscaleErr *ImageUpscaleError
 	require.ErrorAs(t, err, &upscaleErr)
@@ -322,7 +338,7 @@ func TestUpscaleBatchImageResultLine_ExpiredOperationDoesNotSubmit(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	output, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	output, err := (batchImageUpscaleDelivery{config: cfg, upscaler: upscaler, store: store, writeFencer: noopBatchImageUpscaleWriteFencer{}}).process(ctx, ctx, job, line)
 	upscaleErr := requireImageUpscaleError(t, err, "JOB_TIMEOUT")
 	require.ErrorIs(t, upscaleErr, context.Canceled)
 	require.Nil(t, output)
@@ -341,13 +357,114 @@ func TestUpscaleBatchImageResultLine_BoundsBlockingCOSPut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	_, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	_, err := (batchImageUpscaleDelivery{config: cfg, upscaler: upscaler, store: store, writeFencer: noopBatchImageUpscaleWriteFencer{}}).process(ctx, ctx, job, line)
 	require.Error(t, err)
 	var upscaleErr *ImageUpscaleError
 	require.ErrorAs(t, err, &upscaleErr)
 	require.Equal(t, "STORE_FAILED", upscaleErr.Code)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Empty(t, store.objects)
+}
+
+func TestBatchImageResultIndexer_RetriesTimedOutCOSPutWithoutReupscaling(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mini := &batchImageUpscaleTestAPI{jobs: make(map[string]batchImageUpscaleTestJob)}
+		cfg, upscaler := newBatchImageUpscaleTestService("http://mini.test", "batch-image/delivery")
+		upscaler.cfg.JobTimeoutSeconds = 300
+		upscaler.httpClient.Transport = batchImageUpscaleTestRoundTripper(func(req *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			mini.handle(recorder, req)
+			return recorder.Result(), nil
+		})
+		store := &scriptedBatchImageUpscalePutStore{batchImageUpscaleTestStore: newBatchImageUpscaleTestStore()}
+		var attempts int
+		var firstKey string
+		var firstImage []byte
+		store.put = func(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
+			attempts++
+			data, err := io.ReadAll(body)
+			require.NoError(t, err)
+			require.Len(t, data, int(size))
+			require.Equal(t, "image/png", contentType)
+			if attempts == 1 {
+				firstKey, firstImage = key, data
+				<-ctx.Done()
+				// The production COS adapter sanitizes transport errors before returning them.
+				return errors.New("put COS delivery object failed (category=deadline_exceeded)")
+			}
+			require.NoError(t, ctx.Err(), "retry must receive a fresh write deadline")
+			require.Equal(t, firstKey, key)
+			require.Equal(t, firstImage, data)
+			return store.batchImageUpscaleTestStore.Put(ctx, key, contentType, bytes.NewReader(data), size)
+		}
+		job := &BatchImageJob{
+			BatchID: "imgbatch_retry_put", Provider: BatchImageProviderOpenAI,
+			Model: "gpt-image-2.6-sunburst", ImageSize: "2K", Status: BatchImageJobStatusIndexing,
+		}
+		provider := &fakeProcessorProvider{result: string(batchImageUpscaleTestResultLine("image-1", batchImageUpscaleTestPNG(2, 3)))}
+		repo := newFakeBatchImageRepository()
+		repo.jobs[job.BatchID] = job
+		indexer := &BatchImageResultIndexer{Repo: repo, Config: cfg, Upscaler: upscaler, UpscaleStore: store}
+
+		result, err := indexer.Index(context.Background(), job, provider, &Account{})
+		require.NoError(t, err)
+		require.Equal(t, []int{2}, mini.SubmittedScales())
+		require.Equal(t, 2, attempts, "a timed-out COS write must not terminally fail the result")
+		require.Equal(t, &BatchImageIndexResult{SuccessCount: 1, TotalCount: 1}, result)
+		require.Equal(t, []string{firstKey}, store.puts)
+		require.Len(t, repo.items[job.BatchID], 1)
+		item := repo.items[job.BatchID][0]
+		require.Equal(t, BatchImageItemStatusSuccess, item.Status)
+		require.Equal(t, batchImageUpscaleMarker, batchImageDerefString(item.ProviderSourceObject))
+		require.Equal(t, &BatchImagePreviewSize{Width: 4, Height: 6}, item.PreviewSize)
+	})
+}
+
+func TestWriteBatchImageUpscaleObject_RetryBoundaries(t *testing.T) {
+	denied := errors.New("put COS delivery object failed (status=403,code=AccessDenied)")
+	for _, tt := range []struct {
+		name           string
+		putErr         error
+		parentTimeout  time.Duration
+		finishAfterPut bool
+		wantErr        error
+		wantPuts       int
+	}{
+		{name: "both writes time out", wantErr: context.DeadlineExceeded, wantPuts: 2},
+		{name: "explicit access denial", putErr: denied, wantErr: denied, wantPuts: 1},
+		{name: "operation deadline", parentTimeout: time.Minute, wantErr: context.DeadlineExceeded, wantPuts: 1},
+		{name: "cleanup between attempts", finishAfterPut: true, wantErr: ErrBatchImageIndexStateConflict, wantPuts: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				if tt.parentTimeout > 0 {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, tt.parentTimeout)
+					defer cancel()
+				}
+				fencer := &lockingBatchImageUpscaleWriteFencer{status: BatchImageJobStatusIndexing}
+				store := &scriptedBatchImageUpscalePutStore{batchImageUpscaleTestStore: newBatchImageUpscaleTestStore()}
+				var puts int
+				store.put = func(putCtx context.Context, _ string, _ string, _ io.Reader, _ int64) error {
+					puts++
+					if tt.putErr != nil {
+						return tt.putErr
+					}
+					<-putCtx.Done()
+					if tt.finishAfterPut && puts == 1 {
+						go fencer.terminalCleanup(func() error { return nil })
+					}
+					return putCtx.Err()
+				}
+				result := &ImageUpscaleResult{Data: []byte("test result"), MimeType: "image/png"}
+
+				err := writeBatchImageUpscaleObject(ctx, fencer, store, "imgbatch_retry_bounds", "output.png", result)
+				require.ErrorIs(t, err, tt.wantErr)
+				require.Equal(t, tt.wantPuts, puts)
+			})
+		})
+	}
 }
 
 func TestBatchImageResultIndexer_OverwritesDeterministicOrphanOnReindex(t *testing.T) {

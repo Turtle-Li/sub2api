@@ -274,6 +274,7 @@ func TestBatchImagePipelineProcessor_RequeuesTransientSettlementFailure(t *testi
 func TestBatchImagePipelineProcessor_FailsAndReleasesAfterSettlementRetryLimit(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_pipeline_retry_exhausted")
+	job.SuccessCount, job.FailCount = 0, job.ItemCount
 	job.RetryCount = batchImageSettlementMaxRetries - 1
 	repo.jobs[job.BatchID] = job
 	billing := &fakeBatchImageBillingRepo{captureErr: errors.New("temporary billing timeout")}
@@ -296,6 +297,7 @@ func TestBatchImagePipelineProcessor_FailsAndReleasesAfterSettlementRetryLimit(t
 func TestBatchImageSettlementRetryExhaustedReleaseIsIdempotentAfterTransitionFailure(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_retry_exhausted_transition_fail")
+	job.SuccessCount, job.FailCount = 0, job.ItemCount
 	job.RetryCount = batchImageSettlementMaxRetries
 	job.LastErrorCode = batchImageStringPtr("SETTLEMENT_BILLING_FAILED")
 	repo.jobs[job.BatchID] = job
@@ -318,7 +320,7 @@ func TestBatchImageSettlementRetryExhaustedReleaseIsIdempotentAfterTransitionFai
 	require.Len(t, billing.seen, 1)
 }
 
-func TestBatchImageSettlementService_CostExceedsHoldExhaustsAndReleases(t *testing.T) {
+func TestBatchImageSettlementService_CostExceedsHoldKeepsIndexedOutputForReview(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_over_hold_exhausted")
 	job.SuccessCount = 2
@@ -333,29 +335,20 @@ func TestBatchImageSettlementService_CostExceedsHoldExhaustsAndReleases(t *testi
 	billing := &fakeBatchImageBillingRepo{}
 	svc := &BatchImageSettlementService{Repo: repo, BillingRepo: billing, Pricing: &fakeBatchImagePricingResolver{unitPrice: 0.50}}
 
-	// 前 N-1 次：记录失败并返回错误（等待 worker 重试）。
-	for i := 0; i < batchImageSettlementMaxRetries-1; i++ {
+	for range batchImageSettlementMaxRetries + 1 {
 		_, err := svc.Settle(context.Background(), job.BatchID)
 		require.ErrorIs(t, err, ErrBatchImageSettlementCostExceedsHold)
 		require.Equal(t, BatchImageJobStatusSettling, repo.jobs[job.BatchID].Status)
 	}
-	// 达到上限：必须走耗尽出口释放冻结并转 failed，而不是无限 requeue。
-	_, err := svc.Settle(context.Background(), job.BatchID)
-	require.ErrorIs(t, err, ErrBatchImageSettlementBillingFailed)
-	require.Equal(t, BatchImageJobStatusFailed, repo.jobs[job.BatchID].Status)
 	require.Empty(t, billing.captures)
-	require.Len(t, billing.releases, 1)
-	require.Equal(t, BatchImageReleaseRequestID(job.BatchID), billing.releases[0].RequestID)
-	// 释放指纹必须与 processor/Cancel/recovery 一致地使用 RequestHash，
-	// 否则共享同一 request id 的后续释放会命中指纹冲突（毒消息）。
-	require.Equal(t, requestHash, billing.releases[0].RequestPayloadHash)
+	require.Empty(t, billing.releases)
 }
 
 func TestBatchImageSettlementService_InvalidCountsExhaustsAndReleases(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_bad_counts_exhausted")
-	job.SuccessCount = 2
-	job.FailCount = 2
+	job.SuccessCount = 0
+	job.FailCount = 4
 	job.ItemCount = 3
 	requestHash := "request-hash-bad-counts"
 	job.RequestHash = &requestHash
@@ -559,3 +552,38 @@ var (
 	_ BatchImagePricingResolver = (*fakeBatchImagePricingResolver)(nil)
 	_                           = strings.TrimSpace
 )
+
+func TestBatchImageSettlementRetainsIndexedWorkUntilBillingRecovers(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job := testSettlingBatchImageJob("imgbatch_retained_settlement")
+	job.RetryCount = batchImageSettlementMaxRetries
+	job.LastErrorCode = batchImageStringPtr("SETTLEMENT_BILLING_FAILED")
+	repo.jobs[job.BatchID] = job
+	billing := &fakeBatchImageBillingRepo{captureErr: errors.New("billing unavailable")}
+	processor := newRetainedSettlementProcessor(repo, billing)
+	for range 3 {
+		result, err := processor.Process(t.Context(), job.BatchID)
+		require.NoError(t, err)
+		require.False(t, result.Terminal)
+		require.Positive(t, result.RequeueAfter)
+		require.Equal(t, BatchImageJobStatusSettling, repo.jobs[job.BatchID].Status)
+		require.Empty(t, billing.releases)
+	}
+	billing.captureErr = nil
+	// Rebuilding the pipeline does not reset the attempt count or change the ledger identity.
+	processor = newRetainedSettlementProcessor(repo, billing)
+	result, err := processor.Process(t.Context(), job.BatchID)
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
+	require.Empty(t, billing.releases)
+	require.Len(t, billing.seen, 1)
+	require.Contains(t, billing.seen, BatchImageCaptureRequestID(job.BatchID))
+}
+
+func newRetainedSettlementProcessor(repo BatchImageRepository, billing *fakeBatchImageBillingRepo) *BatchImagePipelineProcessor {
+	return &BatchImagePipelineProcessor{
+		ProviderProcessor: &BatchImageProviderProcessor{Repo: repo},
+		SettlementService: &BatchImageSettlementService{Repo: repo, BillingRepo: billing, Pricing: &fakeBatchImagePricingResolver{unitPrice: 0.25}},
+	}
+}

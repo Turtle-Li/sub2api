@@ -32,11 +32,17 @@ const (
 	batchImagePumpTimestampHeader    = "X-Turtle-Pump-Timestamp"
 	batchImagePumpNonceHeader        = "X-Turtle-Pump-Nonce"
 	batchImagePumpSignatureHeader    = "X-Turtle-Pump-Signature"
+	batchImagePumpMaxAutomaticReruns = 2
 )
 
 type BatchImageResultDelivery interface {
 	Applies(job *BatchImageJob) bool
 	Process(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (*BatchImageIndexResult, time.Duration, error)
+}
+
+type BatchImagePumpAttemptStore interface {
+	BatchImagePumpAttempt(ctx context.Context, batchID string) (int, error)
+	AdvanceBatchImagePumpAttempt(ctx context.Context, batchID string, previous int) error
 }
 
 type BatchImageDeliveryService struct {
@@ -106,35 +112,58 @@ func (s *BatchImageDeliveryService) Process(ctx context.Context, job *BatchImage
 	if s.Repo == nil || s.Store == nil || provider == nil || account == nil {
 		return nil, 0, ErrBatchImageDeliveryNotConfigured
 	}
-	runID := batchImageDeliveryRunID(job.BatchID)
+	var attempt int
+	attempts, persisted := s.Repo.(BatchImagePumpAttemptStore)
+	if persisted {
+		var err error
+		attempt, err = attempts.BatchImagePumpAttempt(ctx, job.BatchID)
+		if err != nil {
+			return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_ATTEMPT_READ_FAILED", err)
+		}
+	}
+	runID := batchImageDeliveryRunID(job.BatchID, attempt)
 	status, statusCode, err := s.pumpRequest(ctx, http.MethodGet, "/v1/jobs/"+runID, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_CONTROL_FAILED", err)
 	}
 	if statusCode == http.StatusNotFound {
 		request, buildErr := s.buildPumpRequest(ctx, job, provider, account, runID)
 		if buildErr != nil {
-			return nil, 0, buildErr
+			return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_SOURCE_FAILED", buildErr)
 		}
 		body, marshalErr := json.Marshal(request)
 		if marshalErr != nil || len(body) > batchImagePumpRequestMaxBytes {
-			return nil, 0, ErrBatchImageDeliveryFailed
+			return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_REQUEST_INVALID", ErrBatchImageDeliveryFailed)
 		}
 		status, statusCode, err = s.pumpRequest(ctx, http.MethodPost, "/v1/jobs", body)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_CONTROL_FAILED", err)
 		}
 	}
-	if statusCode != http.StatusOK && statusCode != http.StatusAccepted {
-		return nil, 0, ErrBatchImageDeliveryFailed
+	if (statusCode != http.StatusOK && statusCode != http.StatusAccepted) || status.RunID != runID {
+		return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_RECEIPT_INVALID", ErrBatchImageDeliveryFailed)
 	}
 	switch strings.TrimSpace(status.Status) {
 	case "queued", "running", "waiting", "paused", "unknown":
 		return nil, s.pollDelay(), nil
 	case "complete":
-		return s.indexCompletedArchive(ctx, job, provider, account, runID, status.Output)
-	case "errored", "terminated":
-		return nil, 0, ErrBatchImageDeliveryFailed
+		result, delay, err := s.indexCompletedArchive(ctx, job, provider, account, runID, status.Output)
+		if err != nil {
+			return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_VERIFY_FAILED", err)
+		}
+		return result, delay, nil
+	case "errored":
+		// Only a verified terminal receipt can advance the transport run. A new
+		// run gets fresh URLs for the same Vertex result, never a new generation.
+		if persisted && attempt < batchImagePumpMaxAutomaticReruns {
+			if err := attempts.AdvanceBatchImagePumpAttempt(ctx, job.BatchID, attempt); err != nil {
+				return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_ATTEMPT_SAVE_FAILED", err)
+			}
+			return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_TRANSPORT_RETRY", ErrBatchImageDeliveryFailed)
+		}
+		return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_WORKFLOW_TERMINAL", ErrBatchImageDeliveryFailed)
+	case "terminated":
+		return nil, 0, batchImageDeliveryError("vertex_archive", "VERTEX_ARCHIVE_WORKFLOW_TERMINATED", ErrBatchImageDeliveryFailed)
 	default:
 		return nil, s.pollDelay(), nil
 	}
@@ -396,9 +425,14 @@ func signBatchImagePumpRequest(secret, method, path, timestamp, nonce string, bo
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func batchImageDeliveryRunID(batchID string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(batchID)))
-	return strings.TrimSpace(batchID) + "-" + hex.EncodeToString(sum[:8])
+func batchImageDeliveryRunID(batchID string, attempt int) string {
+	batchID = strings.TrimSpace(batchID)
+	digestInput := batchID
+	if attempt > 0 {
+		digestInput += ":archive:" + strconv.Itoa(attempt)
+	}
+	sum := sha256.Sum256([]byte(digestInput))
+	return batchID + "-" + hex.EncodeToString(sum[:8])
 }
 
 func BatchImageDeliveryArchiveObjectKey(cfg *config.Config, batchID string, fileIndex int) (string, error) {

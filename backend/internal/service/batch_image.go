@@ -64,6 +64,7 @@ var (
 	ErrBatchImageIndexParseFailed       = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_INDEX_PARSE_FAILED", "batch image provider output parse failed")
 	ErrBatchImageIndexNoResultLines     = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_INDEX_NO_RESULT_LINES", "batch image provider output has no result lines")
 	ErrBatchImageDuplicateCustomID      = infraerrors.New(http.StatusBadGateway, "DUPLICATE_CUSTOM_ID_IN_OUTPUT", "batch image provider output contains duplicate custom id")
+	ErrBatchImageDeliveryPending        = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_DELIVERY_PENDING", "batch image result is awaiting delivery")
 	ErrBatchImageIndexStateConflict     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_INDEX_STATE_CONFLICT", "batch image job is no longer in indexing state")
 
 	ErrBatchImageSettlementInvalidStatus    = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_SETTLEMENT_INVALID_STATUS", "batch image job is not ready for settlement")

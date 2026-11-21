@@ -256,6 +256,102 @@ func TestBatchImageDeliveryArchivesRawJSONLAndUsesVertexCompletionStats(t *testi
 	require.Equal(t, 1, fileCount)
 }
 
+func TestBatchImageDeliveryRetriesOnlyTransportAfterVerifiedErroredReceipt(t *testing.T) {
+	const batchID = "imgbatch_0123456789abcdef0123456789abcdef"
+	job := &BatchImageJob{BatchID: batchID, Provider: BatchImageProviderVertex, Status: BatchImageJobStatusIndexing, ItemCount: 1}
+	repo := &testBatchImagePumpAttemptRepo{fakeBatchImageRepository: newFakeBatchImageRepository()}
+	repo.items[batchID] = []CreateBatchImageItemParams{{JobID: batchID, CustomID: "image-1", Status: BatchImageItemStatusPending}}
+	store := &fakeBatchImageDeliveryStore{headSize: 128, headType: batchImageCOSArchiveContentType, headErr: errors.New("COS timeout")}
+	cfg := &config.Config{BatchImage: config.BatchImageConfig{DeliveryEnabled: true, DeliveryWorkerURL: "https://pump.example.test", DeliveryCOSPrefix: "sub2-batch-image/prod/"}}
+	success, failed := 1, 0
+	provider := &fakeBatchImageDeliveryProvider{
+		fakeProcessorProvider: &fakeProcessorProvider{status: &BatchProviderStatus{
+			InternalState: BatchProviderStateSucceeded, SuccessfulCount: &success, FailedCount: &failed,
+		}},
+		sources: []BatchImageSignedResultSource{{ID: "same-gcs-source", URL: "https://storage.googleapis.com/test/result.jsonl"}},
+	}
+	initialRun := batchImageDeliveryRunID(batchID, 0)
+	secondRun := batchImageDeliveryRunID(batchID, 1)
+	require.NotEqual(t, initialRun, secondRun)
+	var archive *batchImagePumpOutput
+	var submissions int
+	var transientControlError = true
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		response := func(status int, value any) (*http.Response, error) {
+			body, err := json.Marshal(value)
+			require.NoError(t, err)
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		}
+		if transientControlError {
+			transientControlError = false
+			return response(http.StatusServiceUnavailable, map[string]string{"code": "WORKFLOW_UNAVAILABLE"})
+		}
+		if req.Method == http.MethodPost {
+			submissions++
+			var request batchImagePumpRequest
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&request))
+			require.Equal(t, batchID, request.JobID)
+			require.Equal(t, secondRun, request.RunID)
+			require.Len(t, request.Files, 1)
+			require.Equal(t, "same-gcs-source", request.Files[0].SourceID)
+			archive = &batchImagePumpOutput{
+				Version: 2, RunID: secondRun, JobID: batchID, Status: "completed", SourceBytes: 128,
+				Files: []batchImagePumpArchivedFile{{Index: 0, SourceID: request.Files[0].SourceID, ObjectKey: request.Files[0].ObjectKey, Size: 128, ContentType: batchImageCOSArchiveContentType}},
+			}
+			return response(http.StatusAccepted, batchImagePumpStatus{RunID: secondRun, Status: "queued"})
+		}
+		if strings.HasSuffix(req.URL.Path, initialRun) {
+			return response(http.StatusOK, batchImagePumpStatus{RunID: initialRun, Status: "errored"})
+		}
+		require.True(t, strings.HasSuffix(req.URL.Path, secondRun))
+		if archive == nil {
+			return response(http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+		}
+		return response(http.StatusOK, batchImagePumpStatus{RunID: secondRun, Status: "complete", Output: archive})
+	})}
+	process := func() (*BatchImageIndexResult, error) {
+		// Rebuild the service between every poll. The run epoch belongs to the job.
+		delivery := NewBatchImageDeliveryService(repo, store, cfg)
+		delivery.HTTPClient = client
+		result, _, err := delivery.Process(t.Context(), job, provider, &Account{})
+		return result, err
+	}
+	_, err := process()
+	require.ErrorContains(t, err, "VERTEX_ARCHIVE_CONTROL_FAILED")
+	require.Zero(t, repo.attempt)
+	_, err = process()
+	require.ErrorContains(t, err, "VERTEX_ARCHIVE_TRANSPORT_RETRY")
+	require.Equal(t, 1, repo.attempt)
+	result, err := process()
+	require.NoError(t, err)
+	require.Nil(t, result, "the restarted transport is queued")
+	_, err = process()
+	require.ErrorContains(t, err, "VERTEX_ARCHIVE_VERIFY_FAILED")
+	require.Equal(t, 1, repo.attempt, "a HEAD timeout must not create another run")
+	store.headErr = nil
+	result, err = process()
+	require.NoError(t, err)
+	require.Equal(t, 1, result.SuccessCount)
+	require.Equal(t, 1, submissions)
+}
+
+type testBatchImagePumpAttemptRepo struct {
+	*fakeBatchImageRepository
+	attempt int
+}
+
+func (r *testBatchImagePumpAttemptRepo) BatchImagePumpAttempt(context.Context, string) (int, error) {
+	return r.attempt, nil
+}
+
+func (r *testBatchImagePumpAttemptRepo) AdvanceBatchImagePumpAttempt(_ context.Context, _ string, previous int) error {
+	if previous != r.attempt {
+		return ErrBatchImageIndexStateConflict
+	}
+	r.attempt++
+	return nil
+}
+
 func TestArchivedResultReturnsShortLivedFileCapabilitiesAndRequiresClientDecode(t *testing.T) {
 	const batchID = "imgbatch_0123456789abcdef0123456789abcdef"
 	apiKeyID := int64(2)

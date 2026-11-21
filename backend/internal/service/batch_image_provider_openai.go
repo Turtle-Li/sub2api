@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -99,6 +100,8 @@ type OpenAIImagesBatchProvider struct {
 	executor             OpenAIImageBatchItemExecutor
 	objectPrefix         string
 	itemExecutionTimeout time.Duration
+	checkpoints          BatchImageResultCheckpointStore
+	config               *config.Config
 }
 
 func NewOpenAIImagesBatchProvider(store BatchImageProviderObjectStore, executor OpenAIImageBatchItemExecutor, objectPrefix string) *OpenAIImagesBatchProvider {
@@ -232,7 +235,16 @@ func (p *OpenAIImagesBatchProvider) Get(ctx context.Context, job *BatchImageJob,
 }
 
 func (p *OpenAIImagesBatchProvider) Advance(ctx context.Context, job *BatchImageJob, account *Account) (*BatchProviderStatus, error) {
-	return p.status(ctx, job, account, true)
+	status, err := p.status(ctx, job, account, true)
+	var failure *batchImageDeliveryFailure
+	if p != nil && p.checkpoints != nil && job != nil && ctx.Err() == nil &&
+		errors.Is(err, ErrBatchImageProviderStorageUnavailable) && !errors.As(err, &failure) {
+		staged, checkErr := p.checkpoints.ListBatchImageCheckpointIDs(ctx, job.BatchID, BatchImageCheckpointSource)
+		if checkErr == nil && len(staged) > 0 {
+			return nil, batchImageDeliveryError("provider_archive", "PROVIDER_RESULT_ARCHIVE_RETRY", err)
+		}
+	}
+	return status, err
 }
 
 func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJob, account *Account, advance bool) (*BatchProviderStatus, error) {
@@ -246,6 +258,19 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 	if err != nil {
 		return nil, err
 	}
+	if batchImageUsesShanghai(job) {
+		return batchImageOpenAISucceededStatus(BatchImageShanghaiSourceRef), nil
+	}
+	shanghai := p.checkpoints != nil && batchImageProviderOutputRef(job) == "" && batchImageShanghaiCanary(p.config, job)
+	if shanghai {
+		ready, err := p.checkpoints.ListBatchImageCheckpointIDs(ctx, batchID, BatchImageCheckpointSource)
+		if err != nil {
+			return nil, batchImageDeliveryError("source_checkpoint", "PROVIDER_RESULT_CHECKPOINT_READ_FAILED", err)
+		}
+		if len(ready) == 1 {
+			return batchImageOpenAISucceededStatus(BatchImageShanghaiSourceRef), nil
+		}
+	}
 	outputKey := p.outputKey(batchID)
 	if exists, existsErr := p.store.Exists(ctx, outputKey); existsErr != nil {
 		return nil, ErrBatchImageProviderStorageUnavailable.WithCause(existsErr)
@@ -255,9 +280,18 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		}
 		return batchImageOpenAISucceededStatus(outputKey), nil
 	}
-	if cancelled, cancelErr := p.cancelRequested(ctx, batchID); cancelErr != nil {
-		return nil, cancelErr
-	} else if cancelled {
+	var staged map[string]struct{}
+	if p.checkpoints != nil {
+		staged, err = p.checkpoints.ListBatchImageCheckpointIDs(ctx, batchID, BatchImageCheckpointSource)
+		if err != nil {
+			return nil, batchImageDeliveryError("source_checkpoint", "PROVIDER_RESULT_CHECKPOINT_READ_FAILED", err)
+		}
+	}
+	cancelled, err := p.cancelRequested(ctx, batchID)
+	if err != nil {
+		return nil, err
+	}
+	if cancelled && len(staged) == 0 {
 		return &BatchProviderStatus{RawState: "CANCELLED", InternalState: BatchProviderStateCancelled, Done: true}, nil
 	}
 
@@ -266,10 +300,25 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		return nil, err
 	}
 	for itemIndex, item := range manifest.Input.Items {
+		if _, ok := staged[item.CustomID]; ok {
+			continue
+		}
 		resultKey := p.itemResultKey(batchID, itemIndex)
 		if exists, existsErr := p.store.Exists(ctx, resultKey); existsErr != nil {
 			return nil, ErrBatchImageProviderStorageUnavailable.WithCause(existsErr)
 		} else if exists {
+			continue
+		}
+
+		if cancelled {
+			if !advance {
+				return batchImageOpenAIRunningStatus(batchImageOpenAIContinueDelay), nil
+			}
+			// A cancel stops new paid work, not delivery of results already in hand.
+			line := batchImageOpenAIFailureLine(item.CustomID, "PROVIDER_BATCH_CANCELLED", "cancelled before a result was available")
+			if _, putErr := p.putResultLine(ctx, resultKey, line); putErr != nil {
+				return nil, putErr
+			}
 			continue
 		}
 
@@ -300,9 +349,21 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		if cancelled, cancelErr := p.cancelRequested(ctx, batchID); cancelErr != nil {
 			return nil, cancelErr
 		} else if cancelled {
+			if len(staged) > 0 {
+				return batchImageOpenAIRunningStatus(batchImageOpenAIContinueDelay), nil
+			}
 			return &BatchProviderStatus{RawState: "CANCELLED", InternalState: BatchProviderStateCancelled, Done: true}, nil
 		}
 
+		if p.checkpoints != nil && !previouslyStarted && len(staged) == 0 {
+			available, capacityErr := p.checkpoints.BatchImageCheckpointCapacityAvailable(ctx)
+			if capacityErr != nil {
+				return nil, batchImageDeliveryError("source_checkpoint", "PROVIDER_RESULT_CHECKPOINT_UNAVAILABLE", capacityErr)
+			}
+			if !available {
+				return nil, batchImageDeliveryError("source_checkpoint", "PROVIDER_RESULT_CHECKPOINT_BACKLOG", nil)
+			}
+		}
 		started := previouslyStarted
 		executionTimeout := p.itemExecutionTimeout
 		if executionTimeout <= 0 {
@@ -385,6 +446,21 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		}
 		itemTimedOut := errors.Is(executeErr, context.DeadlineExceeded) && ctx.Err() == nil
 		cancelItem()
+		if p.checkpoints != nil && executeErr == nil && result != nil {
+			line, lineErr := batchImageOpenAISuccessLine(item.CustomID, result)
+			if lineErr == nil && len(line) < batchImageOpenAIResultMaxBytes {
+				line = append(line, '\n')
+				_, stageErr := checkpointBatchImageResult(ctx, p.checkpoints, batchID, item.CustomID, BatchImageCheckpointSource,
+					BatchImageResultCheckpoint{Data: line, MimeType: "application/x-ndjson"})
+				if stageErr != nil {
+					return nil, batchImageDeliveryError("source_checkpoint", "PROVIDER_RESULT_CHECKPOINT_WRITE_FAILED", stageErr)
+				}
+				if shanghai {
+					return batchImageOpenAISucceededStatus(BatchImageShanghaiSourceRef), nil
+				}
+				return batchImageOpenAIRunningStatus(batchImageOpenAIContinueDelay), nil
+			}
+		}
 		// A parent cancellation means the worker lost its lease or is shutting
 		// down. Leave durable state for the new owner to reconcile.
 		if ctx.Err() != nil {
@@ -397,6 +473,9 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 			return batchImageOpenAIRunningStatus(batchImageOpenAIAccountBusyDelay), nil
 		}
 		if errors.Is(executeErr, errBatchImageOpenAICancelled) {
+			if len(staged) > 0 {
+				return batchImageOpenAIRunningStatus(batchImageOpenAIContinueDelay), nil
+			}
 			return &BatchProviderStatus{RawState: "CANCELLED", InternalState: BatchProviderStateCancelled, Done: true}, nil
 		}
 		if errors.Is(executeErr, errBatchImageOpenAIAttemptAlreadyClaimed) && !started {
@@ -426,7 +505,7 @@ func (p *OpenAIImagesBatchProvider) status(ctx context.Context, job *BatchImageJ
 		return batchImageOpenAIRunningStatus(batchImageOpenAIContinueDelay), nil
 	}
 
-	if err := p.combineResults(ctx, batchID, manifest.Input.Items, outputKey); err != nil {
+	if err := p.combineResults(ctx, batchID, manifest.Input.Items, outputKey, staged); err != nil {
 		return nil, err
 	}
 	if err := p.cleanupItemObjects(ctx, batchID, len(manifest.Input.Items)); err != nil {
@@ -473,7 +552,7 @@ func (p *OpenAIImagesBatchProvider) OpenResult(ctx context.Context, job *BatchIm
 		return nil, "", ErrBatchImageProviderStorageUnavailable
 	}
 	ref := batchImageProviderOutputRef(job)
-	if ref == "" {
+	if ref == "" || ref == BatchImageShanghaiSourceRef || ref == BatchImageShanghaiAckedRef {
 		return nil, "", ErrBatchImageProviderMissingResultRef
 	}
 	body, _, contentType, err := p.store.Open(ctx, ref)
@@ -573,53 +652,48 @@ func (p *OpenAIImagesBatchProvider) putResultLine(ctx context.Context, key strin
 	return false, ErrBatchImageProviderStorageUnavailable.WithCause(err)
 }
 
-func (p *OpenAIImagesBatchProvider) combineResults(ctx context.Context, batchID string, items []BatchImageInputItem, outputKey string) error {
-	keys := make([]string, 0, len(items))
-	totalSize := int64(0)
-	for itemIndex := range items {
-		key := p.itemResultKey(batchID, itemIndex)
-		body, size, _, err := p.store.Open(ctx, key)
-		if err != nil {
-			return ErrBatchImageProviderStorageUnavailable.WithCause(err)
-		}
-		_ = body.Close()
-		if size <= 0 || size > batchImageOpenAIResultMaxBytes {
-			return ErrBatchImageProviderInvalidInput
-		}
-		keys = append(keys, key)
-		totalSize += size
-	}
-
-	// S3-compatible PutObject implementations may hash or retry the payload and
-	// therefore require an io.ReadSeeker. Spool the bounded combined result to a
-	// private temporary file instead of passing a one-shot io.Pipe reader.
+func (p *OpenAIImagesBatchProvider) combineResults(ctx context.Context, batchID string, items []BatchImageInputItem, outputKey string, staged map[string]struct{}) error {
+	// COS requires a seekable body for signing and retries. This private spool
+	// is disposable: the committed DB lines and legacy item objects stay intact.
 	temporary, err := os.CreateTemp("", "sub2api-openai-batch-results-*")
 	if err != nil {
 		return ErrBatchImageProviderStorageUnavailable.WithCause(err)
 	}
-	temporaryPath := temporary.Name()
 	defer func() {
 		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
+		_ = os.Remove(temporary.Name())
 	}()
-	written := int64(0)
-	for _, key := range keys {
-		body, _, _, openErr := p.store.Open(ctx, key)
+	var totalSize int64
+	for itemIndex, item := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, ok := staged[item.CustomID]; ok {
+			checkpoint, readErr := p.checkpoints.GetBatchImageCheckpoint(ctx, batchID, item.CustomID, BatchImageCheckpointSource)
+			if readErr != nil || checkpoint == nil {
+				return batchImageDeliveryError("source_checkpoint", "PROVIDER_RESULT_CHECKPOINT_READ_FAILED", readErr)
+			}
+			written, writeErr := temporary.Write(checkpoint.Data)
+			if writeErr != nil {
+				return ErrBatchImageProviderStorageUnavailable.WithCause(writeErr)
+			}
+			totalSize += int64(written)
+			continue
+		}
+		body, size, _, openErr := p.store.Open(ctx, p.itemResultKey(batchID, itemIndex))
 		if openErr != nil {
 			return ErrBatchImageProviderStorageUnavailable.WithCause(openErr)
 		}
-		copied, copyErr := io.Copy(temporary, body)
+		if size <= 0 || size > batchImageOpenAIResultMaxBytes {
+			_ = body.Close()
+			return ErrBatchImageProviderInvalidInput
+		}
+		copied, copyErr := io.Copy(temporary, io.LimitReader(body, size+1))
 		closeErr := body.Close()
-		if copyErr != nil {
-			return ErrBatchImageProviderStorageUnavailable.WithCause(copyErr)
+		if copyErr != nil || closeErr != nil || copied != size {
+			return ErrBatchImageProviderStorageUnavailable.WithCause(errors.Join(copyErr, closeErr, io.ErrUnexpectedEOF))
 		}
-		if closeErr != nil {
-			return ErrBatchImageProviderStorageUnavailable.WithCause(closeErr)
-		}
-		written += copied
-	}
-	if written != totalSize {
-		return ErrBatchImageProviderStorageUnavailable.WithCause(errors.New("combined OpenAI image batch result size changed during copy"))
+		totalSize += copied
 	}
 	if _, err := temporary.Seek(0, io.SeekStart); err != nil {
 		return ErrBatchImageProviderStorageUnavailable.WithCause(err)

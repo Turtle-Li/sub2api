@@ -52,7 +52,7 @@ func TestImage26AliyunFailoverDelivery(t *testing.T) {
 			s.cfg.RetryMax = 1
 			s.cfg.MaxQueue = 0
 			s.cloudSlots = make(chan struct{}, 1)
-			s.cloudUpscale = func(ctx context.Context, b []byte, scale int) (*ImageUpscaleResult, error) {
+			s.cloudUpscale = func(ctx context.Context, b []byte, scale int, _ func() error) (*ImageUpscaleResult, error) {
 				cloud.Add(1)
 				require.NoError(t, ctx.Err())
 				require.Equal(t, 2, scale)
@@ -110,7 +110,7 @@ func TestImageUpscaleCloudQueueBoundAndCancellation(t *testing.T) {
 	defer s.release()
 	s.cloudSlots = make(chan struct{}, 1)
 	s.cloudSlots <- struct{}{}
-	s.cloudUpscale = func(context.Context, []byte, int) (*ImageUpscaleResult, error) {
+	s.cloudUpscale = func(context.Context, []byte, int, func() error) (*ImageUpscaleResult, error) {
 		t.Fatal("saturated fallback must not submit")
 		return nil, nil
 	}

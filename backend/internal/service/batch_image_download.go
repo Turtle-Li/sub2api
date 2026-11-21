@@ -26,7 +26,7 @@ const (
 	defaultBatchImageZipMaxBytes          = 512 * 1024 * 1024
 	defaultBatchImageDownloadDuration     = 10 * time.Minute
 	defaultBatchImageDownloadConcurrency  = 1
-	batchImageDownloadScannerMaxLineBytes = 16 * 1024 * 1024
+	batchImageDownloadScannerMaxLineBytes = batchImageOpenAIResultMaxBytes
 	batchImageUpscaleObjectReadTimeout    = 10 * time.Minute
 )
 

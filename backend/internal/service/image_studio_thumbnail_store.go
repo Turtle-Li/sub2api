@@ -88,6 +88,13 @@ func (s *BatchImageThumbnailService) Persist(ctx context.Context, job *BatchImag
 	if err != nil {
 		return err
 	}
+	return s.persistEncoded(ctx, job, customID, data)
+}
+
+func (s *BatchImageThumbnailService) persistEncoded(ctx context.Context, job *BatchImageJob, customID string, data []byte) error {
+	if len(data) == 0 || len(data) > studioThumbnailMaxStoredBytes {
+		return ErrBatchImageDownloadFailed
+	}
 	key, err := studioThumbnailObjectKey(s.Config, job.BatchID, customID)
 	if err != nil {
 		return err

@@ -1,0 +1,34 @@
+[Unit]
+Description=Sub2API Shanghai image delivery
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+ExecStart=/opt/sub2api-image-delivery/image-delivery
+EnvironmentFile=/etc/sub2api-image-delivery.conf
+DynamicUser=yes
+StateDirectory=sub2api-image-delivery
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=40s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+MemoryMax=256M
+CPUQuota=100%
+TasksMax=48
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

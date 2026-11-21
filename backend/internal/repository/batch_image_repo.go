@@ -21,8 +21,12 @@ type batchImageSQLExecutor interface {
 }
 
 type batchImageRepository struct {
-	db  *sql.DB
-	sql batchImageSQLExecutor
+	db     *sql.DB
+	sql    batchImageSQLExecutor
+	spool  *batchImageCheckpointSpool
+	alerts interface {
+		Notify(context.Context, service.OperationalAlert) error
+	}
 }
 
 type batchImageUpscaleWritePermit struct {
@@ -40,8 +44,8 @@ func (p *batchImageUpscaleWritePermit) Release() error {
 	return err
 }
 
-func NewBatchImageRepository(db *sql.DB) service.BatchImageRepository {
-	return &batchImageRepository{db: db, sql: db}
+func NewBatchImageRepository(db *sql.DB, alerts *service.OperationalAlerts) service.BatchImageRepository {
+	return &batchImageRepository{db: db, sql: db, spool: defaultBatchImageCheckpointSpool(), alerts: alerts}
 }
 
 func (r *batchImageRepository) BeginBatchImageUpscaleWrite(ctx context.Context, batchID string) (service.BatchImageUpscaleWritePermit, error) {
@@ -275,7 +279,9 @@ func (r *batchImageRepository) UpdateBatchImageJobProviderOutputRef(ctx context.
 	res, err := r.sql.ExecContext(ctx, `
 UPDATE batch_image_jobs
 SET provider_output_ref = $2, updated_at = $3
-WHERE batch_id = $1`, batchID, providerOutputRef, time.Now())
+WHERE batch_id = $1 AND COALESCE(provider_output_ref, '') NOT IN ($4, $5)
+  AND ($2 <> $4 OR (COALESCE(provider_output_ref, '') = '' AND status IN ('submitted', 'running')))
+`, batchID, providerOutputRef, time.Now(), service.BatchImageShanghaiSourceRef, service.BatchImageShanghaiAckedRef)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrBatchImageJobNotFound, nil)
 	}
@@ -453,6 +459,8 @@ SET status = 'completed',
     settled_at = CASE WHEN settled_at IS NULL THEN $4 ELSE settled_at END,
     finished_at = CASE WHEN finished_at IS NULL THEN $4 ELSE finished_at END,
     output_expires_at = CASE WHEN output_expires_at IS NULL THEN $5 ELSE output_expires_at END,
+    last_error_code = NULL,
+    last_error_message = NULL,
     updated_at = $4,
     version = version + 1
 WHERE batch_id = $1
@@ -478,6 +486,9 @@ WHERE batch_id = $1
 		}
 		return service.ErrBatchImageSettlementManifestConflict
 	}
+	if err := clearBatchImageDeliveryRecovery(ctx, sqlq, params.BatchID); err != nil {
+		return err
+	}
 	return appendBatchImageEventWithSQL(ctx, sqlq, params.BatchID, "settlement_completed", params.EventPayload)
 }
 
@@ -490,6 +501,7 @@ SET last_error_code = $2,
     retry_count = retry_count + 1,
     updated_at = $4
 WHERE batch_id = $1
+  AND status = 'settling'
 RETURNING retry_count`, batchID, code, message, time.Now()).Scan(&retryCount)
 	if err != nil {
 		return 0, translatePersistenceError(err, service.ErrBatchImageJobNotFound, nil)
@@ -514,6 +526,35 @@ func (r *batchImageRepository) transitionBatchImageJobStatusWithSQL(ctx context.
 	}
 	var upscaleCleanupNotBefore *time.Time
 	if toStatus == service.BatchImageJobStatusFailed || toStatus == service.BatchImageJobStatusCancelled {
+		if current == service.BatchImageJobStatusSettling {
+			var successful int
+			if err := sqlq.QueryRowContext(ctx, `SELECT success_count FROM batch_image_jobs WHERE batch_id = $1`, batchID).Scan(&successful); err != nil {
+				return err
+			}
+			if successful > 0 {
+				return service.ErrBatchImageDeliveryPending
+			}
+		} else {
+			var staged bool
+			if err := sqlq.QueryRowContext(ctx, `
+SELECT EXISTS (SELECT 1 FROM batch_image_result_checkpoints WHERE job_id = $1)`, batchID).Scan(&staged); err != nil {
+				return err
+			}
+			if staged {
+				return service.ErrBatchImageDeliveryPending
+			}
+			if r.spool != nil {
+				for _, stage := range []string{service.BatchImageCheckpointSource, service.BatchImageCheckpointFinal} {
+					files, err := r.spool.readyFiles(batchID, stage)
+					if err != nil {
+						return err
+					}
+					if len(files) > 0 {
+						return service.ErrBatchImageDeliveryPending
+					}
+				}
+			}
+		}
 		deadline := now.Add(service.BatchImageUpscaleCleanupGrace)
 		upscaleCleanupNotBefore = &deadline
 	}
@@ -542,6 +583,11 @@ SET
     output_deleted_at = CASE WHEN $2::varchar = 'output_deleted' AND output_deleted_at IS NULL THEN $3 ELSE output_deleted_at END
 WHERE batch_id = $1`, batchID, toStatus, now, opts.ErrorCode, opts.ErrorMessage, upscaleCleanupNotBefore); err != nil {
 		return err
+	}
+	if toStatus == service.BatchImageJobStatusFailed || toStatus == service.BatchImageJobStatusCancelled {
+		if err := clearBatchImageDeliveryRecovery(ctx, sqlq, batchID); err != nil {
+			return err
+		}
 	}
 	if toStatus == service.BatchImageJobStatusFailed {
 		if err := failPendingBatchImageItemsWithSQL(

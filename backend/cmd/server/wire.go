@@ -134,6 +134,7 @@ func provideCleanup(
 	invoiceNotifications *service.InvoiceNotificationService,
 	shopNotifications *service.ShopNotificationService,
 	feishuPaymentIncidents *service.FeishuPaymentIncidentService,
+	operationalAlerts *service.OperationalAlerts,
 	paidFallbackOps *service.PaidFallbackOpsService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
@@ -438,6 +439,10 @@ func provideCleanup(
 				if shopNotifications != nil {
 					shopNotifications.Stop()
 				}
+				return nil
+			}},
+			{"OperationalAlerts", func() error {
+				operationalAlerts.Stop()
 				return nil
 			}},
 			{"FeishuPaymentIncidentService", func() error {
