@@ -36,6 +36,26 @@ export function videoDurationMode(model: Pick<VideoModel, 'id' | 'provider' | 'd
   return 'selectable'
 }
 
+const canonicalVideoModelLabels: Readonly<Record<string, string>> = {
+  'muse-video': 'Muse',
+  'minimax/h3': 'H3',
+  'minimax/h3-fast': 'H3 Fast',
+}
+
+/** Single public display-name resolver across picker, trigger, gallery, detail, and canvas. */
+export function videoModelDisplayName(
+  model: Pick<VideoModel, 'id' | 'label'> | string,
+  knownLabels?: Readonly<Record<string, string>>,
+): string {
+  if (typeof model === 'string') {
+    const trimmed = model.trim()
+    return knownLabels?.[trimmed]?.trim() || canonicalVideoModelLabels[trimmed] || trimmed
+  }
+  const label = typeof model.label === 'string' ? model.label.trim() : ''
+  if (label) return label
+  return knownLabels?.[model.id]?.trim() || canonicalVideoModelLabels[model.id] || model.id
+}
+
 export interface VideoSubmission {
   readonly request_id: string
   readonly model: string

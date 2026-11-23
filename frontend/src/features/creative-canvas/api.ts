@@ -21,6 +21,8 @@ function canvasPath(id: string): string {
   return `${base}/${encodeURIComponent(id)}`
 }
 
+export const CANVAS_GRAPH_VERSION = 2
+
 function normalizeCanvas(raw: CreativeCanvas): CreativeCanvas {
   return {
     id: raw.id,
@@ -30,6 +32,7 @@ function normalizeCanvas(raw: CreativeCanvas): CreativeCanvas {
     document: sanitizeDocument(raw.document),
     assets: raw.assets && typeof raw.assets === 'object' ? raw.assets : {},
     attempts: Array.isArray(raw.attempts) ? raw.attempts : [],
+    ...(raw.inputs && typeof raw.inputs === 'object' ? { inputs: raw.inputs } : {}),
   }
 }
 
@@ -95,6 +98,7 @@ export const creativeCanvasApi = {
     const { data } = await apiClient.put<CreativeCanvas>(
       canvasPath(id),
       {
+        graph_version: CANVAS_GRAPH_VERSION,
         revision: payload.revision,
         title: cleanTitle,
         document: cleanDoc,
@@ -136,7 +140,7 @@ export const creativeCanvasApi = {
     const config = sessionConfig(signal)
     await apiClient.post(
       `${canvasPath(canvasId)}/nodes/${encodeURIComponent(nodeId)}/attempts`,
-      { request_id: requestId, revision },
+      { request_id: requestId, revision, graph_version: CANVAS_GRAPH_VERSION },
       {
         ...config,
         skipAuthReplay: true,

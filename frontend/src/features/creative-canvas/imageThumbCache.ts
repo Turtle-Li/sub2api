@@ -1,5 +1,6 @@
 import { shallowRef } from 'vue'
 import { studioAPI } from '@/features/image-studio/api'
+import { VIDEO_IMAGE_MAX_BYTES } from '@/features/video-studio/api'
 import type { CanvasImageLocator } from './types'
 
 export type ImageThumbStatus = 'idle' | 'loading' | 'ready' | 'non-first-index' | 'unavailable' | 'error'
@@ -16,12 +17,12 @@ export function imageLocatorKey(locator: CanvasImageLocator): string {
 }
 
 /**
- * Memory-only private thumbnail cache for Creative Canvas image nodes.
- * - Uses Image Studio's authenticated `/thumbnail` endpoint ONLY when `index === 0`.
- * - Never calls `/thumbnail` for `index > 0` (avoids showing the 1st image by mistake).
- * - Never passes thumbnails to Video Studio as originals.
+ * Memory-only private preview cache for Creative Canvas image nodes.
+ * - Uses Image Studio's authenticated `/thumbnail` endpoint when `index === 0`.
+ * - For `index > 0`, reads the exact authorized original (`image_index = locator.index`) into a revocable memory `blob:` URL
+ *   so multi-image slots display their true image without ever misusing index 0's thumbnail or persisting URLs/bytes in CanvasDocument.
  */
-export function createCanvasImageThumbCache() {
+export function createCanvasImageThumbCache(userId?: number) {
   const version = shallowRef(0)
   const entries = new Map<string, Entry>()
   const lifetime = new AbortController()
@@ -33,7 +34,6 @@ export function createCanvasImageThumbCache() {
   function get(locator: CanvasImageLocator | undefined): { status: ImageThumbStatus; url: string } {
     version.value
     if (!locator) return { status: 'unavailable', url: '' }
-    if (locator.index > 0) return { status: 'non-first-index', url: '' }
     const entry = entries.get(imageLocatorKey(locator))
     if (!entry) return { status: 'idle', url: '' }
     return { status: entry.status, url: entry.url }
@@ -50,32 +50,34 @@ export function createCanvasImageThumbCache() {
       bump()
       return
     }
-    if (locator.index > 0) {
-      // Backend `/thumbnail` serves index 0 only; never misuse it for index > 0.
-      if (!entries.has(key)) {
-        entries.set(key, { key, status: 'non-first-index', url: '' })
-        bump()
-      }
-      return
-    }
     const existing = entries.get(key)
     if (existing && (existing.status === 'ready' || existing.status === 'loading')) return
 
     const controller = new AbortController()
+    const onLifetimeAbort = () => controller.abort(lifetime.signal.reason)
+    lifetime.signal.addEventListener('abort', onLifetimeAbort, { once: true })
     const entry: Entry = { key, status: 'loading', url: '', controller }
     entries.set(key, entry)
     bump()
 
     try {
-      const api = studioAPI(locator.route, lifetime.signal)
-      const blob = await api.thumbnail(
-        {
-          id: `${locator.batchId}/${locator.itemId}`,
-          job: { id: locator.batchId } as Parameters<typeof api.thumbnail>[0]['job'],
-          item: { custom_id: locator.itemId } as Parameters<typeof api.thumbnail>[0]['item'],
-        },
-        controller.signal,
-      )
+      const blob = locator.index === 0
+        ? await studioAPI(locator.route, lifetime.signal).thumbnail(
+            {
+              id: `${locator.batchId}/${locator.itemId}`,
+              job: { id: locator.batchId } as Parameters<ReturnType<typeof studioAPI>['thumbnail']>[0]['job'],
+              item: { custom_id: locator.itemId } as Parameters<ReturnType<typeof studioAPI>['thumbnail']>[0]['item'],
+            },
+            controller.signal,
+          )
+        : await studioAPI(locator.route, controller.signal).image(
+            {
+              job: { id: locator.batchId },
+              item: { custom_id: locator.itemId },
+            },
+            locator.index,
+            typeof userId === 'number' && userId > 0 ? { maxBytes: VIDEO_IMAGE_MAX_BYTES, userId } : undefined,
+          )
       if (lifetime.signal.aborted || controller.signal.aborted) return
       if (!blob || !blob.size) {
         entry.status = 'unavailable'
@@ -94,6 +96,7 @@ export function createCanvasImageThumbCache() {
       entry.status = status === 401 || status === 403 || status === 404 || status === 410 ? 'unavailable' : 'error'
       bump()
     } finally {
+      lifetime.signal.removeEventListener('abort', onLifetimeAbort)
       entry.controller = undefined
     }
   }

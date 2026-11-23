@@ -1,20 +1,41 @@
 <template>
   <dialog v-if="job" ref="dialog" class="vs-player vs-delivery-dialog" :class="{ 'vs-player-mobile': mobile, 'vs-details-open': action === 'details' }"
+    :data-layout="layoutMode" :style="deliveryStyle"
     aria-labelledby="vs-player-title" @close="closed" @keydown.esc.capture="escapeInline" @keydown="onDialogKeydown">
-    <!-- Left / Top: Cinema Stage -->
-    <div class="vs-delivery-stage">
-      <div class="vs-stage-overlay-top">
-        <span v-if="stageMetaLabel" class="vs-stage-meta-pill" :class="{ 'is-measured': Boolean(currentDurationLabel || currentDimensions) }">{{ stageMetaLabel }}</span>
-        <span v-else aria-hidden="true"></span>
-        <span class="vs-stage-status-wrap">
-          <span class="vs-status" :data-state="job.status"><i aria-hidden="true"></i>{{ states[job.status] }}</span>
-        </span>
+    <header class="vs-player-head">
+      <div class="vs-inspector-title-group">
+        <h2 id="vs-player-title" tabindex="-1">{{ displayModelName }}</h2>
+        <span class="vs-status" :data-state="job.status"><i aria-hidden="true"></i>{{ states[job.status] }}</span>
       </div>
+      <div class="vs-inspector-nav">
+        <template v-if="navigableJobs.length > 1">
+          <button type="button" class="vs-icon" aria-label="上一条作品" title="上一条作品 (←)" :disabled="!hasPrev" @click="step(-1)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" /></svg>
+          </button>
+          <button type="button" class="vs-icon" aria-label="下一条作品" title="下一条作品 (→)" :disabled="!hasNext" @click="step(1)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+          </button>
+        </template>
+        <button ref="closeButton" type="button" class="vs-icon" :aria-label="action === 'details' ? '关闭详情' : '收起审片'" @click="close">
+          <Icon name="x" size="sm" aria-hidden="true" />
+        </button>
+      </div>
+    </header>
 
-      <div class="vs-stage-canvas">
-        <!-- Loaded playable video -->
-        <video v-if="url && action === 'play' && previewable && !decodeError" ref="player" :src="url" controls playsinline preload="metadata"
-          aria-label="生成的视频，使用播放控件开始观看" @loadedmetadata="onLoadedMetadata" @error="decodeError = true"></video>
+    <div class="vs-delivery-body">
+      <!-- Media Stage -->
+      <div class="vs-delivery-stage">
+        <div v-if="stageMetaLabel" class="vs-stage-overlay-top">
+          <span class="vs-stage-meta-pill" :class="{ 'is-measured': Boolean(currentDurationLabel || currentDimensions) }">{{ stageMetaLabel }}</span>
+        </div>
+
+        <div class="vs-stage-canvas">
+          <!-- Loaded playable video -->
+          <template v-if="url && action === 'play' && previewable && !decodeError">
+            <video ref="player" :src="url" controls playsinline preload="metadata"
+              aria-label="生成的视频，使用播放控件开始观看" @loadedmetadata="onLoadedMetadata" @play="autoplayBlocked = false" @error="decodeError = true"></video>
+            <p v-if="autoplayBlocked" class="vs-autoplay-hint" role="status">浏览器已限制自动播放，请点击播放器开始按钮观看。</p>
+          </template>
 
         <!-- Loading in progress with explicit cancel -->
         <div v-else-if="loading" class="vs-cinema-state" role="status" aria-live="polite">
@@ -28,7 +49,7 @@
 
         <!-- Details preview (poster or honest film-slate placeholder, never auto-loads video) -->
         <template v-else-if="action === 'details'">
-          <img v-if="posterUrl" class="vs-details-poster" :src="posterUrl" alt="已生成视频的真实封面帧" @error="posterFailed">
+          <img v-if="posterUrl" class="vs-details-poster" :src="posterUrl" alt="已生成视频的真实封面帧" @load="onPosterLoad" @error="posterFailed">
           <div v-else class="vs-cinema-state vs-details-empty" :class="emptyToneClass">
             <Icon :name="emptyIcon" size="lg" aria-hidden="true" />
             <strong>{{ emptyTitle }}</strong>
@@ -63,50 +84,25 @@
       </div>
     </div>
 
-    <!-- Right / Bottom: Production Inspector -->
-    <div class="vs-delivery-inspector">
-      <div class="vs-player-head">
-        <div class="vs-inspector-title-group">
-          <h2 id="vs-player-title" tabindex="-1">{{ displayModelName }}</h2>
-          <span v-if="providerBadge" class="vs-inspector-provider">{{ providerBadge }}</span>
-        </div>
-        <div class="vs-inspector-nav">
-          <template v-if="navigableJobs.length > 1">
-            <button type="button" class="vs-icon" aria-label="上一条作品" title="上一条作品 (←)" :disabled="!hasPrev" @click="step(-1)">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" /></svg>
-            </button>
-            <button type="button" class="vs-icon" aria-label="下一条作品" title="下一条作品 (→)" :disabled="!hasNext" @click="step(1)">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
-            </button>
-          </template>
-          <button ref="closeButton" type="button" class="vs-icon" :aria-label="action === 'details' ? '关闭详情' : '收起审片'" @click="close">
-            <Icon name="x" size="sm" aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-
-      <div class="vs-inspector-scroll">
-        <!-- Action Strip -->
-        <div class="vs-delivery-actions">
-          <button type="button" class="vs-primary" :disabled="job.status !== 'completed' || loading"
-            :title="job.status === 'completed' ? '按需下载原视频文件' : '仅已完成且未过期的作品可下载'"
-            @click="triggerDownload">
-            <Icon name="download" size="xs" aria-hidden="true" />下载成片
-          </button>
-          <button type="button" class="vs-button" @click="reuseCurrent">复用参数</button>
-          <button type="button" class="vs-button" @click="copyId">{{ copiedId ? '已复制' : '复制 ID' }}</button>
-          <button v-if="canvasEnabled && job.status === 'completed'" type="button" class="vs-button vs-delivery-canvas-btn" @click="addToCanvas">
-            <Icon name="grid" size="xs" aria-hidden="true" />加入画布
-          </button>
+      <!-- Right / Bottom: Production Inspector -->
+      <div class="vs-delivery-inspector">
+        <div class="vs-inspector-scroll">
+        <div v-if="canvasContext" class="vs-canvas-shot-card" role="note" aria-label="画布分镜上下文">
+          <div class="vs-section-head">
+            <strong>{{ canvasContext.nodeTitle || '画布分镜成片' }}</strong>
+            <span v-if="canvasContext.takeLabel" class="vs-shot-take-pill">{{ canvasContext.takeLabel }}</span>
+          </div>
+          <p v-if="canvasContext.provenance">{{ canvasContext.provenance }}</p>
         </div>
 
         <!-- Honest Prompt Notice (never fabricated) -->
         <section class="vs-prompt-card" aria-label="画面与运镜描述">
           <div class="vs-section-head">
             <h3>画面与运镜描述</h3>
-            <span>历史不留存原文</span>
+            <span>{{ canvasContext?.prompt ? '当前画布草稿记录' : '历史不留存原文' }}</span>
           </div>
-          <p class="vs-prompt-box">历史记录不保存文字描述与补充文本，复用参数后请重新填写提示词并确认当前报价。</p>
+          <p v-if="canvasContext?.prompt" class="vs-prompt-box is-recorded">{{ canvasContext.prompt }}</p>
+          <p v-else class="vs-prompt-box">历史记录不保存文字描述与补充文本，复用参数后请重新填写提示词并确认当前报价。</p>
         </section>
 
         <!-- Specifications & Recorded Parameters -->
@@ -172,34 +168,110 @@
           <dl class="vs-lifecycle-list">
             <div><dt>创建时间</dt><dd>{{ localDate(job.created_at) }}</dd></div>
             <div><dt>保留有效期</dt><dd>{{ job.expires_at ? localDate(job.expires_at) : '未提供' }}</dd></div>
-            <div class="vs-job-id"><dt>任务 ID</dt><dd><code>{{ job.id }}</code></dd></div>
+            <div class="vs-job-id">
+              <dt>任务 ID</dt>
+              <dd class="vs-job-id-row">
+                <code>{{ job.id }}</code>
+                <button
+                  type="button"
+                  class="vs-inline-copy-btn"
+                  :class="{ 'is-copied': copiedId }"
+                  :aria-label="copiedId ? '已复制任务 ID' : '复制任务 ID'"
+                  @click="copyId"
+                >
+                  <Icon :name="copiedId ? 'check' : 'copy'" size="xs" aria-hidden="true" />
+                  <span>{{ copiedId ? '已复制' : '复制 ID' }}</span>
+                </button>
+              </dd>
+            </div>
           </dl>
         </div>
       </div>
-
-      <!-- Loaded blob download / release bar (only shown when blob URL is active) -->
-      <div v-if="url" class="vs-player-foot vs-download-foot">
-        <button v-if="action === 'play'" type="button" class="vs-text" @click="backToDetails">释放视频</button>
-        <span v-else aria-hidden="true"></span>
-        <a ref="downloadLink" class="vs-button" :href="url" :download="`video-${job.id}.${format}`">
-          <Icon name="download" size="sm" aria-hidden="true" />下载原文件
-        </a>
-      </div>
-
-      <!-- Desktop keyboard shortcut hint (hidden on mobile via CSS) -->
-      <div class="vs-shortcut-bar" aria-hidden="true">
-        <span v-if="navigableJobs.length > 1"><kbd>←</kbd> <kbd>→</kbd> 切换视频</span>
-        <span v-else>已加载单条作品</span>
-        <span><kbd>Space</kbd> 播/停 · <kbd>M</kbd> 静音 · <kbd>Esc</kbd> 关闭</span>
-      </div>
     </div>
+    </div>
+
+    <footer class="vs-delivery-footer vs-delivery-actions">
+      <div class="vs-delivery-footer-secondary">
+        <div v-if="useMoreMenu" ref="moreMenuWrap" class="vs-more-wrap">
+          <button
+            ref="moreButton"
+            type="button"
+            class="vs-button vs-more-trigger"
+            aria-haspopup="menu"
+            :aria-expanded="moreOpen"
+            aria-controls="vs-delivery-more-menu"
+            @click="toggleMoreMenu"
+            @keydown="onMoreTriggerKeydown"
+          >
+            <Icon name="more" size="xs" aria-hidden="true" />
+            <span>更多</span>
+          </button>
+          <div
+            v-if="moreOpen"
+            id="vs-delivery-more-menu"
+            ref="moreMenu"
+            class="vs-more-menu"
+            role="menu"
+            aria-label="更多操作"
+            @keydown="onMoreMenuKeydown"
+          >
+            <button v-if="allowReuse" type="button" class="vs-more-item" role="menuitem" @click="runMoreAction(reuseCurrent)">
+              复用参数
+            </button>
+            <button
+              v-if="canAddToCanvas"
+              type="button"
+              class="vs-more-item vs-delivery-canvas-btn"
+              role="menuitem"
+              @click="runMoreAction(addToCanvas)"
+            >
+              <Icon name="grid" size="xs" aria-hidden="true" />
+              <span>加入画布</span>
+            </button>
+            <button v-if="canReleaseVideo" type="button" class="vs-more-item" role="menuitem" @click="runMoreAction(backToDetails)">
+              释放视频
+            </button>
+          </div>
+        </div>
+        <template v-else>
+          <button v-if="allowReuse" type="button" class="vs-button" @click="reuseCurrent">复用参数</button>
+          <button v-if="canAddToCanvas" type="button" class="vs-button vs-delivery-canvas-btn" @click="addToCanvas">
+            <Icon name="grid" size="xs" aria-hidden="true" />加入画布
+          </button>
+          <button v-if="canReleaseVideo" type="button" class="vs-text vs-delivery-release-btn" @click="backToDetails">释放视频</button>
+        </template>
+      </div>
+
+      <div class="vs-delivery-footer-primary">
+        <button
+          type="button"
+          class="vs-primary vs-delivery-download-btn"
+          :disabled="job.status !== 'completed' || loading"
+          :title="job.status === 'completed' ? '按需下载原视频文件' : '仅已完成且未过期的作品可下载'"
+          @click="triggerDownload"
+        >
+          <Icon name="download" size="xs" aria-hidden="true" />下载成片
+        </button>
+      </div>
+
+      <a
+        v-if="url"
+        ref="downloadLink"
+        class="vs-download-anchor"
+        :href="url"
+        :download="`video-${job.id}.${format}`"
+        tabindex="-1"
+        aria-hidden="true"
+        hidden
+      ></a>
+    </footer>
   </dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import Icon from '@/components/icons/Icon.vue'
-import { videoStudio, VIDEO_CONTENT_MAX_BYTES, type VideoJob, type VideoReferenceKind } from '@/features/video-studio/api'
+import { videoModelDisplayName, videoStudio, VIDEO_CONTENT_MAX_BYTES, type VideoJob, type VideoReferenceKind } from '@/features/video-studio/api'
 import { createWorkspaceDurationStore, durationSecondsToMs, formatVideoDuration, measuredDurationMs, type WorkspaceDurationStore } from './mediaDuration'
 import type { VideoPosterCache } from './posterCache'
 import './video-delivery.css'
@@ -210,15 +282,28 @@ interface MediaDimensions {
   readonly height: number
 }
 
+export interface DeliveryCanvasContext {
+  readonly nodeTitle?: string
+  readonly takeLabel?: string
+  readonly prompt?: string
+  readonly provenance?: string
+}
+
 const props = withDefaults(defineProps<{
   mobile: boolean
   cache: VideoPosterCache
   durations?: WorkspaceDurationStore
   jobs?: readonly VideoJob[]
+  modelLabels?: Readonly<Record<string, string>>
   canvasEnabled?: boolean
+  allowReuse?: boolean
+  canvasContext?: DeliveryCanvasContext | null
 }>(), {
   jobs: () => [],
+  modelLabels: () => ({}),
   canvasEnabled: false,
+  allowReuse: true,
+  canvasContext: null,
 })
 
 const emit = defineEmits<{
@@ -237,11 +322,6 @@ const states: Record<VideoJob['status'], string> = {
   uncertain: '状态待核实',
   expired: '已过期',
 }
-const modelLabels: Record<string, string> = {
-  'minimax/h3': 'H3',
-  'minimax/h3-fast': 'H3 Fast',
-  'muse-video': 'Muse',
-}
 const referenceKindLabels: Record<VideoReferenceKind, string> = {
   image: '图片',
   video: '视频',
@@ -254,6 +334,9 @@ const dialog = ref<HTMLDialogElement>()
 const closeButton = ref<HTMLButtonElement>()
 const downloadLink = ref<HTMLAnchorElement>()
 const player = ref<HTMLVideoElement>()
+const moreMenuWrap = ref<HTMLElement>()
+const moreButton = ref<HTMLButtonElement>()
+const moreMenu = ref<HTMLElement>()
 const job = shallowRef<VideoJob | null>(null)
 const action = ref<'details' | 'play' | 'download'>('details')
 const url = ref('')
@@ -263,9 +346,22 @@ const previewable = ref(false)
 const decodeError = ref(false)
 const error = ref('')
 const copiedId = ref(false)
+const moreOpen = ref(false)
+const autoplayBlocked = ref(false)
+const posterDimensions = shallowRef<MediaDimensions | null>(null)
 const mediaDimensions = shallowRef<MediaDimensions | null>(null)
 const fallbackDurations = createWorkspaceDurationStore()
 const durationStore = computed(() => props.durations ?? fallbackDurations)
+
+const readNarrowViewport = () =>
+  typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth > 0 && window.innerWidth <= 560
+const isNarrowViewport = ref(readNarrowViewport())
+function updateNarrowViewport() {
+  isNarrowViewport.value = readNarrowViewport()
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', updateNarrowViewport, { passive: true })
+}
 
 let controller: AbortController | undefined
 let opener: HTMLElement | undefined
@@ -273,14 +369,13 @@ let copyTimer: ReturnType<typeof setTimeout> | undefined
 let releasePoster: () => void = () => {}
 
 const posterUrl = computed(() => job.value ? props.cache.url(job.value.id) : '')
-const displayModelName = computed(() => job.value ? (modelLabels[job.value.model] || job.value.model) : '')
-const providerBadge = computed(() => {
-  const model = job.value?.model
-  if (!model) return ''
-  if (model === 'muse-video') return 'Muse 渠道'
-  if (model === 'minimax/h3' || model === 'minimax/h3-fast') return 'GoodPut 渠道'
-  return ''
-})
+const displayModelName = computed(() => job.value ? videoModelDisplayName(job.value.model, props.modelLabels) : '')
+const canAddToCanvas = computed(() => Boolean(props.canvasEnabled && job.value?.status === 'completed'))
+const canReleaseVideo = computed(() => Boolean(url.value && action.value === 'play'))
+const secondaryActionCount = computed(() =>
+  (props.allowReuse ? 1 : 0) + (canAddToCanvas.value ? 1 : 0) + (canReleaseVideo.value ? 1 : 0),
+)
+const useMoreMenu = computed(() => (props.mobile || isNarrowViewport.value) && secondaryActionCount.value > 1)
 
 const currentDurationMs = computed(() => job.value ? measuredDurationMs(job.value, durationStore.value.get(job.value.id)) : null)
 const currentDurationLabel = computed(() => formatVideoDuration(currentDurationMs.value))
@@ -290,6 +385,28 @@ const currentDimensions = computed(() => {
   if (!job.value || !mediaDimensions.value || mediaDimensions.value.jobId !== job.value.id) return null
   return mediaDimensions.value
 })
+const currentPosterDimensions = computed(() => {
+  if (!job.value || !posterDimensions.value || posterDimensions.value.jobId !== job.value.id) return null
+  return posterDimensions.value
+})
+const measuredFrame = computed(() => currentDimensions.value ?? currentPosterDimensions.value)
+const measuredAspect = computed(() => {
+  const frame = measuredFrame.value
+  if (!frame || frame.width <= 0 || frame.height <= 0) return null
+  const ratio = frame.width / frame.height
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : null
+})
+const layoutMode = computed<'landscape' | 'portrait' | 'record'>(() => {
+  if (!job.value || job.value.status !== 'completed') return 'record'
+  if (error.value || decodeError.value) return 'record'
+  if (action.value === 'play' && url.value && !previewable.value) return 'record'
+  const aspect = measuredAspect.value
+  if (aspect === null) return 'record'
+  return aspect < 1 ? 'portrait' : 'landscape'
+})
+const deliveryStyle = computed(() => ({
+  '--delivery-aspect': String(measuredAspect.value ?? 16 / 9),
+}))
 
 const stageMetaLabel = computed(() => {
   const current = job.value
@@ -410,6 +527,12 @@ watch(posterUrl, current => {
   const releasePrevious = releasePoster
   releasePoster = current && job.value ? props.cache.retain(job.value.id) : () => {}
   releasePrevious()
+  if (current && job.value) {
+    const img = dialog.value?.querySelector<HTMLImageElement>('.vs-details-poster')
+    if (img?.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      posterDimensions.value = { jobId: job.value.id, width: img.naturalWidth, height: img.naturalHeight }
+    }
+  }
 }, { flush: 'post', immediate: true })
 
 // Keep currently displayed job synchronized if gallery refreshes metadata (e.g. marked expired).
@@ -419,7 +542,17 @@ watch(() => props.jobs, list => {
   if (updated && updated !== job.value) job.value = updated
 })
 
+function onPosterLoad(event: Event) {
+  const target = event.currentTarget as HTMLImageElement | null
+  const current = job.value
+  if (!target || !current) return
+  if (target.naturalWidth > 0 && target.naturalHeight > 0) {
+    posterDimensions.value = { jobId: current.id, width: target.naturalWidth, height: target.naturalHeight }
+  }
+}
+
 function posterFailed() {
+  posterDimensions.value = null
   if (job.value && posterUrl.value) props.cache.invalidate(job.value.id)
 }
 
@@ -461,6 +594,7 @@ function discard() {
   loading.value = false
   error.value = ''
   decodeError.value = false
+  autoplayBlocked.value = false
   format.value = ''
   previewable.value = false
   mediaDimensions.value = null
@@ -476,11 +610,92 @@ function backToDetails() {
   action.value = 'details'
 }
 
+function onDocumentOutside(event: Event) {
+  if (!moreOpen.value) return
+  const target = event.target as Node | null
+  if (target && moreMenuWrap.value?.contains(target)) return
+  closeMoreMenu(false)
+}
+
+watch(useMoreMenu, enabled => {
+  if (!enabled && moreOpen.value) closeMoreMenu(false)
+})
+
+watch(moreOpen, openNow => {
+  if (typeof document === 'undefined') return
+  if (openNow) {
+    document.addEventListener('pointerdown', onDocumentOutside, true)
+    document.addEventListener('click', onDocumentOutside, true)
+  } else {
+    document.removeEventListener('pointerdown', onDocumentOutside, true)
+    document.removeEventListener('click', onDocumentOutside, true)
+  }
+})
+
+async function openMoreMenu(focusTarget: 'first' | 'last' = 'first') {
+  moreOpen.value = true
+  await nextTick()
+  const items = moreMenu.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+  if (!items?.length) return
+  ;(focusTarget === 'last' ? items[items.length - 1] : items[0]).focus()
+}
+
+function closeMoreMenu(restoreFocus = false) {
+  if (!moreOpen.value) return
+  moreOpen.value = false
+  if (restoreFocus) void nextTick(() => moreButton.value?.focus())
+}
+
+function toggleMoreMenu() {
+  if (moreOpen.value) closeMoreMenu(false)
+  else void openMoreMenu('first')
+}
+
+function runMoreAction(handler: () => void) {
+  closeMoreMenu(false)
+  handler()
+}
+
+function onMoreTriggerKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    void openMoreMenu('first')
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    void openMoreMenu('last')
+  }
+}
+
+function onMoreMenuKeydown(event: KeyboardEvent) {
+  const items = Array.from(moreMenu.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+  if (!items.length) return
+  const current = items.indexOf(document.activeElement as HTMLButtonElement)
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    items[(current + 1 + items.length) % items.length].focus()
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    items[(current - 1 + items.length) % items.length].focus()
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    items[0].focus()
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    items[items.length - 1].focus()
+  } else if (event.key === 'Tab') {
+    closeMoreMenu(false)
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.stopPropagation()
+  }
+}
+
 function closed() {
   const id = job.value?.id
   const trigger = opener
   clearTimeout(copyTimer)
   copiedId.value = false
+  closeMoreMenu(false)
+  posterDimensions.value = null
   discard()
   releasePoster()
   releasePoster = () => {}
@@ -502,6 +717,10 @@ function escapeInline(event: KeyboardEvent) {
   if (nativeFullscreen() || !job.value) return
   event.preventDefault()
   event.stopPropagation()
+  if (moreOpen.value) {
+    closeMoreMenu(true)
+    return
+  }
   close()
 }
 
@@ -512,7 +731,7 @@ function isEditableElement(target: EventTarget | null): boolean {
 }
 
 function onDialogKeydown(event: KeyboardEvent) {
-  if (!job.value || event.ctrlKey || event.metaKey || event.altKey) return
+  if (!job.value || moreOpen.value || event.ctrlKey || event.metaKey || event.altKey) return
   if (isEditableElement(event.target)) return
   if (event.key === 'ArrowLeft' && hasPrev.value) {
     event.preventDefault()
@@ -544,6 +763,8 @@ function step(delta: -1 | 1) {
   if (!target) return
   clearTimeout(copyTimer)
   copiedId.value = false
+  closeMoreMenu(false)
+  posterDimensions.value = null
   discard()
   job.value = target
   action.value = 'details'
@@ -605,9 +826,22 @@ async function loadContent(kind: 'play' | 'download') {
     format.value = type.ext
     previewable.value = blob.size <= 48 * 1024 * 1024
     url.value = URL.createObjectURL(blob.type === type.mime ? blob : blob.slice(0, blob.size, type.mime))
+    loading.value = false
+    await nextTick()
+    if (read.signal.aborted) return
     if (kind === 'download') {
-      await nextTick()
-      if (!read.signal.aborted) downloadLink.value?.click()
+      downloadLink.value?.click()
+    } else if (kind === 'play' && previewable.value && player.value) {
+      try {
+        const playResult = player.value.play()
+        if (playResult && typeof playResult.catch === 'function') {
+          playResult.catch(() => {
+            if (!read.signal.aborted) autoplayBlocked.value = true
+          })
+        }
+      } catch {
+        autoplayBlocked.value = true
+      }
     }
   } catch (e) {
     if (read.signal.aborted) return
@@ -628,6 +862,7 @@ async function open(item: VideoJob, kind: 'details' | 'play' | 'download', trigg
   if (kind !== 'details' && item.status !== 'completed') return
   clearTimeout(copyTimer)
   copiedId.value = false
+  closeMoreMenu(false)
   discard()
   opener = trigger
   job.value = item
@@ -642,6 +877,13 @@ async function open(item: VideoJob, kind: 'details' | 'play' | 'download', trigg
 
 onBeforeUnmount(() => {
   clearTimeout(copyTimer)
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('pointerdown', onDocumentOutside, true)
+    document.removeEventListener('click', onDocumentOutside, true)
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', updateNarrowViewport)
+  }
   opener = undefined
   releasePoster()
   releasePoster = () => {}

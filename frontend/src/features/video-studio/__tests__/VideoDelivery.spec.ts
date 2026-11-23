@@ -395,7 +395,7 @@ describe('VideoDelivery 与画廊真实视频时长', () => {
 
     await wrapper.get('[aria-label="下一条作品"]').trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('.vs-delivery-actions button')[0].attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.vs-delivery-download-btn').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('成片已过期')
 
     const input = document.createElement('input')
@@ -416,6 +416,248 @@ describe('VideoDelivery 与画廊真实视频时长', () => {
     await reuseBtn.trigger('click')
     await flushPromises()
     expect(wrapper.emitted('reuse')?.[0]?.[0]).toEqual(uncertain)
+
+    wrapper.unmount()
+    cache.dispose()
+  })
+
+  it('U2 + P3: 按真实封面与解码比例切换 landscape / portrait / record（不拿请求画幅冒充），点击加载并播放自动起播并处理拦截退路', async () => {
+    const cache = createVideoPosterCache()
+    cache.put('job-land', 'blob:poster-16-9')
+    cache.put('job-port', 'blob:poster-9-16')
+    const landJob = makeJob({ id: 'job-land', size: '16:9', has_poster: true })
+    const portJob = makeJob({ id: 'job-port', size: '9:16', has_poster: true })
+    const noPosterJob = makeJob({ id: 'job-no-poster', size: '16:9', has_poster: false })
+
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValueOnce(new DOMException('Autoplay blocked', 'NotAllowedError'))
+    video.content.mockResolvedValueOnce(mp4Blob())
+
+    const wrapper = mount(VideoDelivery, {
+      props: { mobile: false, cache, jobs: [landJob, portJob, noPosterJob] },
+      attachTo: document.body,
+    })
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+
+    // 1. Before poster load -> record (never faking landscape from job.size = 16:9); after 320x180 load -> landscape
+    await (wrapper.vm as InstanceType<typeof VideoDelivery>).open(landJob, 'details', opener)
+    await flushPromises()
+    const dialog = wrapper.get('dialog.vs-delivery-dialog')
+    expect(dialog.attributes('data-layout')).toBe('record')
+
+    const posterImg = wrapper.get('img.vs-details-poster').element as HTMLImageElement
+    Object.defineProperties(posterImg, { naturalWidth: { configurable: true, value: 320 }, naturalHeight: { configurable: true, value: 180 } })
+    await wrapper.get('img.vs-details-poster').trigger('load')
+    expect(dialog.attributes('data-layout')).toBe('landscape')
+    expect(video.content).not.toHaveBeenCalled()
+
+    // 2. Explicit 加载并播放 calls video.content once + player.play(), and shows manual fallback when browser blocks autoplay
+    await wrapper.get('.vs-stage-play-btn').trigger('click')
+    await vi.waitFor(() => expect(playSpy).toHaveBeenCalledTimes(1))
+    await flushPromises()
+    expect(video.content).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.vs-autoplay-hint').exists()).toBe(true)
+
+    // 3. Portrait poster (180x320) -> portrait
+    await wrapper.get('[aria-label="下一条作品"]').trigger('click')
+    await flushPromises()
+    const portImg = wrapper.get('img.vs-details-poster').element as HTMLImageElement
+    Object.defineProperties(portImg, { naturalWidth: { configurable: true, value: 180 }, naturalHeight: { configurable: true, value: 320 } })
+    await wrapper.get('img.vs-details-poster').trigger('load')
+    expect(dialog.attributes('data-layout')).toBe('portrait')
+
+    // 4. No-poster job with size: '16:9' -> stays record (never fakes ratio from job.size)
+    await wrapper.get('[aria-label="下一条作品"]').trigger('click')
+    await flushPromises()
+    expect(dialog.attributes('data-layout')).toBe('record')
+
+    wrapper.unmount()
+    cache.dispose()
+  })
+
+  it('详情不展示渠道文案，复用 modelLabels/videoModelDisplayName；操作栏位于滚动区外常驻页脚且下载最右，复制 ID 留在 ID 旁', async () => {
+    const cache = createVideoPosterCache()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+
+    const museJob = makeJob({ id: 'job-muse-clean', model: 'muse-video', has_poster: false })
+    const h3Job = makeJob({ id: 'job-h3-clean', model: 'minimax/h3', size: '1344x768', has_poster: false })
+    const customModelJob = makeJob({ id: 'job-custom-label', model: 'vendor/custom-v2', has_poster: false })
+
+    const wrapper = mount(VideoDelivery, {
+      props: {
+        mobile: false,
+        cache,
+        jobs: [museJob, h3Job, customModelJob],
+        canvasEnabled: true,
+        modelLabels: { 'vendor/custom-v2': 'Custom V2 Public' },
+      },
+      attachTo: document.body,
+    })
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+
+    await (wrapper.vm as InstanceType<typeof VideoDelivery>).open(museJob, 'details', opener)
+    await flushPromises()
+
+    // 1. No channel / routing copy in header, specs, tooltip, or ARIA
+    const dialogEl = wrapper.get('dialog.vs-delivery-dialog').element
+    expect(wrapper.find('.vs-inspector-provider').exists()).toBe(false)
+    expect(wrapper.get('#vs-player-title').text()).toBe('Muse')
+    expect(dialogEl.textContent).not.toMatch(/Muse\s*渠道|GoodPut|渠道/)
+
+    // 2. Persistent footer sits outside .vs-inspector-scroll with download rightmost
+    const footer = wrapper.get('footer.vs-delivery-footer')
+    expect(wrapper.get('.vs-inspector-scroll').element.contains(footer.element)).toBe(false)
+    expect(wrapper.get('.vs-delivery-body').element.contains(footer.element)).toBe(false)
+    const footerButtons = footer.findAll('button')
+    expect(footerButtons.map(b => b.text().trim())).toEqual(['复用参数', '加入画布', '下载成片'])
+    expect(footerButtons[footerButtons.length - 1].classes()).toContain('vs-delivery-download-btn')
+
+    // 3. Copy ID lives beside 任务 ID and provides feedback, then resets on job switch
+    const copyBtn = wrapper.get('.vs-job-id .vs-inline-copy-btn')
+    expect(copyBtn.text().trim()).toBe('复制 ID')
+    await copyBtn.trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('job-muse-clean')
+    expect(copyBtn.text().trim()).toBe('已复制')
+
+    // 4. Switch to H3: public name only, no GoodPut 渠道, copy state reset
+    await wrapper.get('[aria-label="下一条作品"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('#vs-player-title').text()).toBe('H3')
+    expect(dialogEl.textContent).not.toMatch(/GoodPut|渠道/)
+    expect(wrapper.get('.vs-job-id .vs-inline-copy-btn').text().trim()).toBe('复制 ID')
+
+    // 5. Switch to catalog-labeled model: uses modelLabels via videoModelDisplayName
+    await wrapper.get('[aria-label="下一条作品"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('#vs-player-title').text()).toBe('Custom V2 Public')
+    expect(wrapper.get('.vs-job-details').text()).toContain('模型Custom V2 Public')
+
+    wrapper.unmount()
+    cache.dispose()
+  })
+
+  it('单一下载入口：播放与冷下载均不出现第二可见下载项，播放时下载复用已加载 Blob 且保留播放器状态', async () => {
+    const cache = createVideoPosterCache()
+    const jobPlay = makeJob({ id: 'job-play-single', has_poster: false })
+    const jobCold = makeJob({ id: 'job-cold-single', has_poster: false })
+    video.content.mockResolvedValue(mp4Blob())
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+
+    const wrapper = mount(VideoDelivery, {
+      props: { mobile: false, cache, jobs: [jobPlay, jobCold] },
+      attachTo: document.body,
+    })
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+
+    const visibleDownloadControls = () =>
+      wrapper.findAll('button, a').filter(node => {
+        if (node.attributes('hidden') !== undefined || node.attributes('aria-hidden') === 'true') return false
+        return /下载/.test(node.text())
+      })
+
+    // Details open: zero content fetch, zero anchor, exactly one visible download button
+    await (wrapper.vm as InstanceType<typeof VideoDelivery>).open(jobPlay, 'details', opener)
+    await flushPromises()
+    expect(video.content).not.toHaveBeenCalled()
+    expect(wrapper.find('a[download]').exists()).toBe(false)
+    expect(visibleDownloadControls().map(n => n.text().trim())).toEqual(['下载成片'])
+
+    // Explicit play: one content fetch, hidden anchor present, still only one visible download entry
+    await wrapper.get('.vs-stage-play-btn').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('video').exists()).toBe(true))
+    await flushPromises()
+    const videoElBefore = wrapper.get('video').element
+    expect(video.content).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('a[download]').exists()).toBe(true)
+    expect(wrapper.get('a[download]').attributes('hidden')).toBeDefined()
+    expect(wrapper.get('a[download]').attributes('aria-hidden')).toBe('true')
+    expect(visibleDownloadControls().map(n => n.text().trim())).toEqual(['下载成片'])
+
+    // Click 下载成片 while playing: reuses existing Blob + hidden anchor, zero re-fetch, preserves player element
+    await wrapper.get('.vs-delivery-download-btn').trigger('click')
+    await flushPromises()
+    expect(video.content).toHaveBeenCalledTimes(1)
+    expect(anchorClick).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('video').element).toBe(videoElBefore)
+    expect(wrapper.get('video').attributes('src')).toBe('blob:delivery-1')
+    expect(visibleDownloadControls().map(n => n.text().trim())).toEqual(['下载成片'])
+
+    // Release video returns to details and revokes Blob
+    await wrapper.get('.vs-delivery-release-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('video').exists()).toBe(false)
+    expect(revokedUrl).toHaveBeenCalledWith('blob:delivery-1')
+
+    // Cold download on next job: fetches once, triggers hidden anchor, still single visible download entry
+    await wrapper.get('[aria-label="下一条作品"]').trigger('click')
+    await flushPromises()
+    expect(video.content).toHaveBeenCalledTimes(1)
+    await wrapper.get('.vs-delivery-download-btn').trigger('click')
+    await vi.waitFor(() => expect(anchorClick).toHaveBeenCalledTimes(2))
+    await flushPromises()
+    expect(video.content).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('a[download]').attributes('download')).toBe('video-job-cold-single.mp4')
+    expect(visibleDownloadControls().map(n => n.text().trim())).toEqual(['下载成片'])
+
+    // Clicking download again after cold download reuses Blob with zero extra fetch
+    await wrapper.get('.vs-delivery-download-btn').trigger('click')
+    await flushPromises()
+    expect(video.content).toHaveBeenCalledTimes(2)
+    expect(anchorClick).toHaveBeenCalledTimes(3)
+
+    wrapper.unmount()
+    cache.dispose()
+  })
+
+  it('窄屏移动模式将多个次要动作折进「更多」菜单，支持触摸/点击、键盘打开导航与 Esc 仅关闭菜单', async () => {
+    const cache = createVideoPosterCache()
+    const ready = makeJob({ id: 'job-mobile-more', has_poster: false })
+
+    const wrapper = mount(VideoDelivery, {
+      props: { mobile: true, cache, jobs: [ready], canvasEnabled: true, allowReuse: true },
+      attachTo: document.body,
+    })
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+
+    await (wrapper.vm as InstanceType<typeof VideoDelivery>).open(ready, 'details', opener)
+    await flushPromises()
+
+    const moreTrigger = wrapper.get('.vs-more-trigger')
+    expect(moreTrigger.attributes('aria-haspopup')).toBe('menu')
+    expect(moreTrigger.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('#vs-delivery-more-menu').exists()).toBe(false)
+
+    // Keyboard ArrowDown opens menu and focuses first menuitem
+    await moreTrigger.trigger('keydown', { key: 'ArrowDown' })
+    await nextTick()
+    expect(moreTrigger.attributes('aria-expanded')).toBe('true')
+    const items = wrapper.findAll('#vs-delivery-more-menu [role="menuitem"]')
+    expect(items.map(i => i.text().trim())).toEqual(['复用参数', '加入画布'])
+    expect(document.activeElement).toBe(items[0].element)
+
+    // ArrowDown moves focus to 加入画布
+    await wrapper.get('#vs-delivery-more-menu').trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(items[1].element)
+
+    // Escape closes only the More menu and restores focus to trigger without closing dialog
+    await wrapper.get('dialog').trigger('keydown', { key: 'Escape' })
+    await nextTick()
+    expect(wrapper.find('#vs-delivery-more-menu').exists()).toBe(false)
+    expect(wrapper.get('dialog').attributes('open')).toBeDefined()
+    expect(document.activeElement).toBe(moreTrigger.element)
+
+    // Click opens menu and triggers 加入画布
+    await moreTrigger.trigger('click')
+    await nextTick()
+    await wrapper.get('#vs-delivery-more-menu .vs-delivery-canvas-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('canvas')?.[0]?.[0]).toEqual(ready)
 
     wrapper.unmount()
     cache.dispose()

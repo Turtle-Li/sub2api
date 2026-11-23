@@ -12,6 +12,10 @@ import {
   buildGenerationTakes,
   resolvePinnedGenerationOutputId,
 } from './upstream/generation-history'
+import {
+  resolveVideoFrameTimestamp,
+  type ExtractedVideoFrame,
+} from './upstream/video-frame'
 import type { CanvasCardStatus, CanvasOutputCard } from './upstream/canvas-types'
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from './document'
 import type {
@@ -69,6 +73,7 @@ export function placeNewCanvasNode(options: PlacementOptions): { x: number; y: n
     occupied,
     size: { w, h },
     origin: { x: 80, y: 80 },
+    referenceGap: 164,
   })
 
   return {
@@ -175,5 +180,117 @@ export function resolveDraftTakes(
     })),
     activeTake,
     pinnedRequestId: resolvedPinnedId,
+  }
+}
+
+function waitForAbortableVideoEvent(
+  video: HTMLVideoElement,
+  eventName: 'loadedmetadata' | 'seeked',
+  signal: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new DOMException('已取消尾帧提取。', 'AbortError'))
+      return
+    }
+    const cleanup = () => {
+      video.removeEventListener(eventName, handleSuccess)
+      video.removeEventListener('error', handleError)
+      signal.removeEventListener('abort', handleAbort)
+    }
+    const handleSuccess = () => {
+      cleanup()
+      resolve()
+    }
+    const handleError = () => {
+      cleanup()
+      reject(new Error('无法解码上一镜成片视频画面，未提交视频。'))
+    }
+    const handleAbort = () => {
+      cleanup()
+      reject(signal.reason ?? new DOMException('已取消尾帧提取。', 'AbortError'))
+    }
+    video.addEventListener(eventName, handleSuccess, { once: true })
+    video.addEventListener('error', handleError, { once: true })
+    signal.addEventListener('abort', handleAbort, { once: true })
+  })
+}
+
+/**
+ * Host safety wrapper around BeatDesign's `resolveVideoFrameTimestamp`:
+ * - Checks pixel bounds (`maxPixels`) BEFORE allocating `<canvas>` backing memory.
+ * - Immediately detaches listeners and releases `<video>` media resources on error, timeout, or AbortSignal.
+ */
+export async function extractBoundedVideoFrame(options: {
+  readonly url: string
+  readonly position?: 'first' | 'last' | number
+  readonly filename?: string
+  readonly maxPixels: number
+  readonly signal: AbortSignal
+}): Promise<ExtractedVideoFrame> {
+  const { url, position = 'last', filename = 'video-tail-frame.png', maxPixels, signal } = options
+  if (typeof document === 'undefined') {
+    throw new Error('Video frame extraction requires the local browser runtime')
+  }
+  signal.throwIfAborted()
+  const video = document.createElement('video')
+  video.preload = 'auto'
+  video.muted = true
+  video.playsInline = true
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    video.pause()
+    video.removeAttribute('src')
+    video.load()
+  }
+  const onAbortCleanup = () => cleanup()
+  signal.addEventListener('abort', onAbortCleanup, { once: true })
+
+  try {
+    const metadataReady = waitForAbortableVideoEvent(video, 'loadedmetadata', signal)
+    video.src = url
+    video.load()
+    await metadataReady
+    signal.throwIfAborted()
+    if (video.videoWidth <= 0 || video.videoHeight <= 0) {
+      throw new TypeError('未能读取上一镜成片的有效画面尺寸。')
+    }
+    if (video.videoWidth * video.videoHeight > maxPixels) {
+      throw new RangeError('上一镜成片画面像素超出安全上限，无法提取尾帧。')
+    }
+    const timeSeconds = resolveVideoFrameTimestamp({
+      durationSeconds: video.duration,
+      position,
+    })
+    const seekReady = waitForAbortableVideoEvent(video, 'seeked', signal)
+    video.currentTime = timeSeconds
+    await seekReady
+    signal.throwIfAborted()
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('浏览器无法初始化尾帧绘制画布。')
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(result => {
+        if (result) resolve(result)
+        else reject(new Error('未能编码 PNG 尾帧图像。'))
+      }, 'image/png')
+    })
+    signal.throwIfAborted()
+    return {
+      file: new File([blob], filename, { type: 'image/png' }),
+      width: canvas.width,
+      height: canvas.height,
+      timeSeconds,
+      durationSeconds: video.duration,
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbortCleanup)
+    cleanup()
   }
 }

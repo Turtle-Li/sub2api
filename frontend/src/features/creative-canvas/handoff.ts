@@ -73,6 +73,9 @@ export function stageCanvasDraftHandoff(
     draftTitle: input.draftTitle.slice(0, MAX_NODE_TITLE_LENGTH),
     prompt: input.prompt.slice(0, MAX_PROMPT_LENGTH),
     expectsSourceImage: Boolean(input.expectsSourceImage),
+    ...(input.expectsTailFrame !== undefined ? { expectsTailFrame: Boolean(input.expectsTailFrame) } : {}),
+    ...(input.continuationMode ? { continuationMode: input.continuationMode } : {}),
+    ...(input.sourceSummary ? { sourceSummary: input.sourceSummary.slice(0, MAX_NODE_TITLE_LENGTH) } : {}),
   })
 
   const stop = observeVideoOwner(userId, () => {

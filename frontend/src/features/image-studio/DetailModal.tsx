@@ -20,6 +20,7 @@ type ImageAssetProps = {
   readonly index: number
   readonly measure: (size: OutputSize) => void
   readonly onReadable?: (index: number | null) => void
+  readonly onFailed?: (index: number | null) => void
 }
 type DetailProps = {
   readonly task: StudioTask
@@ -39,22 +40,23 @@ function statusTone(status: string, pending: boolean, canViewOutput: boolean): S
   return 'muted'
 }
 
-function ImageAsset({ task, api, image, index, measure, onReadable }: ImageAssetProps) {
+function ImageAsset({ task, api, image, index, measure, onReadable, onFailed }: ImageAssetProps) {
   const [src, setSrc] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
     let url = ''
-    setSrc(''); setError(''); onReadable?.(null)
+    setSrc(''); setError(''); onReadable?.(null); onFailed?.(null)
     const request = image ? Promise.resolve(image) : api.image(task, index)
     request.then(blob => {
       if (!active) return
       url = URL.createObjectURL(blob)
       setSrc(url)
+      onFailed?.(null)
       if (!image && acceptsVideoImage(blob)) onReadable?.(index)
-    }).catch(error => { if (active) setError(outputErrorMessage(error)) })
+    }).catch(error => { if (active) { onFailed?.(index); setError(outputErrorMessage(error)) } })
     return () => { active = false; if (url) URL.revokeObjectURL(url) }
-  }, [task.id, api, image, index, onReadable])
+  }, [task.id, api, image, index, onReadable, onFailed])
   if (!src) {
     return <span role={error ? 'alert' : 'status'} className={error ? 'studio-detail-image-error' : 'studio-detail-loading'}>
       {error || '正在加载原图…'}
@@ -63,7 +65,7 @@ function ImageAsset({ task, api, image, index, measure, onReadable }: ImageAsset
   return <img src={src} alt={task.item.prompt_preview || '生成图片'} onLoad={({ currentTarget }) => {
     const { naturalWidth: width, naturalHeight: height } = currentTarget
     if (width > 0 && height > 0) measure({ width, height })
-  }} onError={() => { onReadable?.(null); setSrc(''); setError('无法显示这张图片。') }} />
+  }} onError={() => { onReadable?.(null); onFailed?.(index); setSrc(''); setError('无法显示这张图片。') }} />
 }
 
 export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas }: DetailProps) {
@@ -75,6 +77,7 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
   const closed = useRef(false)
   const [index, setIndex] = useState(0)
   const [readableIndex, setReadableIndex] = useState<number | null>(null)
+  const [failedIndex, setFailedIndex] = useState<number | null>(null)
   const [handoff, setHandoff] = useState<'video' | 'canvas' | null>(null)
   const handoffPending = useRef(false)
   const [sizes, setSizes] = useState<Readonly<Partial<Record<number, OutputSize>>>>({})
@@ -86,13 +89,19 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
   const display = taskDisplay(displayedTask)
   const pending = taskPending(task)
   const tone = statusTone(display.status, pending, display.canViewOutput)
-  const frameSize = sizes[index] ?? (!archive && index === 0 ? task.item.preview_size : undefined)
+  const decodedSize = sizes[index]
+  const frameSize = decodedSize ?? (!archive && index === 0 ? task.item.preview_size : undefined)
   const ratio = frameSize ? frameSize.width / frameSize.height : 1
   const aspect = Number.isFinite(ratio) && ratio > 0 ? ratio : 1
   const layout = !display.canViewOutput ? 'record' : aspect < 1 ? 'portrait' : 'landscape'
   const frameStyle: React.CSSProperties & { readonly '--detail-aspect': number } = { '--detail-aspect': aspect }
 
+  function hasExternalTopDialog() {
+    return typeof document !== 'undefined' && Boolean(document.querySelector('dialog.cc-add-dialog[open]'))
+  }
+
   function dismiss() {
+    if (hasExternalTopDialog()) return
     closed.current = true
     if (dialog.current?.open) dialog.current.close()
     close()
@@ -112,8 +121,8 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
   useEffect(() => () => { if (viewerURL.current) URL.revokeObjectURL(viewerURL.current) }, [])
 
   // Opened archive items are synthesized from a signed archive, not indexed originals.
-  const videoOriginal = () => onVideo && !archive && readableIndex === index ? api.originalLocator(task, index) : null
-  const canvasOriginal = () => onCanvas && !archive ? api.originalLocator(task, index) : null
+  const videoOriginal = () => onVideo && !archive && readableIndex === index && failedIndex !== index ? api.originalLocator(task, index) : null
+  const canvasOriginal = () => onCanvas && !archive && failedIndex !== index ? api.originalLocator(task, index) : null
 
   async function openVideo() {
     if (handoffPending.current) return
@@ -175,8 +184,8 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
     return archive ? archive.images[next] : api.image(task, next)
   }
   function editCurrent() {
-    if (taskDisplay(displayedTask).canViewOutput) edit(index, archive?.images[index])
-    else setError('图片已过期或已清理。')
+    if (taskDisplay(displayedTask).canViewOutput && failedIndex !== index) edit(index, archive?.images[index])
+    else setError('当前这张原图不可用或已清理，请切换其他输出或刷新重试。')
   }
   async function view(next = index) {
     try {
@@ -217,11 +226,25 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
     data-layout={layout}
     data-status={display.status}
     style={frameStyle}
-    onClick={event => { if (!viewer && event.target === event.currentTarget) dismiss() }}
+    onClick={event => { if (!viewer && !hasExternalTopDialog() && event.target === event.currentTarget) dismiss() }}
     onCancel={event => {
       event.preventDefault()
+      if (hasExternalTopDialog()) return
       if (viewer) setViewer('')
       else dismiss()
+    }}
+    onKeyDown={event => {
+      if (viewer || hasExternalTopDialog() || !showPagination) return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (event.key === 'ArrowLeft' && index > 0) {
+        event.preventDefault()
+        setIndex(index - 1)
+      } else if (event.key === 'ArrowRight' && index + 1 < item.image_count) {
+        event.preventDefault()
+        setIndex(index + 1)
+      }
     }}
   >
     <header className="studio-detail-header">
@@ -234,7 +257,7 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
     <div className="studio-detail-content">
       {display.canViewOutput && <figure className="studio-detail-media">
         <button type="button" className="studio-detail-image" onClick={() => void view()} aria-label="放大图片">
-          <ImageAsset key={index} task={task} api={api} image={archive?.images[index]} index={index} measure={next => setSizes(sizes => ({ ...sizes, [index]: next }))} onReadable={setReadableIndex} />
+          <ImageAsset key={index} task={task} api={api} image={archive?.images[index]} index={index} measure={next => setSizes(sizes => ({ ...sizes, [index]: next }))} onReadable={setReadableIndex} onFailed={setFailedIndex} />
           <span className="studio-detail-expand" aria-hidden="true"><ExpandIcon /></span>
         </button>
       </figure>}
@@ -257,6 +280,7 @@ export function DetailModal({ task, api, close, edit, cancel, onVideo, onCanvas 
         <dl className="studio-detail-facts">
           <div className="studio-detail-fact-model"><dt>模型</dt><dd>{task.job.model}</dd></div>
           {task.job.image_size && <div><dt>分辨率档位</dt><dd>{task.job.image_size}</dd></div>}
+          {decodedSize && <div><dt>实际像素</dt><dd>{`${decodedSize.width} × ${decodedSize.height}`}</dd></div>}
           <div><dt>实际消耗</dt><dd>{task.job.actual_cost ?? '待结算'}</dd></div>
           {task.job.hold_amount != null && <div><dt>预扣</dt><dd>{task.job.hold_amount}</dd></div>}
           {expiry != null && <div><dt>{display.canOpenArchive ? '归档可查看至' : '原图可下载至'}</dt><dd>{expiryFormat.format(expiry * 1000)}<span className="studio-detail-tz">（本地时间）</span></dd></div>}

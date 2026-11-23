@@ -1,11 +1,37 @@
 <template>
-  <div class="video-studio vs-workspace">
+  <div class="video-studio vs-workspace wb-root">
+    <nav v-if="canReturnCanvas" class="vs-canvas-return-bar" aria-label="画布上下文导航">
+      <div class="vs-canvas-return-copy">
+        <span class="vs-canvas-return-dot" :data-state="canvasDraft.status" aria-hidden="true"></span>
+        <strong>{{ canvasBarHeading }}</strong>
+        <span v-if="canvasBarSubtext" class="vs-canvas-return-sub">{{ canvasBarSubtext }}</span>
+      </div>
+      <div class="vs-canvas-return-actions">
+        <button
+          v-if="mobile"
+          type="button"
+          class="vs-text"
+          @click="composer?.open(launcher)"
+        >
+          {{ heldId ? '查看提交状态' : '打开草稿设置' }}
+        </button>
+        <button
+          type="button"
+          class="vs-button vs-return-canvas-btn"
+          aria-label="返回画布"
+          @click="returnToCanvas"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" /></svg>
+          返回画布
+        </button>
+      </div>
+    </nav>
     <VideoComposer ref="composer" :source="source" :user-id="userId" :mobile="mobile" :held-id="heldId"
       :failed="heldStatus === 'failed'" :unconfirmed="!!heldId && outstanding.includes(heldId)" :example="example" :reserve="reserve"
       :canvas-draft="canvasDraft" :can-return-canvas="canReturnCanvas"
-      @accepted="accept" @rejected="release" @new-draft="newDraft" @lookup="lookup"
-      @clear-canvas-draft="clearCanvasDraft" @retry-canvas-draft="syncCanvasDraft" @return-canvas="returnToCanvas" @canvas-conflict="handleCanvasConflict" />
-    <VideoGallery ref="gallery" :example="example" :mobile="mobile" :outstanding="outstanding" :canvas-enabled="canvasEnabled"
+      @accepted="accept" @rejected="release" @new-draft="newDraft" @next-canvas-take="nextCanvasTake" @lookup="lookup"
+      @clear-canvas-draft="clearCanvasDraft" @retry-canvas-draft="syncCanvasDraft" @return-canvas="returnToCanvas" @canvas-conflict="handleCanvasConflict" @models-loaded="syncModelLabels" />
+    <VideoGallery ref="gallery" :example="example" :mobile="mobile" :outstanding="outstanding" :canvas-enabled="canvasEnabled" :model-labels="modelLabels"
       @resolved="settle" @example="useExample" @reuse="reuseJob" @canvas="openAddToCanvas" />
     <div v-if="mobile" class="vs-mobile-create">
       <span>{{ heldId ? '原任务已保留，展开后可查询状态' : '描述画面主体、运镜和节奏…' }}</span>
@@ -27,15 +53,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { useMediaQuery } from '@vueuse/core'
 import AddToCanvasDialog from '@/features/creative-canvas/AddToCanvasDialog.vue'
 import { isCanvasUuid } from '@/features/creative-canvas/document'
-import { clearCanvasDraftHandoff } from '@/features/creative-canvas/handoff'
+import { clearCanvasDraftHandoff, readStagedCanvasDraftHandoff } from '@/features/creative-canvas/handoff'
 import type { AddToCanvasPayload } from '@/features/creative-canvas/types'
 import { clearImage, pendingImage } from '@/features/video-studio/source'
-import type { VideoJob } from '@/features/video-studio/api'
+import { videoModelDisplayName, type VideoJob, type VideoModel } from '@/features/video-studio/api'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
-import { parseCanvasDraftQuery, stripCanvasDraftQuery, verifyCanvasDraft, type CanvasDraftState } from './canvasDraft'
+import { parseCanvasDraftQuery, stripCanvasDraftQuery, verifyCanvasDraft, type CanvasDraftState, type CanvasRouteRef } from './canvasDraft'
 import VideoComposer from './VideoComposer.vue'
 import VideoGallery from './VideoGallery.vue'
 import './studio.css'
+import '@/styles/studio-workbench.css'
 
 const props = defineProps<{ userId: number }>()
 const route = useRoute()
@@ -53,31 +80,98 @@ const example = '镜头缓慢推近，杯口的蒸汽向窗边飘，杯身的图
 
 const canvasDraft = shallowRef<CanvasDraftState>({ status: 'none' })
 const lastValidCanvas = shallowRef<{ readonly canvasId: string; readonly nodeId: string } | null>(null)
-const canReturnCanvas = computed(() => canvasEnabled.value && (canvasDraft.value.status === 'ready' || Boolean(heldId.value && lastValidCanvas.value)))
+const returnTarget = computed(() => {
+  if (!canvasEnabled.value) return null
+  if (canvasRoute.value.valid) {
+    return { canvasId: canvasRoute.value.canvasId, nodeId: canvasRoute.value.nodeId }
+  }
+  if (heldId.value && lastValidCanvas.value) {
+    return lastValidCanvas.value
+  }
+  return null
+})
+const canReturnCanvas = computed(() => Boolean(returnTarget.value))
+const canvasBarHeading = computed(() => {
+  const state = canvasDraft.value
+  if (state.status === 'ready') {
+    return `画布「${state.canvasTitle}」· ${state.draftTitle}`
+  }
+  if (state.status === 'verifying') return '正在核验画布分镜草稿…'
+  if (state.status === 'conflict') return '画布版本已变更 · 未提交'
+  if (state.status === 'source-unavailable') return '画布来源素材不可用 · 未提交'
+  if (state.status === 'error' || state.status === 'invalid') return '画布草稿暂不可提交'
+  if (heldId.value) return '画布分镜任务已锁定原编号'
+  return '来自创作画布'
+})
+const canvasBarSubtext = computed(() => {
+  const state = canvasDraft.value
+  if (heldId.value) return '返回或刷新不会重复提交'
+  if (state.status === 'ready') return state.sourceSummary || `修订号 v${state.revision}`
+  if (state.status === 'verifying') return '可随时返回原画布与原节点'
+  if (state.status !== 'none') return '可返回原画布查看或调整分镜'
+  return ''
+})
 const canvasDialogOpen = ref(false)
 const canvasPayload = shallowRef<AddToCanvasPayload | null>(null)
 let verifyController: AbortController | undefined
 
 // A reload between POST and its receipt must offer GET by the same ID, not a fresh paid intent.
-// Only IDs live in tab storage; the list and every task status still come from the server.
+// Scope receipts per (canvasId, nodeId) vs standalone so completing branch A never locks branch B,
+// while preserving all unresolved `pending` IDs across the tab until explicitly settled.
 const key = `sub2:video-studio:intents:${props.userId}`
-const heldId = ref('')
-const heldStatus = ref<VideoJob['status']>()
+const scopeKeyFor = (refInfo: CanvasRouteRef) =>
+  refInfo.valid ? `canvas:${refInfo.canvasId}:${refInfo.nodeId}` : 'standalone'
+const currentScopeKey = computed(() => scopeKeyFor(canvasRoute.value))
+const heldByScope = ref<Record<string, string>>({})
+const statusById = ref<Record<string, VideoJob['status']>>({})
 const outstanding = ref<string[]>([])
 const isId = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)
 try {
   const state = JSON.parse(sessionStorage.getItem(key) || '{}')
-  heldId.value = isId(state.held) ? state.held : ''
   if (Array.isArray(state.pending)) outstanding.value = state.pending.filter(isId)
+  if (state.heldByScope && typeof state.heldByScope === 'object' && !Array.isArray(state.heldByScope)) {
+    const restored: Record<string, string> = {}
+    for (const [scope, val] of Object.entries(state.heldByScope as Record<string, unknown>)) {
+      if (typeof scope === 'string' && isId(val)) restored[scope] = val
+    }
+    heldByScope.value = restored
+  } else if (isId(state.held)) {
+    heldByScope.value = { [currentScopeKey.value]: state.held }
+  }
 } catch { /* Private browsing can make session storage unavailable. */ }
-function remember() {
-  try { sessionStorage.setItem(key, JSON.stringify({ held: heldId.value, pending: outstanding.value })); return true } catch { return false }
+const heldId = computed(() => heldByScope.value[currentScopeKey.value] || '')
+const heldStatus = computed(() => (heldId.value ? statusById.value[heldId.value] : undefined))
+function setScopedHeld(scope: string, id: string) {
+  const next = { ...heldByScope.value }
+  if (id) next[scope] = id
+  else delete next[scope]
+  heldByScope.value = next
 }
-// The Image Studio action starts a separate, unpaid draft; any unresolved original stays queryable.
-// Never clear heldId on a canvas-origin route reload so an unfinished canvas intent stays query-only.
-if (!canvasRoute.value.present && source.value && heldId.value) { heldId.value = ''; remember() }
+function remember() {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({
+      held: heldId.value,
+      heldByScope: heldByScope.value,
+      pending: outstanding.value,
+    }))
+    return true
+  } catch { return false }
+}
+// The Image Studio action starts a separate, unpaid standalone draft; any unresolved original stays queryable in `outstanding`.
+if (!canvasRoute.value.present && source.value && heldByScope.value.standalone) {
+  setScopedHeld('standalone', '')
+  remember()
+}
 
-const modelLabel = (id: string) => ({ 'minimax/h3': 'H3', 'minimax/h3-fast': 'H3 Fast', 'muse-video': 'Muse' })[id] || id
+const modelLabels = shallowRef<Record<string, string>>({})
+function syncModelLabels(items: readonly VideoModel[]) {
+  const next: Record<string, string> = {}
+  for (const item of items) {
+    const label = videoModelDisplayName(item)
+    if (label) next[item.id] = label
+  }
+  modelLabels.value = next
+}
 
 function closeCanvasDialog() {
   canvasDialogOpen.value = false
@@ -89,7 +183,7 @@ function openAddToCanvas(job: VideoJob) {
   canvasPayload.value = {
     kind: 'video',
     videoId: job.id,
-    title: `${modelLabel(job.model)} 视频作品`,
+    title: `${videoModelDisplayName(job.model, modelLabels.value)} 视频作品`,
   }
   canvasDialogOpen.value = true
 }
@@ -121,6 +215,20 @@ async function syncCanvasDraft() {
     return
   }
 
+  const scope = scopeKeyFor(refInfo)
+  const existingScopedHeld = heldByScope.value[scope] || ''
+  // If user freshly entered this node from Creative Canvas (`staged` present) and the previous attempt
+  // on this node already settled (not in `outstanding`), unlock the form so a new take (v2+) can be created.
+  // An unresolved (`outstanding`) attempt ALWAYS stays locked & query-only across reloads and re-entries.
+  if (
+    existingScopedHeld &&
+    !outstanding.value.includes(existingScopedHeld) &&
+    readStagedCanvasDraftHandoff(props.userId, refInfo.canvasId, refInfo.nodeId)
+  ) {
+    setScopedHeld(scope, '')
+    remember()
+  }
+
   canvasDraft.value = { status: 'verifying', canvasId: refInfo.canvasId, nodeId: refInfo.nodeId }
   source.value = null
   const controller = new AbortController()
@@ -133,7 +241,7 @@ async function syncCanvasDraft() {
       nodeId: refInfo.nodeId,
       canvasEnabled: canvasEnabled.value,
       signal: controller.signal,
-      heldId: heldId.value || undefined,
+      heldId: heldByScope.value[scope] || undefined,
     })
     if (controller.signal.aborted) return
     canvasDraft.value = result.state
@@ -188,9 +296,7 @@ function handleCanvasConflict(message: string) {
 
 function returnToCanvas() {
   if (!canvasEnabled.value || !router) return
-  const target = canvasDraft.value.status === 'ready'
-    ? { canvasId: canvasDraft.value.canvasId, nodeId: canvasDraft.value.nodeId }
-    : lastValidCanvas.value
+  const target = returnTarget.value
   if (!target) return
   clearCanvasDraftHandoff(props.userId)
   clearImage()
@@ -198,11 +304,17 @@ function returnToCanvas() {
 }
 
 function reserve(id: string) {
-  const previous = outstanding.value
-  heldId.value = id; heldStatus.value = undefined
-  outstanding.value = [id, ...previous.filter(item => item !== id)]
+  const scope = currentScopeKey.value
+  const previousHeld = { ...heldByScope.value }
+  const previousOutstanding = outstanding.value
+  const nextStatus = { ...statusById.value }
+  delete nextStatus[id]
+  statusById.value = nextStatus
+  setScopedHeld(scope, id)
+  outstanding.value = [id, ...previousOutstanding.filter(item => item !== id)]
   if (!remember()) {
-    heldId.value = ''; outstanding.value = previous
+    heldByScope.value = previousHeld
+    outstanding.value = previousOutstanding
     throw new Error('无法保存原任务号。请允许此站点使用标签页存储后再试；未提交视频。')
   }
 }
@@ -211,16 +323,20 @@ function resolve(id: string) {
   remember()
 }
 function release(id: string) {
-  if (heldId.value === id) heldId.value = ''
+  const next = { ...heldByScope.value }
+  for (const [scope, val] of Object.entries(next)) {
+    if (val === id) delete next[scope]
+  }
+  heldByScope.value = next
   resolve(id)
 }
 function settle(job: VideoJob) {
-  if (heldId.value === job.id) heldStatus.value = job.status
+  statusById.value = { ...statusById.value, [job.id]: job.status }
   if (job.status !== 'uncertain') resolve(job.id)
 }
 function accept(job: VideoJob) {
   if (canvasDraft.value.status === 'ready') {
-    lastValidCanvas.value = { canvasId: canvasDraft.value.canvasId, nodeId: canvasDraft.value.nodeId }
+    lastValidCanvas.value = { canvasId: canvasDraft.value.canvasId, nodeId: canvasDraft.value.canvasId ? canvasDraft.value.nodeId : '' }
     clearCanvasDraftHandoff(props.userId)
   }
   settle(job)
@@ -228,9 +344,15 @@ function accept(job: VideoJob) {
   composer.value?.close()
 }
 function newDraft() {
-  heldId.value = ''
+  setScopedHeld(currentScopeKey.value, '')
   lastValidCanvas.value = null
   remember()
+}
+function nextCanvasTake() {
+  if (heldId.value && outstanding.value.includes(heldId.value)) return
+  setScopedHeld(currentScopeKey.value, '')
+  remember()
+  void syncCanvasDraft()
 }
 function lookup(id: string) {
   composer.value?.close()

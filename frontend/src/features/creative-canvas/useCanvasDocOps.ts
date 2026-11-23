@@ -10,11 +10,12 @@ import {
   MAX_CANVAS_NODES,
   MAX_NODE_TITLE_LENGTH,
   MAX_PROMPT_LENGTH,
+  resolveDraftLineage,
   sanitizeDocument,
   sanitizeImageLocator,
   sanitizeViewport,
 } from './document'
-import type { CanvasDocument, CanvasNodeDoc, CanvasViewport, CreativeCanvas } from './types'
+import type { CanvasDocument, CanvasEdgeDoc, CanvasNodeDoc, CanvasViewport, CreativeCanvas } from './types'
 import { placeNewCanvasNode, resolveDraftTakes } from './upstreamAdapter'
 
 export function isCanvasDirty(
@@ -32,36 +33,118 @@ export function useCanvasDocOps(
   doc: Ref<CanvasDocument>,
   commit: () => void,
 ) {
-  function newDraft(imageId: string, at?: { x: number; y: number }): string | null {
+  function canSourceNodeBranch(currentBoard: CreativeCanvas, currentDoc: CanvasDocument, sourceNode: CanvasNodeDoc): {
+    readonly ok: boolean
+    readonly takeId?: string
+    readonly takeNumber?: number
+  } {
+    if (sourceNode.kind === 'image') {
+      if (!sanitizeImageLocator(sourceNode.image)) return { ok: false }
+      if (currentBoard.assets[sourceNode.id]?.available !== true) return { ok: false }
+      return { ok: true }
+    }
+    if (sourceNode.kind === 'video') {
+      if (!isCanvasUuid(sourceNode.video_id)) return { ok: false }
+      const asset = currentBoard.assets[sourceNode.id]
+      if (asset?.available !== true || asset.job?.status !== 'completed') return { ok: false }
+      return { ok: true }
+    }
+    if (sourceNode.kind === 'video-draft') {
+      const { activeTake } = resolveDraftTakes(sourceNode, currentBoard.attempts)
+      if (
+        activeTake &&
+        !activeTake.unavailable &&
+        activeTake.job?.status === 'completed' &&
+        isCanvasUuid(activeTake.requestId)
+      ) {
+        return { ok: true, takeId: activeTake.requestId, takeNumber: activeTake.takeNumber }
+      }
+      // Unrendered draft: inherits sourceNode's input, unless that upstream input is known unavailable.
+      const lineage = resolveDraftLineage(currentDoc, sourceNode.id)
+      if (lineage.mode === 'direct-image' && lineage.parentNode) {
+        if (currentBoard.assets[lineage.parentNode.id]?.available !== true) return { ok: false }
+      } else if (lineage.continuation) {
+        if (currentBoard.inputs && currentBoard.inputs[sourceNode.id]?.available === false) {
+          return { ok: false }
+        }
+      }
+      return { ok: true }
+    }
+    return { ok: false }
+  }
+
+  function newDraft(sourceNodeId: string, at?: { x: number; y: number }): string | null {
     if (!board.value) return null
     const current = doc.value
     if (current.nodes.length >= MAX_CANVAS_NODES || current.edges.length >= MAX_CANVAS_EDGES) {
       return null
     }
-    const imageNode = current.nodes.find(n => n.id === imageId && n.kind === 'image')
-    if (!imageNode) return null
-    if (!sanitizeImageLocator(imageNode.image)) return null
-    if (board.value.assets[imageNode.id]?.available !== true) return null
+    const sourceNode = current.nodes.find(
+      n => n.id === sourceNodeId && (n.kind === 'image' || n.kind === 'video' || n.kind === 'video-draft'),
+    )
+    if (!sourceNode) return null
+    const check = canSourceNodeBranch(board.value, current, sourceNode)
+    if (!check.ok) return null
 
     const pos = placeNewCanvasNode({
       existingNodes: current.nodes,
-      anchorNode: imageNode,
+      anchorNode: sourceNode,
       explicitDropPosition: at ?? null,
       kind: 'video-draft',
     })
-    const count = findDerivedDraftNodes(current, imageId).length
+    const count = findDerivedDraftNodes(current, sourceNodeId).length
+    const letter = branchLetter(count)
+    const title =
+      sourceNode.kind === 'image'
+        ? `视频分支 ${letter}`
+        : sourceNode.kind === 'video'
+          ? `续镜 ${letter} · 成片尾帧`
+          : check.takeId
+            ? `续镜 ${letter} · v${check.takeNumber ?? 1} 尾帧`
+            : `续镜 ${letter} · 沿用素材`
+
     const id = createCanvasUuid()
     const draftNode: CanvasNodeDoc = {
       id,
       kind: 'video-draft',
       x: pos.x,
       y: pos.y,
-      title: `视频分支 ${branchLetter(count)}`,
+      title,
+    }
+    const edge: CanvasEdgeDoc = check.takeId
+      ? { source: sourceNodeId, target: id, take_id: check.takeId }
+      : { source: sourceNodeId, target: id }
+
+    doc.value = sanitizeDocument({
+      viewport: current.viewport,
+      nodes: [...current.nodes, draftNode],
+      edges: [...current.edges, edge],
+    })
+    commit()
+    return id
+  }
+
+  function addRootDraft(at?: { x: number; y: number }): string | null {
+    if (!board.value) return null
+    const current = doc.value
+    if (current.nodes.length >= MAX_CANVAS_NODES) return null
+    const pos = placeNewCanvasNode({
+      existingNodes: current.nodes,
+      explicitDropPosition: at ?? null,
+      kind: 'video-draft',
+    })
+    const id = createCanvasUuid()
+    const draftNode: CanvasNodeDoc = {
+      id,
+      kind: 'video-draft',
+      x: pos.x,
+      y: pos.y,
+      title: '纯文字分镜草稿',
     }
     doc.value = sanitizeDocument({
       viewport: current.viewport,
       nodes: [...current.nodes, draftNode],
-      edges: [...current.edges, { source: imageId, target: id }],
+      edges: current.edges,
     })
     commit()
     return id
@@ -90,11 +173,22 @@ export function useCanvasDocOps(
   function connect(sourceId: string, targetId: string): void {
     if (!board.value) return
     const current = doc.value
-    if (!isValidCanvasConnection(current, sourceId, targetId)) return
+    if (!isValidCanvasConnection(current, sourceId, targetId, board.value.attempts)) return
+    const sourceNode = current.nodes.find(n => n.id === sourceId)
+    const targetNode = current.nodes.find(n => n.id === targetId)
+    if (!sourceNode || !targetNode) return
+    let edge: CanvasEdgeDoc = { source: sourceId, target: targetId }
+    if (sourceNode.kind !== 'note') {
+      const check = canSourceNodeBranch(board.value, current, sourceNode)
+      if (!check.ok) return
+      if (check.takeId) {
+        edge = { source: sourceId, target: targetId, take_id: check.takeId }
+      }
+    }
     doc.value = sanitizeDocument({
       viewport: current.viewport,
       nodes: current.nodes,
-      edges: [...current.edges, { source: sourceId, target: targetId }],
+      edges: [...current.edges, edge],
     })
     commit()
   }
@@ -166,5 +260,16 @@ export function useCanvasDocOps(
     commit()
   }
 
-  return { newDraft, addNote, connect, removeNode, changeNode, moveNodes, changeViewport, pin }
+  return {
+    newDraft,
+    branchFromNode: newDraft,
+    addRootDraft,
+    addNote,
+    connect,
+    removeNode,
+    changeNode,
+    moveNodes,
+    changeViewport,
+    pin,
+  }
 }

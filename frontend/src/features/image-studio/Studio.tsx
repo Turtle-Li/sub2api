@@ -13,7 +13,9 @@ import { useGalleryHistory } from './useGalleryHistory'
 import ExpiredGallery from './ExpiredGallery'
 import GalleryTail from './GalleryTail'
 import { DetailModal } from './DetailModal'
+import { LiquidSelect } from '@/features/studio-ui/LiquidSelect'
 import './studio.css'
+import '@/styles/studio-workbench.css'
 
 type OriginalAction = (original: StudioOriginal) => Promise<void>
 interface StudioProps {
@@ -48,7 +50,7 @@ function StudioSession({ userId, onVideo, onCanvas }: StudioProps) {
     return () => controller.abort()
   }, [userId])
   const { keys, wallet, current } = directory
-  return <div className="image-studio">
+  return <div className="image-studio wb-root">
     {error && <p className="studio-error" role="alert">{error}</p>}
     {keys && (keys.length || wallet !== 'legacy')
       ? <Workspace key={`${userId}:${wallet}:${keys.map(key => `${key.id}:${key.group_id}:${key.can_generate}:${key.has_history}`).join(',')}`} keys={keys} wallet={wallet} directoryCurrent={current} userId={userId} onVideo={onVideo} onCanvas={onCanvas} />
@@ -169,11 +171,29 @@ function Workspace({ keys, wallet, directoryCurrent, userId, onVideo, onCanvas }
   }
   async function changeModel(value: string) {
     const selection = continuation.beginSelection()
+    const prevCaps = capabilities
     manuallySelectedModel.current = true
     setModel(value)
     const selected = models.find(item => modelIdentity(item) === value)
+    const nextCaps = selected?.capabilities
+    const adjustments: string[] = []
+    if (aspectRatio && (!nextCaps?.aspect_ratios.length || !nextCaps.aspect_ratios.includes(aspectRatio))) {
+      if (prevCaps?.aspect_ratios.length) {
+        adjustments.push(nextCaps?.aspect_ratios.length ? '画面比例已按新模型能力重置' : '画面比例改为模型默认')
+      }
+    }
+    if (imageSize && (!nextCaps?.image_sizes.length || !nextCaps.image_sizes.includes(imageSize))) {
+      if (prevCaps?.image_sizes.length) {
+        adjustments.push(nextCaps?.image_sizes.length ? '分辨率档位已按新模型能力重置' : '分辨率档位改为模型默认')
+      }
+    }
     if (parent && selected && !await api.client.canContinue(parent, selected) && continuation.isCurrent(selection)) {
-      setParent(null); setNotice('已切换模型并保留参考图。本次将创建新作品。')
+      setParent(null)
+      setNotice(`已切换模型并保留参考图。本次将创建新作品${adjustments.length ? `（${adjustments.join('，')}）` : ''}。`)
+      return
+    }
+    if (adjustments.length && continuation.isCurrent(selection)) {
+      setNotice(`已按新模型能力调整：${adjustments.join('；')}。已保留兼容的提示词与参考图。`)
     }
   }
   async function upload(files: FileList | null) {
@@ -222,14 +242,25 @@ function Workspace({ keys, wallet, directoryCurrent, userId, onVideo, onCanvas }
     : null
   return <div className="studio-workspace">
     <dialog ref={composer} open={!mobile} className="studio-composer" aria-label="创作设置" onClick={event => { if (mobile && event.target === event.currentTarget) composer.current?.close() }}>
-      <div className="studio-composer-heading"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
+      <div className="studio-composer-heading wb-rail-head"><h2>{parent ? '继续改图' : '创作设置'}</h2><button className="studio-mobile-only" aria-label="关闭创作设置" onClick={() => composer.current?.close()}>关闭</button></div>
       {parent && <p className="studio-edit-source studio-muted">基于当前参考图续改 · {parent.job.model}</p>}
       {mobile && error && <p className="studio-error" role="alert">{error}</p>}
       <InputBar capabilities={capabilities} imageSize={selectedSize || ''} aspectRatio={selectedAspect || ''} setImageSize={setImageSize} setAspectRatio={setAspectRatio} referenceError={referenceError} refs={refs} removeRef={index => { continuation.beginSelection(); setRefs(refs.filter((_, i) => i !== index)) }} prompt={prompt} setPrompt={setPrompt} editing={Boolean(parent)} upload={files => void upload(files)} models={models} modelLoading={modelsUpdating} model={model} setModel={value => void changeModel(value)} busy={busy} submitDisabled={!directoryCurrent} submit={() => void submit()} batchMode={batchMode} setBatchMode={setBatchMode} />
     </dialog>
-    <section className="studio-gallery" aria-label="图片画廊"><div className="studio-toolbar"><div className="studio-gallery-heading"><h2>{parent ? '连续改图' : '我的作品'}</h2></div>
+    <section className="studio-gallery wb-gallery" aria-label="图片画廊"><div className="studio-toolbar wb-gallery-head"><div className="studio-gallery-heading wb-gallery-title"><h2>{parent ? '连续改图' : '我的作品'}</h2></div>
       <div className="studio-tabs studio-gallery-tabs" aria-label="筛选任务">{filterOptions.map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div>
-      <select className="studio-gallery-status" aria-label="筛选作品" value={filter} onChange={event => { const next = filterOptions.find(([value]) => value === event.target.value); if (next) setFilter(next[0]) }}>{filterOptions.map(([value, label]) => <option key={value} value={value}>{value === 'all' ? '全部作品' : label}</option>)}</select>
+      <LiquidSelect
+        className="studio-gallery-status"
+        compact
+        ariaLabel="筛选作品"
+        value={filter}
+        minMenuWidth={132}
+        options={filterOptions.map(([value, label]) => ({ value, label: value === 'all' ? '全部作品' : label }))}
+        onChange={nextValue => {
+          const next = filterOptions.find(([value]) => value === nextValue)
+          if (next) setFilter(next[0])
+        }}
+      />
       <div className="studio-toolbar-actions">{parent && <button onClick={() => { continuation.beginSelection(); setParent(null) }}>返回画廊</button>}
         <button className="studio-search-toggle" aria-label="搜索作品" aria-expanded={searchOpen} aria-pressed={searchOpen || Boolean(search)} onClick={() => setSearchOpen(value => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg></button>
         <button className="studio-refresh" aria-label="刷新作品" disabled={history.phase === 'reading'} onClick={refreshGallery}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17" /></svg></button>

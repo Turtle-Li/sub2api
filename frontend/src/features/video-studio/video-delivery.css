@@ -3,10 +3,34 @@
  * Uses existing .video-studio / .dark .video-studio CSS custom properties.
  */
 
-.video-studio dialog.vs-player.vs-delivery-dialog {
-  width: min(1100px, calc(100vw - 32px));
+dialog.vs-player.vs-delivery-dialog {
+  --vs-surface: #fff;
+  --vs-field: #f8fafc;
+  --vs-hover: #eef2f6;
+  --vs-ink: #111827;
+  --vs-muted: #5b6675;
+  --vs-line: #e5e7eb;
+  --vs-line-strong: #d1d5db;
+  --vs-accent: #0f766e;
+  --vs-accent-hover: #115e59;
+  --vs-soft: #ecfdf5;
+  --vs-soft-line: #a7f3d0;
+  --vs-active: #0369a1;
+  --vs-active-bg: #f0f9ff;
+  --vs-active-line: #bae6fd;
+  --vs-queued: #526175;
+  --vs-queued-bg: #f1f5f9;
+  --vs-queued-line: #cbd5e1;
+  --vs-on-accent: #fff;
+  --vs-warn: #a45109;
+  --vs-warn-bg: #fffbeb;
+  --vs-warn-line: #fde68a;
+  --vs-error: #b91c1c;
+  --vs-error-bg: #fef2f2;
+  --vs-error-line: #fecaca;
+  width: min(940px, calc(100vw - 48px));
   max-width: none;
-  max-height: min(88dvh, 780px);
+  max-height: min(88dvh, 800px);
   margin: auto;
   padding: 0;
   border: 1px solid var(--vs-line);
@@ -15,36 +39,251 @@
   color: var(--vs-ink);
   background: var(--vs-surface);
   box-shadow: 0 24px 64px #04091452;
+  font-size: .875rem;
+  line-height: 1.55;
 }
 
-.video-studio dialog.vs-player.vs-delivery-dialog[open] {
+.dark dialog.vs-player.vs-delivery-dialog {
+  --vs-surface: #121a22;
+  --vs-field: #16202a;
+  --vs-hover: #21303f;
+  --vs-ink: #f1f5f9;
+  --vs-muted: #a9b6c5;
+  --vs-line: #2b3948;
+  --vs-line-strong: #3b4d60;
+  --vs-accent: #5eead4;
+  --vs-accent-hover: #2dd4bf;
+  --vs-soft: #153935;
+  --vs-soft-line: #27675f;
+  --vs-active: #7dd3fc;
+  --vs-active-bg: #172f42;
+  --vs-active-line: #285a78;
+  --vs-queued: #b6c2d1;
+  --vs-queued-bg: #25303d;
+  --vs-queued-line: #455468;
+  --vs-on-accent: #073632;
+  --vs-warn: #fcd34d;
+  --vs-warn-bg: #382e20;
+  --vs-warn-line: #715c25;
+  --vs-error: #fca5a5;
+  --vs-error-bg: #3b2228;
+  --vs-error-line: #71363d;
+  color-scheme: dark;
+}
+
+dialog.vs-player.vs-delivery-dialog::backdrop {
+  background: #0f172a99;
+  backdrop-filter: blur(3px);
+}
+
+dialog.vs-player.vs-delivery-dialog *,
+dialog.vs-player.vs-delivery-dialog *::before,
+dialog.vs-player.vs-delivery-dialog *::after {
+  box-sizing: border-box;
+}
+
+dialog.vs-player.vs-delivery-dialog :is(.vs-primary, .vs-button, .vs-text, .vs-icon) {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border-radius: 9px;
+  font: inherit;
+  font-size: .8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-primary {
+  background: var(--vs-accent);
+  border: 1px solid transparent;
+  color: var(--vs-on-accent);
+  padding: 10px 16px;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-primary:not(:disabled):hover {
+  background: var(--vs-accent-hover);
+}
+
+dialog.vs-player.vs-delivery-dialog :is(.vs-button, .vs-icon) {
+  background: var(--vs-surface);
+  border: 1px solid var(--vs-line);
+  color: var(--vs-ink);
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-button {
+  padding: 7px 12px;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-icon {
+  width: 36px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-text {
+  background: transparent;
+  color: var(--vs-accent);
+  border: 0;
+  padding: 5px 6px;
+}
+
+dialog.vs-player.vs-delivery-dialog :is(.vs-button, .vs-icon):not(:disabled):hover {
+  background: var(--vs-hover);
+  border-color: var(--vs-line-strong);
+}
+
+dialog.vs-player.vs-delivery-dialog button:disabled {
+  opacity: .56;
+  cursor: not-allowed;
+}
+
+dialog.vs-player.vs-delivery-dialog code {
+  display: block;
+  color: var(--vs-muted);
+  font: .6875rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--vs-line);
+  border-radius: 999px;
+  background: var(--vs-field);
+  color: var(--vs-muted);
+  font-size: .6875rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status i {
+  display: block;
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+  border-radius: 50%;
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=completed] {
+  color: var(--vs-accent);
+  background: var(--vs-soft);
+  border-color: var(--vs-soft-line);
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=completed] i {
+  width: 8px;
+  height: 5px;
+  margin: 1px 0 2px;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  border-radius: 0;
+  background: transparent;
+  transform: rotate(-45deg);
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=running],
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=submitting] {
+  color: var(--vs-active);
+  background: var(--vs-active-bg);
+  border-color: var(--vs-active-line);
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=failed] {
+  color: var(--vs-error);
+  background: var(--vs-error-bg);
+  border-color: var(--vs-error-line);
+}
+
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=uncertain],
+dialog.vs-player.vs-delivery-dialog .vs-status[data-state=expired] {
+  color: var(--vs-warn);
+  background: var(--vs-warn-bg);
+  border-color: var(--vs-warn-line);
+}
+
+dialog.vs-player.vs-delivery-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] {
+  width: min(860px, calc(100vw - 48px));
+}
+
+dialog.vs-player.vs-delivery-dialog[data-layout="record"] {
+  width: min(680px, calc(100vw - 32px));
+}
+
+dialog.vs-player.vs-delivery-dialog > .vs-player-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--vs-line);
+  background: var(--vs-surface);
+}
+
+.vs-delivery-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-delivery-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 396px);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 0.92fr) minmax(320px, 1.08fr);
+  overflow: hidden;
 }
 
-/* Left / Top: Cinema Stage (always dark cinema matte in light & dark themes) */
+/* Media Stage (dark cinema matte, strictly sized by measured media aspect) */
 .vs-delivery-stage {
+  --stage-max-h: min(50dvh, 450px);
   position: relative;
+  flex: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: 460px;
-  padding: 56px 24px 28px;
+  min-height: 0;
+  padding: 14px 18px;
   background: radial-gradient(circle at 50% 42%, #111c24 0%, #080d10 74%);
   color: #f1f5f9;
   overflow: hidden;
 }
 
+dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-delivery-stage {
+  --stage-max-h: min(64dvh, 540px);
+  padding: 18px;
+}
+
+dialog.vs-player.vs-delivery-dialog[data-layout="record"] .vs-delivery-stage {
+  padding: 16px 18px;
+}
+
 .vs-stage-overlay-top {
   position: absolute;
   z-index: 3;
-  inset: 14px 16px auto 16px;
+  inset: 12px 16px auto 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   pointer-events: none;
 }
@@ -53,7 +292,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 72%;
+  max-width: 84%;
   padding: 4px 10px;
   border: 1px solid #ffffff24;
   border-radius: 999px;
@@ -73,45 +312,54 @@
   color: #ccfbf1;
 }
 
-.vs-stage-status-wrap {
-  flex: 0 0 auto;
-}
-
-.vs-delivery-stage .vs-status {
-  box-shadow: 0 2px 10px #00000040;
-}
-
 .vs-stage-canvas {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 100%;
-  min-height: 320px;
+  width: min(100%, calc(var(--delivery-aspect, 1.7778) * var(--stage-max-h)));
+  aspect-ratio: var(--delivery-aspect, 16 / 9);
+  max-height: var(--stage-max-h);
+  min-height: 0;
+  margin-inline: auto;
 }
 
-.vs-delivery-stage video {
+dialog.vs-player.vs-delivery-dialog[data-layout="record"] .vs-stage-canvas {
+  width: 100%;
+  aspect-ratio: auto;
+  max-height: none;
+}
+
+.vs-delivery-stage video,
+.vs-delivery-stage .vs-details-poster {
   display: block;
   width: 100%;
+  height: 100%;
   max-width: 100%;
-  max-height: min(68dvh, 620px);
+  max-height: 100%;
+  min-height: 0;
   border-radius: 10px;
   background: #000;
   object-fit: contain;
   box-shadow: 0 12px 36px #00000066;
 }
 
-.vs-delivery-stage .vs-details-poster {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: min(64dvh, 580px);
-  min-height: 0;
-  border-radius: 12px;
-  object-fit: contain;
-  box-shadow: 0 14px 40px #00000066;
+.vs-autoplay-hint {
+  position: absolute;
+  z-index: 4;
+  inset: auto 12px 46px 12px;
+  margin: 0 auto;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  padding: 4px 12px;
+  border: 1px solid #ffffff2b;
+  border-radius: 999px;
+  background: #080d10d9;
+  color: #e2e8f0;
+  font-size: .75rem;
+  text-align: center;
+  pointer-events: none;
 }
 
 .vs-stage-cta-layer {
@@ -166,9 +414,9 @@
   display: grid;
   justify-items: center;
   align-content: center;
-  gap: 10px;
-  width: min(380px, 100%);
-  padding: 28px 22px;
+  gap: 8px;
+  width: min(520px, 100%);
+  padding: 20px 22px;
   border: 1px dashed #ffffff24;
   border-radius: 14px;
   background: #0f1720b3;
@@ -243,20 +491,17 @@
 .vs-delivery-inspector {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--vs-line);
+  border-top: 1px solid var(--vs-line);
   background: var(--vs-surface);
 }
 
-.vs-delivery-inspector .vs-player-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--vs-line);
+dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-delivery-inspector {
+  border-top: 0;
+  border-left: 1px solid var(--vs-line);
+  overflow: hidden;
 }
 
 .vs-inspector-title-group {
@@ -274,17 +519,6 @@
   text-overflow: ellipsis;
 }
 
-.vs-inspector-provider {
-  flex: 0 0 auto;
-  padding: 2px 7px;
-  border: 1px solid var(--vs-line);
-  border-radius: 6px;
-  background: var(--vs-field);
-  color: var(--vs-muted);
-  font-size: .6875rem;
-  font-weight: 600;
-}
-
 .vs-inspector-nav {
   display: flex;
   align-items: center;
@@ -292,7 +526,7 @@
   flex: 0 0 auto;
 }
 
-.video-studio .vs-inspector-nav .vs-icon {
+dialog.vs-player.vs-delivery-dialog .vs-inspector-nav .vs-icon {
   width: 32px;
   min-height: 32px;
   border-radius: 8px;
@@ -301,31 +535,59 @@
 .vs-inspector-scroll {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px 16px 16px;
+  padding: 14px 18px 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   scrollbar-width: thin;
 }
 
-/* Primary action strip */
-.vs-delivery-actions {
+dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-inspector-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (min-width: 821px) {
+  dialog.vs-player.vs-delivery-dialog[data-layout="landscape"] .vs-inspector-scroll {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    align-items: start;
+    gap: 14px 20px;
+  }
+  dialog.vs-player.vs-delivery-dialog[data-layout="landscape"] .vs-canvas-shot-card {
+    grid-column: 1 / -1;
+  }
+}
+
+.vs-canvas-shot-card {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) auto auto;
-  gap: 8px;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid var(--vs-soft-line);
+  border-radius: 10px;
+  background: var(--vs-soft);
+  font-size: .75rem;
 }
 
-.vs-delivery-actions .vs-primary,
-.vs-delivery-actions .vs-button {
-  min-height: 38px;
-  padding: 7px 12px;
-  white-space: nowrap;
+.vs-canvas-shot-card strong {
+  color: var(--vs-ink);
+  font-size: .8125rem;
 }
 
-.vs-delivery-actions .vs-delivery-canvas-btn {
-  grid-column: 1 / -1;
+.vs-canvas-shot-card p {
+  margin: 0;
+  color: var(--vs-muted);
+  font-size: .6875rem;
+  line-height: 1.45;
+}
+
+.vs-shot-take-pill {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--vs-soft-line);
+  background: var(--vs-surface);
+  color: var(--vs-accent) !important;
+  font-weight: 700;
 }
 
 /* Honest prompt note */
@@ -360,6 +622,12 @@
   color: var(--vs-muted);
   font-size: .75rem;
   line-height: 1.55;
+}
+
+.vs-prompt-box.is-recorded {
+  color: var(--vs-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Spec grid inside .vs-job-details */
@@ -440,8 +708,58 @@
 }
 
 .vs-delivery-inspector .vs-job-details dl.vs-lifecycle-list .vs-job-id dd {
-  margin-top: 3px;
+  margin-top: 4px;
   text-align: left;
+}
+
+.vs-job-id-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vs-job-id-row code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vs-inline-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid var(--vs-line);
+  border-radius: 7px;
+  background: var(--vs-surface);
+  color: var(--vs-ink);
+  font: inherit;
+  font-size: .75rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s, color .15s;
+}
+
+.vs-inline-copy-btn:hover {
+  background: var(--vs-hover);
+  border-color: var(--vs-line-strong);
+}
+
+.vs-inline-copy-btn.is-copied {
+  border-color: var(--vs-soft-line);
+  background: var(--vs-soft);
+  color: var(--vs-accent);
+}
+
+.vs-inline-copy-btn:focus-visible,
+.vs-delivery-footer :is(button):focus-visible {
+  outline: 2px solid var(--vs-accent);
+  outline-offset: 2px;
 }
 
 .vs-delivery-alert {
@@ -465,52 +783,125 @@
   color: var(--vs-warn);
 }
 
-/* Loaded-file footer */
-.vs-delivery-inspector .vs-player-foot.vs-download-foot {
+/* Persistent bottom action footer (outside scrollable inspector) */
+dialog.vs-player.vs-delivery-dialog > .vs-delivery-footer {
   flex: none;
+  position: relative;
+  z-index: 5;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 16px;
-  border-top: 1px solid var(--vs-line);
-  background: var(--vs-surface);
-}
-
-/* Desktop keyboard shortcut bar */
-.vs-shortcut-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
-  padding: 9px 16px;
+  padding: 12px 18px;
   border-top: 1px solid var(--vs-line);
-  background: var(--vs-field);
-  color: var(--vs-muted);
-  font-size: .6875rem;
-}
-
-.vs-shortcut-bar kbd {
-  display: inline-block;
-  padding: 1px 5px;
-  border: 1px solid var(--vs-line-strong);
-  border-radius: 4px;
   background: var(--vs-surface);
+}
+
+.vs-delivery-footer-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.vs-delivery-footer-secondary:empty {
+  display: none;
+}
+
+.vs-delivery-footer-primary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.vs-delivery-footer :is(.vs-primary, .vs-button, .vs-text) {
+  min-height: 38px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.vs-delivery-footer .vs-primary {
+  padding: 8px 16px;
+}
+
+.vs-delivery-footer .vs-button {
+  padding: 7px 12px;
+}
+
+.vs-delivery-footer .vs-delivery-release-btn {
+  padding: 6px 8px;
+}
+
+.vs-download-anchor {
+  display: none;
+}
+
+/* Compact overflow menu for secondary actions on narrow screens */
+.vs-more-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.vs-more-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  min-width: 148px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--vs-line-strong);
+  border-radius: 11px;
+  background: var(--vs-surface);
+  box-shadow: 0 12px 32px #0409142e;
+}
+
+.dark dialog.vs-player.vs-delivery-dialog .vs-more-menu {
+  box-shadow: 0 14px 36px #00000080;
+}
+
+.vs-more-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--vs-ink);
-  font: 600 .6875rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: inherit;
+  font-size: .8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s;
 }
 
-/* Tablet / Narrow Desktop */
-@media (max-width: 1024px) and (min-width: 821px) {
-  .video-studio dialog.vs-player.vs-delivery-dialog[open] {
-    grid-template-columns: minmax(0, 1.35fr) minmax(300px, 360px);
-  }
+.vs-more-item:hover,
+.vs-more-item:focus-visible {
+  background: var(--vs-hover);
+  outline: none;
 }
 
-/* Mobile: Stage capped at 40-46dvh, Inspector independently scrollable below, hide keyboard hints */
+.vs-more-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--vs-accent);
+}
+
+/* Mobile: vertical stack across landscape, portrait, and record */
 @media (max-width: 820px) {
-  .video-studio dialog.vs-player.vs-delivery-dialog {
+  dialog.vs-player.vs-delivery-dialog,
+  dialog.vs-player.vs-delivery-dialog[data-layout="portrait"],
+  dialog.vs-player.vs-delivery-dialog[data-layout="record"] {
     inset: 0;
     width: 100%;
     height: 100dvh;
@@ -521,32 +912,35 @@
     border-radius: 0;
   }
 
-  .video-studio dialog.vs-player.vs-delivery-dialog[open] {
+  dialog.vs-player.vs-delivery-dialog[open] {
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
 
-  .vs-delivery-stage {
+  dialog.vs-player.vs-delivery-dialog > .vs-player-head {
+    padding: max(10px, env(safe-area-inset-top, 0px)) 14px 10px;
+  }
+
+  .vs-delivery-body,
+  dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-delivery-body {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .vs-delivery-stage,
+  dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-delivery-stage {
+    --stage-max-h: 40dvh;
     flex: 0 0 auto;
-    min-height: 220px;
-    max-height: 44dvh;
-    padding: calc(46px + env(safe-area-inset-top, 0px)) 14px 16px;
+    min-height: 0;
+    padding: 10px 12px;
   }
 
   .vs-stage-overlay-top {
-    top: max(10px, env(safe-area-inset-top, 0px));
+    top: 10px;
     right: 12px;
     left: 12px;
-  }
-
-  .vs-stage-canvas {
-    min-height: 156px;
-  }
-
-  .vs-delivery-stage video,
-  .vs-delivery-stage .vs-details-poster {
-    max-height: 34dvh;
   }
 
   .vs-cinema-state {
@@ -554,35 +948,56 @@
     gap: 6px;
   }
 
-  .vs-delivery-inspector {
+  .vs-delivery-inspector,
+  dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-delivery-inspector {
     flex: 1 1 auto;
     min-height: 0;
     border-left: 0;
     border-top: 1px solid var(--vs-line);
+    overflow: visible;
   }
 
-  .vs-delivery-inspector .vs-player-head {
-    padding: 10px 14px;
-  }
-
+  dialog.vs-player.vs-delivery-dialog[data-layout="portrait"] .vs-inspector-scroll,
   .vs-inspector-scroll {
-    padding: 12px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+    overflow: visible;
+    padding: 12px 14px 16px;
   }
 
-  .vs-delivery-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  dialog.vs-player.vs-delivery-dialog > .vs-delivery-footer {
+    gap: 8px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
   }
 
-  .vs-delivery-actions .vs-primary {
-    grid-column: 1 / -1;
+  .vs-delivery-footer-secondary,
+  .vs-delivery-footer-primary {
+    gap: 8px;
   }
 
-  .video-studio .vs-inspector-nav .vs-icon {
-    width: 40px;
+  .vs-delivery-footer :is(.vs-primary, .vs-button, .vs-text) {
     min-height: 40px;
   }
 
-  .vs-shortcut-bar {
-    display: none;
+  .vs-inline-copy-btn {
+    min-height: 36px;
+    padding: 5px 10px;
+  }
+
+  dialog.vs-player.vs-delivery-dialog .vs-inspector-nav .vs-icon {
+    width: 40px;
+    min-height: 40px;
+  }
+}
+
+@media (max-width: 360px) {
+  dialog.vs-player.vs-delivery-dialog > .vs-delivery-footer {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .vs-delivery-footer .vs-primary {
+    padding: 8px 14px;
+  }
+
+  .vs-delivery-footer .vs-button {
+    padding: 7px 10px;
   }
 }

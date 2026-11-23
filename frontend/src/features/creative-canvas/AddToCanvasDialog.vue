@@ -194,6 +194,7 @@ function onKeydown(event: KeyboardEvent) {
   if (!isTopmostDialog()) return
   event.preventDefault()
   event.stopPropagation()
+  event.stopImmediatePropagation()
   close()
 }
 
@@ -266,7 +267,7 @@ watch(
         previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
       }
       if (typeof window !== 'undefined') {
-        window.addEventListener('keydown', onKeydown)
+        window.addEventListener('keydown', onKeydown, true)
       }
       if (props.payload) {
         void loadBoards()
@@ -277,7 +278,7 @@ watch(
       ;(closeBtnRef.value ?? cardRef.value)?.focus()
     } else {
       if (typeof window !== 'undefined') {
-        window.removeEventListener('keydown', onKeydown)
+        window.removeEventListener('keydown', onKeydown, true)
       }
       closeNativeDialog(dialogRef.value)
       resetState()
@@ -297,7 +298,7 @@ onBeforeUnmount(() => {
   openCycle += 1
   controller?.abort()
   if (typeof window !== 'undefined') {
-    window.removeEventListener('keydown', onKeydown)
+    window.removeEventListener('keydown', onKeydown, true)
   }
   closeNativeDialog(dialogRef.value)
   restoreFocus()

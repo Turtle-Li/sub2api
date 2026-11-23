@@ -8,6 +8,7 @@ import {
 import {
   findSourceImageNode,
   isCanvasUuid,
+  resolveDraftLineage,
   sanitizeImageLocator,
 } from '@/features/creative-canvas/document'
 import {
@@ -16,9 +17,10 @@ import {
   readStoredCanvasBindingMeta,
   stageCanvasDraftHandoff,
 } from '@/features/creative-canvas/handoff'
-import type { CanvasAttempt } from '@/features/creative-canvas/types'
+import type { CanvasAttempt, CanvasDraftContinuationMode } from '@/features/creative-canvas/types'
+import { resolveDraftTakes } from '@/features/creative-canvas/upstreamAdapter'
 import { useAuthStore } from '@/stores/auth'
-import { clearImage, prepareImage, type VideoSource } from './source'
+import { clearImage, prepareImage, prepareVideoTailFrame, type VideoSource } from './source'
 
 export interface CanvasRouteRef {
   readonly present: boolean
@@ -36,7 +38,10 @@ export interface ReadyCanvasDraft {
   readonly draftTitle: string
   readonly prompt: string
   readonly hasSourceImage: boolean
+  readonly hasTailFrameSource: boolean
+  readonly continuationMode: CanvasDraftContinuationMode
   readonly sourceImageTitle: string
+  readonly sourceSummary: string
   readonly unavailableAttempt: boolean
   readonly attempts: readonly CanvasAttempt[]
 }
@@ -261,10 +266,141 @@ export async function verifyCanvasDraft(options: VerifyCanvasDraftOptions): Prom
       }
     }
 
+    const lineage = resolveDraftLineage(canvas.document, nodeId)
     const sourceNode = findSourceImageNode(canvas.document, nodeId)
     let restoredSource: VideoSource | null = null
+    let hasSourceImage = false
+    let hasTailFrameSource = false
+    let sourceSummary = '纯文字分镜草稿'
 
-    if (sourceNode) {
+    if (lineage.continuation) {
+      const resolvedInput = canvas.inputs?.[nodeId]
+      if (!resolvedInput) {
+        clearImage()
+        return {
+          state: {
+            status: 'source-unavailable',
+            canvasId,
+            nodeId,
+            message: '服务端未返回该续镜节点的来源核验记录（inputs），已停止提交，请返回画布刷新后重试。',
+            retryable: true,
+          },
+          source: null,
+        }
+      }
+      if (resolvedInput.available !== true) {
+        clearImage()
+        return {
+          state: {
+            status: 'source-unavailable',
+            canvasId,
+            nodeId,
+            message: resolvedInput.video_id
+              ? '该续镜固定的上游视频成片已过期、不可用或原授权已失效，无法提取尾帧提交。'
+              : '该续镜沿用的来源原图已过期、不可用或原授权已失效，无法以此草稿生成视频。',
+            retryable: true,
+          },
+          source: null,
+        }
+      }
+
+      if (resolvedInput.image) {
+        const validatedLocator = sanitizeImageLocator(resolvedInput.image)
+        if (!validatedLocator) {
+          clearImage()
+          return {
+            state: {
+              status: 'source-unavailable',
+              canvasId,
+              nodeId,
+              message: '该续镜沿用的来源原图定位无效，已禁止提交。',
+              retryable: false,
+            },
+            source: null,
+          }
+        }
+        try {
+          restoredSource = prepareImage(userId, validatedLocator)
+          hasSourceImage = true
+          sourceSummary = `沿用素材 · ${lineage.originNode?.title || `第 ${validatedLocator.index + 1} 张原图`}`
+        } catch {
+          clearImage()
+          return {
+            state: {
+              status: 'source-unavailable',
+              canvasId,
+              nodeId,
+              message: '无法恢复续镜沿用的私有原图授权，请返回画布检查状态。',
+              retryable: true,
+            },
+            source: null,
+          }
+        }
+      } else if (resolvedInput.video_id) {
+        if (!isCanvasUuid(resolvedInput.video_id)) {
+          clearImage()
+          return {
+            state: {
+              status: 'source-unavailable',
+              canvasId,
+              nodeId,
+              message: '该续镜固定的视频任务标识无效，已禁止提交。',
+              retryable: false,
+            },
+            source: null,
+          }
+        }
+        let takeSuffix = ''
+        if (lineage.mode === 'take-tail' && lineage.parentNode) {
+          const { takes } = resolveDraftTakes(lineage.parentNode, canvas.attempts)
+          const matchedTake = takes.find(item => item.requestId === resolvedInput.video_id)
+          takeSuffix = matchedTake ? `（v${matchedTake.takeNumber}）` : ''
+        }
+        const parentName = lineage.parentNode?.title || (lineage.mode === 'imported-video-tail' ? '视频作品' : '上一镜')
+        const tailLabel =
+          lineage.mode === 'imported-video-tail'
+            ? `导入视频尾帧 · ${parentName}`
+            : `成片尾帧续镜 · ${parentName}${takeSuffix}`
+        try {
+          restoredSource = prepareVideoTailFrame(userId, {
+            videoId: resolvedInput.video_id,
+            label: tailLabel,
+          })
+          hasTailFrameSource = true
+          sourceSummary =
+            lineage.mode === 'imported-video-tail'
+              ? `用导入视频尾帧续镜 · ${parentName}`
+              : `用这版成片尾帧续镜 · ${parentName}${takeSuffix}`
+        } catch {
+          clearImage()
+          return {
+            state: {
+              status: 'source-unavailable',
+              canvasId,
+              nodeId,
+              message: '无法建立续镜视频尾帧的本机提取授权，请返回画布确认后再试。',
+              retryable: true,
+            },
+            source: null,
+          }
+        }
+      } else if (staged?.expectsSourceImage || staged?.expectsTailFrame) {
+        clearImage()
+        return {
+          state: {
+            status: 'source-unavailable',
+            canvasId,
+            nodeId,
+            message: '原续镜草稿预期的素材来源已变化，请返回画布重新确认。',
+            retryable: false,
+          },
+          source: null,
+        }
+      } else {
+        clearImage()
+        sourceSummary = `沿用素材 · ${lineage.parentNode?.title || '纯文字上一镜'}`
+      }
+    } else if (sourceNode) {
       const assetStatus = canvas.assets[sourceNode.id]
       if (!assetStatus || assetStatus.available !== true) {
         clearImage()
@@ -297,6 +433,8 @@ export async function verifyCanvasDraft(options: VerifyCanvasDraftOptions): Prom
 
       try {
         restoredSource = prepareImage(userId, validatedLocator)
+        hasSourceImage = true
+        sourceSummary = `来源原图 · ${sourceNode.title || `第 ${validatedLocator.index + 1} 张`}`
       } catch {
         clearImage()
         return {
@@ -310,14 +448,14 @@ export async function verifyCanvasDraft(options: VerifyCanvasDraftOptions): Prom
           source: null,
         }
       }
-    } else if (staged?.expectsSourceImage) {
+    } else if (staged?.expectsSourceImage || staged?.expectsTailFrame) {
       clearImage()
       return {
         state: {
           status: 'source-unavailable',
           canvasId,
           nodeId,
-          message: '原草稿关联的来源原图已被移除，请返回画布确认后再进入。',
+          message: '原草稿关联的来源素材已被移除，请返回画布确认后再进入。',
           retryable: false,
         },
         source: null,
@@ -343,7 +481,10 @@ export async function verifyCanvasDraft(options: VerifyCanvasDraftOptions): Prom
         canvasTitle: canvas.title,
         draftTitle,
         prompt,
-        expectsSourceImage: Boolean(sourceNode),
+        expectsSourceImage: hasSourceImage,
+        expectsTailFrame: hasTailFrameSource,
+        continuationMode: lineage.mode,
+        sourceSummary,
       })
     } catch {
       clearImage()
@@ -368,8 +509,11 @@ export async function verifyCanvasDraft(options: VerifyCanvasDraftOptions): Prom
         canvasTitle: canvas.title,
         draftTitle,
         prompt,
-        hasSourceImage: Boolean(sourceNode),
+        hasSourceImage,
+        hasTailFrameSource,
+        continuationMode: lineage.mode,
         sourceImageTitle: sourceNode?.title || '',
+        sourceSummary,
         unavailableAttempt,
         attempts: nodeAttempts,
       },

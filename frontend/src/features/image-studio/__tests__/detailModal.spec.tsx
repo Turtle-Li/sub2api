@@ -154,8 +154,9 @@ describe('DetailModal', () => {
     await decode(800, 1200)
     expect(dialog.dataset.layout).toBe('portrait')
     expect(Number(dialog.style.getPropertyValue('--detail-aspect'))).toBeCloseTo(2 / 3)
-    // A historical job without a recorded tier must not invent one from its pixels.
-    expect(dialog.querySelector('.studio-detail-facts')?.textContent).not.toMatch(/分辨率档位|原图尺寸|800 × 1200/)
+    // A historical job without a recorded tier must not invent one from its pixels, while decoded pixels remain explicit.
+    expect(dialog.querySelector('.studio-detail-facts')?.textContent).not.toContain('分辨率档位')
+    expect(dialog.querySelector('.studio-detail-facts')?.textContent).toContain('实际像素800 × 1200')
 
     await act(async () => dialog.querySelector<HTMLButtonElement>('button[aria-label="下一张"]')!.click())
     await decode(1600, 900)
@@ -245,5 +246,47 @@ describe('DetailModal', () => {
     expect(dialog.dataset.layout).toBe('portrait')
     expect(Number(dialog.style.getPropertyValue('--detail-aspect'))).toBeCloseTo(720 / 1280)
     expect(api.image).not.toHaveBeenCalled()
+  })
+
+  it('steps multi-image index with ArrowLeft/ArrowRight and does not dismiss DetailModal on Escape while a topmost external dialog (AddToCanvasDialog) is open', async () => {
+    const close = vi.fn()
+    const api = makeAPI()
+    const task = makeTask({ item: { image_count: 2 } })
+    const { host, root } = mount()
+
+    const externalDialog = document.createElement('dialog')
+    externalDialog.className = 'cc-add-dialog'
+    document.body.append(externalDialog)
+    const prevCleanup = cleanup
+    cleanup = () => {
+      prevCleanup()
+      externalDialog.remove()
+    }
+
+    await act(async () => {
+      root.render(<DetailModal task={task} api={api} close={close} edit={vi.fn()} cancel={vi.fn()} />)
+    })
+
+    const dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="任务详情"]')!
+    expect(dialog.textContent).toContain('1 / 2')
+
+    await act(async () => {
+      dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))
+    })
+    expect(dialog.textContent).toContain('2 / 2')
+
+    // Simulate AddToCanvasDialog opened above DetailModal
+    externalDialog.showModal()
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    })
+    expect(close).not.toHaveBeenCalled()
+
+    // Once topmost external dialog closes, Escape dismisses DetailModal
+    externalDialog.close()
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    })
+    expect(close).toHaveBeenCalledOnce()
   })
 })

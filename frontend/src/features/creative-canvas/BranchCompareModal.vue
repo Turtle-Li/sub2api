@@ -90,19 +90,20 @@
 
           <div class="cc-node-foot">
             <button
-              type="button"
-              class="cc-btn is-primary is-sm"
-              @click="emit('openInVideoStudio', item.node.id)"
-            >
-              去工作台确认
-            </button>
-            <button
               v-if="item.activeTake?.job?.status === 'completed' && !item.activeTake.unavailable"
               type="button"
-              class="cc-btn is-sm"
-              @click="emit('previewJob', item.activeTake.job, $event.currentTarget as HTMLElement)"
+              class="cc-btn is-primary is-sm"
+              @click="emit('previewJob', item.activeTake.job, $event.currentTarget as HTMLElement, item.node.id)"
             >
-              播放成片
+              查看成片
+            </button>
+            <button
+              type="button"
+              class="cc-btn is-sm"
+              :class="{ 'is-primary': !(item.activeTake?.job?.status === 'completed' && !item.activeTake.unavailable) }"
+              @click="emit('openInVideoStudio', item.node.id)"
+            >
+              前往工作台确认生成
             </button>
           </div>
         </section>
@@ -143,7 +144,7 @@ const emit = defineEmits<{
   close: []
   pinTake: [draftNodeId: string, requestId: string]
   openInVideoStudio: [draftNodeId: string]
-  previewJob: [job: VideoJob, trigger: HTMLElement]
+  previewJob: [job: VideoJob, trigger: HTMLElement, nodeId?: string]
 }>()
 
 const backdropRef = ref<HTMLElement>()
@@ -154,7 +155,7 @@ let previouslyFocused: HTMLElement | null = null
 function isTopmostDialog(): boolean {
   const el = backdropRef.value
   if (!el || typeof document === 'undefined') return true
-  const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'))
+  const dialogs = Array.from(document.querySelectorAll('dialog[open], [role="dialog"]'))
   return dialogs.length === 0 || dialogs[dialogs.length - 1] === el
 }
 

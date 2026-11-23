@@ -36,6 +36,8 @@
 
 **本轮实际验证：** 在本机 Node 26.10.0 对固定版本的 [画布放置](https://github.com/BeatAPI/BeatDesign/blob/796d89f0f451b436877836f91392152f43c3e270/src/core/beatcanvas/canvas-placement.test.ts)、[重叠避让](https://github.com/BeatAPI/BeatDesign/blob/796d89f0f451b436877836f91392152f43c3e270/src/core/beatcanvas/upload-layout.test.ts)、[草稿版本](https://github.com/BeatAPI/BeatDesign/blob/796d89f0f451b436877836f91392152f43c3e270/src/core/beatcanvas/generation-history.test.ts) 三个上游测试文件，原样用内存模块加载、仅剥离 TS 类型执行，**12 项通过，0 失败，0 跳过**。没有启动 BeatDesign，没有运行它的浏览器套件，也没有向任何生成渠道发请求。
 
+进一步核对了同一 BeatDesign revision 的浏览器尾帧提取模块，以及 ComfyUI 导航的固定版本。源文件、测试、许可和本项目的有意差异见[续镜与画布内审片](CREATIVE_CANVAS_CONTINUATIONS.md)。
+
 ## 为什么不选另外两条路线
 
 - [火宝无限画布](https://github.com/chatfire-AI/huobao-canvas/blob/9b7f7389693dcc3ab02afe67890ff76b90d89761/README.md) 产品形态和 Vue 技术栈都很接近，但[该版本许可是 CC BY-NC-SA 4.0](https://github.com/chatfire-AI/huobao-canvas/blob/9b7f7389693dcc3ab02afe67890ff76b90d89761/LICENSE)，作者明确商业服务须另获书面许可。我们的分组付费工作台不纳入它的代码、样式、素材或示例；也不引入其浏览器自带 Key 和独立运行队列。

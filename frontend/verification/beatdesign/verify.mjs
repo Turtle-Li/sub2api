@@ -6,10 +6,10 @@ import { spawnSync } from 'node:child_process'
 import ts from 'typescript'
 
 const upstream = new URL('../../src/features/creative-canvas/upstream/', import.meta.url)
-const tests = ['canvas-placement.test', 'upload-layout.test', 'generation-history.test']
+const tests = ['canvas-placement.test', 'upload-layout.test', 'generation-history.test', 'video-frame.test']
 const temp = await mkdtemp(join(tmpdir(), 'sub2api-canvas-tests-'))
 try {
-  for (const [root, names] of [[upstream, ['canvas-types', 'upload-layout', 'generation-history']], [new URL('./', import.meta.url), tests]]) {
+  for (const [root, names] of [[upstream, ['canvas-types', 'upload-layout', 'generation-history', 'video-frame']], [new URL('./', import.meta.url), tests]]) {
     for (const name of names) {
       const input = await readFile(new URL(`${name}.ts`, root), 'utf8')
       const { outputText } = ts.transpileModule(input, { compilerOptions: {

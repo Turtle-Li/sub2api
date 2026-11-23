@@ -49,14 +49,14 @@ async function describeShot() { await get('textarea').setValue('镜头拉远，�
 const generate = () => get('button[type=submit]').element as HTMLButtonElement
 async function click(label: string, area?: string) { button(label, area).click(); await flushPromises() }
 async function chooseModel(label: string) {
-  await get('[aria-label="选择视频模型与渠道"]').trigger('click')
+  await get('[aria-label="选择视频模型"]').trigger('click')
   await nextTick()
   const option = [...document.querySelectorAll<HTMLButtonElement>('.vs-model-dialog [role="option"]')]
     .find(node => node.querySelector('strong')?.textContent?.trim() === label)
   if (!option) throw new Error(`缺少模型选项：${label}`)
   option.click()
   await nextTick()
-  button('使用此模型与渠道', '.vs-model-dialog').click()
+  button('使用此模型', '.vs-model-dialog').click()
   await flushPromises()
 }
 async function upload(label: string, file: File) {
@@ -98,7 +98,8 @@ describe('创作栏：能力、素材和原图归属', () => {
     await get('[aria-label="请求时长"]').setValue('7'); expect(current!.text()).toContain('1.75 USD')
     await chooseModel('Muse'); expect(current!.text()).toContain('预计消耗1.5 CNY')
     expect(current!.find('[aria-label="请求时长"]').exists()).toBe(false)
-    expect(current!.text()).toContain('渠道自动'); expect(current!.text()).toContain('按当前渠道默认档报价')
+    expect(current!.text()).toContain('时长自动'); expect(current!.text()).toContain('按默认档报价')
+    expect(current!.text()).not.toContain('渠道自动')
     expect(current!.find('[aria-label="上传首帧"]').exists()).toBe(false); expect(current!.find('[aria-label="上传参考图 1"]').exists()).toBe(true)
     expect(video.create).not.toHaveBeenCalled()
   })
@@ -188,7 +189,7 @@ describe('创作栏：能力、素材和原图归属', () => {
     expect(current!.text()).toContain('首尾帧仅支持图片')
     expect(generate().disabled).toBe(true)
   })
-  it('Muse 原生画布意图与“渠道自动”在刷新同一报价目录时保持不变，不冲突可正常提交', async () => {
+  it('Muse 原生画布意图与“自动”画幅在刷新同一报价目录时保持不变，不冲突可正常提交', async () => {
     video.models.mockResolvedValue({ enabled: true, items: [museRich] })
     mountPage(); await flushPromises(); await describeShot()
     await get('[aria-label="原生画布意图"]').setValue('1280x720')
@@ -197,7 +198,7 @@ describe('创作栏：能力、素材和原图归属', () => {
     expect(firstBody.native_size).toBe('1280x720'); expect(firstBody.size).toBeUndefined(); expect('seconds' in firstBody).toBe(false)
 
     await click('另起新草稿'); await describeShot()
-    await click('渠道自动', '.vs-choice-grid')
+    await click('自动', '.vs-choice-grid')
     await submit(); await vi.waitFor(() => expect(video.create).toHaveBeenCalledTimes(2))
     const secondBody: VideoSubmission = video.create.mock.calls[1][0]
     expect(secondBody.size).toBeUndefined(); expect(secondBody.native_size).toBeUndefined(); expect('seconds' in secondBody).toBe(false)
@@ -222,7 +223,7 @@ describe('创作栏：能力、素材和原图归属', () => {
   it('模型选择器聚焦取消按 Enter 不切换模型且回焦；手机端不显示键盘提示', async () => {
     video.models.mockResolvedValue({ enabled: true, items: [museRich, fast] })
     mountPage(); await flushPromises()
-    const trigger = get('[aria-label="选择视频模型与渠道"]').element as HTMLButtonElement
+    const trigger = get('[aria-label="选择视频模型"]').element as HTMLButtonElement
     trigger.focus(); trigger.click(); await nextTick()
     expect(current!.find('.vs-picker-kbd').exists()).toBe(true)
     const fastOption = [...document.querySelectorAll<HTMLButtonElement>('.vs-model-dialog [role="option"]')]
@@ -240,7 +241,7 @@ describe('创作栏：能力、素材和原图归属', () => {
     current!.unmount(); desktop = false
     mountPage(); await flushPromises()
     await click('展开 ↑')
-    await get('[aria-label="选择视频模型与渠道"]').trigger('click'); await nextTick()
+    await get('[aria-label="选择视频模型"]').trigger('click'); await nextTick()
     expect(current!.find('.vs-picker-kbd').exists()).toBe(false)
   })
   it('从 H3 切回 Muse 不带入时长；历史 Muse 参数复用也不带入 seconds', async () => {

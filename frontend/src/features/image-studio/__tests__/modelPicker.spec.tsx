@@ -64,13 +64,52 @@ describe('image model selection', () => {
     expect(Array.from(host.querySelectorAll('nav button small')).map(count => Number(count.textContent)).sort()).toEqual([0, 0, 1, 2])
     const options = host.querySelectorAll<HTMLButtonElement>('[role="option"]')
     expect(options).toHaveLength(2)
+    expect(options[0]?.textContent).toContain('当前')
     expect(options[0]?.textContent).toContain('1K · 额度 / 张')
     expect(options[1]?.textContent).toContain('价格待配置1K 分辨率')
     expect(options[1]?.textContent).not.toContain('额度 / 张')
     options[0]?.focus()
     await act(async () => options[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
     expect(document.activeElement).toBe(options[1])
-    await act(async () => options[1]?.click())
+    expect(host.querySelector('.studio-model-detail')).toBeNull()
+    const infoButtons = host.querySelectorAll<HTMLButtonElement>('button.mp-info-btn')
+    expect(infoButtons).toHaveLength(2)
+    await act(async () => { infoButtons[1]?.focus() })
+    expect(host.querySelector('.studio-model-detail')?.textContent).toContain('候选预览')
+    await act(async () => { infoButtons[1]?.blur() })
+    expect(host.querySelector('.studio-model-detail')).toBeNull()
+    expect(change).not.toHaveBeenCalled()
+    await act(async () => host.querySelector<HTMLButtonElement>('.studio-picker-cancel')?.click())
+    expect(change).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(trigger)
+    expect(host.querySelector('dialog')?.open).toBe(false)
+
+    await act(async () => trigger.click())
+    const reopenedOptions = host.querySelectorAll<HTMLButtonElement>('[role="option"]')
+    await act(async () => reopenedOptions[1]?.click())
+    expect(change).not.toHaveBeenCalled()
+    await act(async () => host.querySelector<HTMLButtonElement>('.studio-picker-confirm')?.click())
+    expect(change).toHaveBeenCalledWith('openai_images:image-b')
+    expect(document.activeElement).toBe(trigger)
+    expect(host.querySelector('dialog')?.open).toBe(false)
+  })
+  it('moves focus from the search box into candidate options on ArrowDown and applies on Enter', async () => {
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host), change = vi.fn()
+    cleanup = () => { act(() => root.unmount()); host.remove() }
+    await act(async () => root.render(<ModelPicker models={[first, second, third]} value="openai_images:image-a" size="1K" disabled={false} onChange={change} />))
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!
+    await act(async () => trigger.click())
+
+    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!
+    expect(document.activeElement).toBe(search)
+    await act(async () => search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    const options = host.querySelectorAll<HTMLButtonElement>('[role="option"]')
+    expect(document.activeElement).toBe(options[1])
+    expect(options[1]?.getAttribute('aria-selected')).toBe('true')
+    expect(change).not.toHaveBeenCalled()
+
+    await act(async () => options[1]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     expect(change).toHaveBeenCalledWith('openai_images:image-b')
     expect(document.activeElement).toBe(trigger)
     expect(host.querySelector('dialog')?.open).toBe(false)
@@ -84,37 +123,133 @@ describe('image model selection', () => {
     expect(modelBadge('muse_images', 'muse-image')).toMatchObject({ key: 'muse', mark: 'M', label: 'Muse' })
     expect(modelBadge('workbuddy_images', 'cn:hunyuan-image-alpha-edit')).toMatchObject({ key: 'hunyuan', mark: 'H', label: 'Alpha Edit' })
   })
-  it('renders the trigger as a platform mark plus short name, keeping the full ID in a tooltip', async () => {
-    const long: BatchImageModel = { id: 'doubao-seedream-5-0-pro-260628', provider: 'seedream_images', object: 'model' }
+  it('uses one consistent model display name across trigger, option list, and detail pane', async () => {
+    const long: BatchImageModel = {
+      id: 'doubao-seedream-5-0-pro-260628',
+      provider: 'seedream_images',
+      object: 'model',
+      capabilities: {
+        image_sizes: ['1K', '2K'],
+        aspect_ratios: ['1:1', '16:9'],
+        default_image_size: '1K',
+        default_aspect_ratio: '1:1',
+        max_reference_images: 4,
+        response_mime_types: ['image/png'],
+      },
+      prices: { '1K': { min: 0.32, max: 0.32 } },
+    }
     const host = document.createElement('div'); document.body.append(host)
     const root = createRoot(host)
     cleanup = () => { act(() => root.unmount()); host.remove() }
     await act(async () => root.render(<ModelPicker models={[long]} value="seedream_images:doubao-seedream-5-0-pro-260628" size="1K" disabled={false} onChange={vi.fn()} />))
-    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')
-    expect(trigger?.querySelector('.studio-model-mark')?.textContent).toBe('S')
-    expect(trigger?.querySelector('.studio-model-copy strong')?.textContent).toBe('5.0 Pro')
-    expect(trigger?.querySelector('.studio-model-copy small')?.textContent).toBe('豆包 Seedream · doubao-seedream-5-0-pro-260628')
-    expect(trigger?.title).toBe('豆包 Seedream · doubao-seedream-5-0-pro-260628')
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')!
+    expect(trigger.querySelector('.studio-model-mark')?.textContent).toBe('S')
+    expect(trigger.querySelector('.studio-model-copy strong')?.textContent).toBe('doubao-seedream-5-0-pro-260628')
+    expect(trigger.querySelector('.studio-model-copy small')?.textContent).toBe('豆包 Seedream · 1K/2K · 最多 4 张参考图')
+    expect(trigger.title).toBe('doubao-seedream-5-0-pro-260628')
+
+    await act(async () => trigger.click())
+    const option = host.querySelector<HTMLButtonElement>('[role="option"]')!
+    expect(option.querySelector('strong')?.textContent).toBe('doubao-seedream-5-0-pro-260628')
+    expect(option.title).toBe('doubao-seedream-5-0-pro-260628')
+    expect(option.getAttribute('aria-label')).toContain('doubao-seedream-5-0-pro-260628')
+    expect(host.querySelector('.studio-model-detail')).toBeNull()
+    const infoBtn = host.querySelector<HTMLButtonElement>('button.mp-info-btn')!
+    await act(async () => infoBtn.click())
+    expect(host.querySelector('.studio-model-detail h3')?.textContent).toBe('doubao-seedream-5-0-pro-260628')
+    expect(host.textContent).not.toMatch(/线路|路由|API Key|分组|服务渠道/)
   })
-  it('keeps Google transport names out of the UI without changing model routing', async () => {
-    const models: BatchImageModel[] = ['vertex', 'gemini_api'].map(provider => ({ id: 'gemini-3-pro-image', provider, object: 'model' }))
+  it('keeps distinct provider:id entries separate, differentiates same-name options by price/spec, and omits routing copy', async () => {
+    const vertexModel: BatchImageModel = {
+      id: 'gemini-3-pro-image',
+      provider: 'vertex',
+      object: 'model',
+      capabilities: {
+        image_sizes: ['1K', '2K', '4K'],
+        aspect_ratios: ['1:1', '16:9'],
+        default_image_size: '1K',
+        default_aspect_ratio: '1:1',
+        max_reference_images: 14,
+        response_mime_types: ['image/png'],
+      },
+      prices: { '1K': { min: 0.12, max: 0.12 } },
+    }
+    const apiModel: BatchImageModel = {
+      id: 'gemini-3-pro-image',
+      provider: 'gemini_api',
+      object: 'model',
+      capabilities: {
+        image_sizes: ['1K', '2K'],
+        aspect_ratios: ['1:1'],
+        default_image_size: '1K',
+        default_aspect_ratio: '1:1',
+        max_reference_images: 4,
+        response_mime_types: ['image/png'],
+      },
+      prices: { '1K': { min: 0.28, max: 0.28 } },
+    }
     const change = vi.fn()
     const host = document.createElement('div'); document.body.append(host)
     const root = createRoot(host)
     cleanup = () => { act(() => root.unmount()); host.remove() }
-    await act(async () => root.render(<ModelPicker models={models} value="vertex:gemini-3-pro-image" size="1K" disabled={false} onChange={change} />))
+    await act(async () => root.render(<ModelPicker models={[vertexModel, apiModel]} value="vertex:gemini-3-pro-image" size="1K" disabled={false} onChange={change} />))
     const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')!
-    expect(trigger.textContent).toContain('Gemini')
-    expect(trigger.textContent).not.toContain('gemini-3-pro-image')
-    expect(trigger.title).toBe('Gemini')
+    expect(trigger.querySelector('.studio-model-copy strong')?.textContent).toBe('gemini-3-pro-image')
+    expect(trigger.title).toBe('gemini-3-pro-image')
     await act(async () => trigger.click())
     const options = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    const infoButtons = Array.from(host.querySelectorAll<HTMLButtonElement>('button.mp-info-btn'))
     expect(options).toHaveLength(2)
+    expect(infoButtons).toHaveLength(2)
     expect(options[0]?.textContent).toContain('gemini-3-pro-image')
+    expect(options[0]?.textContent).toContain('0.12')
+    expect(options[0]?.getAttribute('aria-label')).toContain('1K/2K/4K')
+    expect(options[1]?.textContent).toContain('gemini-3-pro-image')
+    expect(options[1]?.textContent).toContain('0.28')
+    expect(options[1]?.getAttribute('aria-label')).toContain('1K/2K')
     expect(options[0]?.textContent).not.toBe(options[1]?.textContent)
-    expect(host.textContent).not.toContain('Google Vertex')
-    await act(async () => options.find(option => option.getAttribute('aria-selected') === 'true')?.click())
-    expect(change).toHaveBeenCalledWith('vertex:gemini-3-pro-image')
+
+    // Clicking '?' opens full specs in popover without changing draft selection or triggering onChange
+    await act(async () => infoButtons[0]?.click())
+    expect(host.querySelector('.studio-model-detail')?.textContent).toContain('1K/2K/4K')
+    await act(async () => infoButtons[1]?.click())
+    expect(host.querySelector('.studio-model-detail')?.textContent).toContain('1K/2K')
+    expect(options[0]?.getAttribute('aria-selected')).toBe('true')
+    expect(change).not.toHaveBeenCalled()
+    expect(host.textContent).not.toMatch(/Google Vertex|vertex|gemini_api|线路 1|线路 2|路由|API Key|分组|服务渠道/)
+    expect(options.every(option => !/线路|路由|Vertex|API Key|分组/.test(`${option.title} ${option.getAttribute('aria-label') || ''}`))).toBe(true)
+
+    await act(async () => options[1]?.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('.studio-picker-confirm')?.click())
+    expect(change).toHaveBeenCalledWith('gemini_api:gemini-3-pro-image')
+  })
+
+  it('uniformly enables stacked-price row layout when any visible option has a long price', async () => {
+    const shortModel: BatchImageModel = {
+      id: '中文基础生图模型',
+      provider: 'openai_images',
+      object: 'model',
+      prices: { '1K': { min: 0.25, max: 0.25 } },
+    }
+    const longPriceModel: BatchImageModel = {
+      id: '超长中文高清商业摄影级图像生成大模型旗舰增强版',
+      provider: 'openai_images',
+      object: 'model',
+      prices: { '1K': { min: 1234.5678, max: 9876.5432 } },
+    }
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    cleanup = () => { act(() => root.unmount()); host.remove() }
+    await act(async () => root.render(<ModelPicker models={[shortModel, longPriceModel]} value="openai_images:中文基础生图模型" size="1K" disabled={false} onChange={vi.fn()} />))
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')?.click())
+
+    const list = host.querySelector('.mp-list')
+    expect(list?.classList.contains('is-stacked-price')).toBe(true)
+    const options = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    expect(options).toHaveLength(2)
+    expect(options[1]?.title).toBe(longPriceModel.id)
+    expect(options[1]?.getAttribute('aria-label')).toContain(longPriceModel.id)
+    expect(options[1]?.getAttribute('aria-label')).toContain('1,234.5678–9,876.5432')
   })
 
   it('shows missing native platforms without inventing selectable models', async () => {
@@ -124,7 +259,7 @@ describe('image model selection', () => {
     cleanup = () => { act(() => root.unmount()); host.remove() }
     await act(async () => root.render(<ModelPicker models={[]} value="" size="1K" disabled={false} onChange={change} />))
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="图片模型"]')?.click())
-    const platforms = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模型平台"] button'))
+    const platforms = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模型品牌"] button'))
     expect(platforms.map(button => button.textContent)).toEqual(expect.arrayContaining(['通义万相0', '豆包 Seedream0']))
     await act(async () => platforms.find(button => button.textContent?.includes('Seedream'))?.click())
     expect(host.textContent).toContain('确认工作台的模型和生图权限')
@@ -138,6 +273,7 @@ describe('image model selection', () => {
     expect(option.textContent).toContain(seedream.id)
     expect(host.querySelector('a[href="/keys"]')).toBeNull()
     await act(async () => option.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('.studio-picker-confirm')?.click())
     expect(change).toHaveBeenCalledOnce()
     expect(change).toHaveBeenCalledWith(`seedream_images:${seedream.id}`)
   })

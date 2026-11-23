@@ -1,6 +1,8 @@
 import { isSafeStudioOriginal } from '@/features/image-studio/workspaceAPI'
 import type {
+  CanvasAttempt,
   CanvasDocument,
+  CanvasDraftContinuationMode,
   CanvasEdgeDoc,
   CanvasImageLocator,
   CanvasNodeDoc,
@@ -19,12 +21,12 @@ export const MAX_CANVAS_NODES = 160
 export const MAX_CANVAS_EDGES = 320
 
 export const DEFAULT_VIEWPORT: CanvasViewport = Object.freeze({ x: 0, y: 0, zoom: 1 })
-export const DEFAULT_NODE_WIDTH = 264
+export const DEFAULT_NODE_WIDTH = 296
 export const DEFAULT_NODE_HEIGHT: Readonly<Record<CanvasNodeKind, number>> = Object.freeze({
-  image: 296,
-  video: 288,
-  'video-draft': 324,
-  note: 212,
+  image: 344,
+  video: 364,
+  'video-draft': 412,
+  note: 232,
 })
 
 export function isCanvasUuid(value: unknown): value is string {
@@ -86,8 +88,15 @@ function sanitizeOptionalText(value: unknown, maxLength: number): string | undef
   return trimmed.length > 0 ? trimmed : undefined
 }
 
+export function isMediaEdgeKinds(sourceKind: CanvasNodeKind, targetKind: CanvasNodeKind): boolean {
+  return (
+    targetKind === 'video-draft' &&
+    (sourceKind === 'image' || sourceKind === 'video' || sourceKind === 'video-draft')
+  )
+}
+
 export function isAllowedEdgeKinds(sourceKind: CanvasNodeKind, targetKind: CanvasNodeKind): boolean {
-  if (sourceKind === 'image' && targetKind === 'video-draft') return true
+  if (isMediaEdgeKinds(sourceKind, targetKind)) return true
   if (sourceKind === 'note' && (targetKind === 'image' || targetKind === 'video-draft')) return true
   return false
 }
@@ -185,13 +194,14 @@ export function sanitizeDocument(raw: Partial<CanvasDocument> | null | undefined
 
   const edges: CanvasEdgeDoc[] = []
   const edgeKeys = new Set<string>()
-  const draftImageParents = new Set<string>()
+  const draftMediaParents = new Set<string>()
   if (Array.isArray(raw?.edges)) {
     for (const item of raw.edges) {
       if (edges.length >= MAX_CANVAS_EDGES) break
       if (!item || typeof item !== 'object') continue
-      const source = (item as Partial<CanvasEdgeDoc>).source
-      const target = (item as Partial<CanvasEdgeDoc>).target
+      const candidate = item as Partial<CanvasEdgeDoc>
+      const source = candidate.source
+      const target = candidate.target
       if (!isCanvasUuid(source) || !isCanvasUuid(target)) continue
       if (source === target) continue
       const sourceNode = nodeById.get(source)
@@ -200,15 +210,20 @@ export function sanitizeDocument(raw: Partial<CanvasDocument> | null | undefined
       if (!isAllowedEdgeKinds(sourceNode.kind, targetNode.kind)) continue
       const key = `${source}->${target}`
       if (edgeKeys.has(key)) continue
-      if (sourceNode.kind === 'image' && targetNode.kind === 'video-draft' && draftImageParents.has(target)) {
+      const isMedia = isMediaEdgeKinds(sourceNode.kind, targetNode.kind)
+      if (isMedia && draftMediaParents.has(target)) {
         continue
       }
       if (wouldCreateCycle(edges, source, target)) continue
       edgeKeys.add(key)
-      if (sourceNode.kind === 'image' && targetNode.kind === 'video-draft') {
-        draftImageParents.add(target)
+      if (isMedia) {
+        draftMediaParents.add(target)
       }
-      edges.push({ source, target })
+      const takeId =
+        sourceNode.kind === 'video-draft' && isCanvasUuid(candidate.take_id)
+          ? candidate.take_id
+          : undefined
+      edges.push(takeId ? { source, target, take_id: takeId } : { source, target })
     }
   }
 
@@ -227,32 +242,128 @@ export function cloneCanvasDocument(doc: CanvasDocument): CanvasDocument {
   return sanitizeDocument(doc)
 }
 
-export function findSourceImageNode(
+export function findParentMediaEdge(
   doc: CanvasDocument,
   draftNodeId: string,
-): CanvasNodeDoc | null {
+): { readonly edge: CanvasEdgeDoc; readonly sourceNode: CanvasNodeDoc } | null {
   for (const edge of doc.edges) {
     if (edge.target !== draftNodeId) continue
-    const source = doc.nodes.find(node => node.id === edge.source)
-    if (source && source.kind === 'image') return source
+    const sourceNode = doc.nodes.find(node => node.id === edge.source)
+    if (sourceNode && isMediaEdgeKinds(sourceNode.kind, 'video-draft')) {
+      return { edge, sourceNode }
+    }
   }
   return null
 }
 
+export function findSourceImageNode(
+  doc: CanvasDocument,
+  draftNodeId: string,
+): CanvasNodeDoc | null {
+  const parent = findParentMediaEdge(doc, draftNodeId)
+  return parent?.sourceNode.kind === 'image' ? parent.sourceNode : null
+}
+
 export function findDerivedDraftNodes(
   doc: CanvasDocument,
-  imageNodeId: string,
+  sourceNodeId: string,
 ): CanvasNodeDoc[] {
+  const sourceNode = doc.nodes.find(node => node.id === sourceNodeId)
+  if (!sourceNode || sourceNode.kind === 'note') return []
   const targetIds = new Set(
-    doc.edges.filter(edge => edge.source === imageNodeId).map(edge => edge.target),
+    doc.edges.filter(edge => edge.source === sourceNodeId).map(edge => edge.target),
   )
   return doc.nodes.filter(node => node.kind === 'video-draft' && targetIds.has(node.id))
+}
+
+export function findUpstreamChain(doc: CanvasDocument, nodeId: string): CanvasNodeDoc[] {
+  const chain: CanvasNodeDoc[] = []
+  const visited = new Set<string>([nodeId])
+  let cursor = nodeId
+  while (true) {
+    const parent = findParentMediaEdge(doc, cursor)
+    if (!parent || visited.has(parent.sourceNode.id)) break
+    visited.add(parent.sourceNode.id)
+    chain.unshift(parent.sourceNode)
+    cursor = parent.sourceNode.id
+  }
+  return chain
+}
+
+export interface DraftLineageInfo {
+  readonly mode: CanvasDraftContinuationMode
+  readonly continuation: boolean
+  readonly parentNode: CanvasNodeDoc | null
+  readonly parentEdge: CanvasEdgeDoc | null
+  readonly originNode: CanvasNodeDoc | null
+  readonly image?: CanvasImageLocator
+  readonly videoId?: string
+  readonly takeId?: string
+}
+
+export function resolveDraftLineage(
+  doc: CanvasDocument,
+  draftNodeId: string,
+  visited: Set<string> = new Set(),
+): DraftLineageInfo {
+  if (visited.has(draftNodeId)) {
+    return { mode: 'none', continuation: false, parentNode: null, parentEdge: null, originNode: null }
+  }
+  visited.add(draftNodeId)
+  const parent = findParentMediaEdge(doc, draftNodeId)
+  if (!parent) {
+    return { mode: 'none', continuation: false, parentNode: null, parentEdge: null, originNode: null }
+  }
+  const { edge, sourceNode } = parent
+  if (sourceNode.kind === 'image') {
+    return {
+      mode: 'direct-image',
+      continuation: false,
+      parentNode: sourceNode,
+      parentEdge: edge,
+      originNode: sourceNode,
+      ...(sourceNode.image ? { image: sourceNode.image } : {}),
+    }
+  }
+  if (sourceNode.kind === 'video') {
+    return {
+      mode: 'imported-video-tail',
+      continuation: true,
+      parentNode: sourceNode,
+      parentEdge: edge,
+      originNode: sourceNode,
+      ...(sourceNode.video_id ? { videoId: sourceNode.video_id } : {}),
+    }
+  }
+  if (edge.take_id) {
+    return {
+      mode: 'take-tail',
+      continuation: true,
+      parentNode: sourceNode,
+      parentEdge: edge,
+      originNode: sourceNode,
+      videoId: edge.take_id,
+      takeId: edge.take_id,
+    }
+  }
+  const inherited = resolveDraftLineage(doc, sourceNode.id, visited)
+  return {
+    mode: 'inherit-input',
+    continuation: true,
+    parentNode: sourceNode,
+    parentEdge: edge,
+    originNode: inherited.originNode ?? sourceNode,
+    ...(inherited.image ? { image: inherited.image } : {}),
+    ...(inherited.videoId ? { videoId: inherited.videoId } : {}),
+    ...(inherited.takeId ? { takeId: inherited.takeId } : {}),
+  }
 }
 
 export function isValidCanvasConnection(
   doc: CanvasDocument,
   sourceId: string,
   targetId: string,
+  attempts?: readonly Pick<CanvasAttempt, 'node_id'>[],
 ): boolean {
   if (!isCanvasUuid(sourceId) || !isCanvasUuid(targetId) || sourceId === targetId) return false
   if (doc.edges.length >= MAX_CANVAS_EDGES) return false
@@ -261,14 +372,10 @@ export function isValidCanvasConnection(
   if (!source || !target) return false
   if (!isAllowedEdgeKinds(source.kind, target.kind)) return false
   if (doc.edges.some(edge => edge.source === sourceId && edge.target === targetId)) return false
-  // A video-draft should have at most one source image edge to keep provenance unambiguous.
-  if (source.kind === 'image' && target.kind === 'video-draft') {
-    const existingImageEdge = doc.edges.some(edge => {
-      if (edge.target !== targetId) return false
-      const src = doc.nodes.find(n => n.id === edge.source)
-      return src?.kind === 'image'
-    })
-    if (existingImageEdge) return false
+  // A video-draft can have at most one incoming media edge, and bound drafts cannot swap sources.
+  if (isMediaEdgeKinds(source.kind, target.kind)) {
+    if (findParentMediaEdge(doc, targetId) !== null) return false
+    if (attempts?.some(attempt => attempt.node_id === targetId)) return false
   }
   return !wouldCreateCycle(doc.edges, sourceId, targetId)
 }

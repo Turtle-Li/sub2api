@@ -6,12 +6,12 @@
       {
         'is-selected': selected,
         'is-completed': isCompleted,
-        'is-unavailable': activeTake?.unavailable,
+        'is-unavailable': activeTake?.unavailable || inputUnavailable,
       },
     ]"
     :aria-label="node.title || '视频草稿'"
   >
-    <Handle type="target" :position="Position.Left" />
+    <Handle type="target" :position="Position.Left" class="cc-port-target" />
 
     <div class="cc-node-head">
       <div class="cc-head-badges">
@@ -22,9 +22,35 @@
     </div>
 
     <div class="cc-node-body">
-      <p class="cc-node-title">{{ node.title || '视频草稿' }}</p>
+      <div class="cc-draft-title-row">
+        <p class="cc-node-title">{{ node.title || '视频草稿' }}</p>
+        <span class="cc-provenance-chip" :class="{ 'is-warn': inputUnavailable }">{{ provenanceBadge }}</span>
+      </div>
 
-      <div class="cc-thumb-box">
+      <button
+        v-if="isCompleted && activeJob"
+        type="button"
+        class="cc-thumb-box is-interactive nodrag nopan"
+        :aria-label="`在画布内查看「${node.title || '视频草稿'}」v${activeTake?.takeNumber ?? 1} 成片详情`"
+        @click.stop="emit('previewJob', activeJob, $event.currentTarget as HTMLElement, node.id)"
+      >
+        <VideoPoster :job="activeJob" :cache="posterCache" :revision="posterRevision" />
+        <span class="cc-thumb-play-badge" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M5.5 3.8 12 8l-6.5 4.2V3.8Z" /></svg>
+        </span>
+        <div class="cc-thumb-overlay">
+          <span v-if="durationLabel" class="cc-media-chip">{{ durationLabel }}</span>
+          <span v-if="activeJob.size" class="cc-media-chip">{{ activeJob.size }}</span>
+        </div>
+      </button>
+
+      <button
+        v-else
+        type="button"
+        class="cc-thumb-box is-draft-stage nodrag nopan"
+        :aria-label="`查看「${node.title || '视频草稿'}」草稿详情与来源`"
+        @click.stop="emit('inspectDraft', node.id, $event.currentTarget as HTMLElement)"
+      >
         <template v-if="activeJob && !activeTake?.unavailable">
           <VideoPoster :job="activeJob" :cache="posterCache" :revision="posterRevision" />
           <div class="cc-thumb-overlay">
@@ -33,41 +59,41 @@
           </div>
         </template>
         <img
-          v-else-if="!activeTake?.unavailable && sourceAvailable && sourceThumb.status === 'ready' && sourceThumb.url"
+          v-else-if="!activeTake?.unavailable && !inputUnavailable && sourceAvailable && sourceThumb.status === 'ready' && sourceThumb.url"
           :src="sourceThumb.url"
           :alt="sourceNode?.title || '来源原图'"
           draggable="false"
         />
         <div v-else class="cc-thumb-placeholder" role="status">
           <template v-if="activeTake?.unavailable">
-            <strong>素材授权已失效</strong>
+            <strong>成片授权已失效</strong>
             <span>原视频记录已过期或失去访问权限</span>
+          </template>
+          <template v-else-if="inputUnavailable">
+            <strong>上游来源已失效</strong>
+            <span>关联原图或固定成片不可用，已阻止无图提交</span>
           </template>
           <template v-else-if="activeTake && !activeTake.job">
             <strong>尚无已确认回执</strong>
             <span>已记录本次提交，请按原任务核对</span>
           </template>
           <template v-else-if="sourceAuthUnknown">
-            <strong>正在核验来源原图权限…</strong>
+            <strong>正在核验来源权限…</strong>
             <span>等待服务端确认后操作</span>
-          </template>
-          <template v-else-if="sourceNode && !sourceAvailable">
-            <strong>来源原图已失效</strong>
-            <span>可重新选择原图或直接文字生成</span>
           </template>
           <template v-else-if="sourceNode && sourceThumb.status === 'non-first-index'">
             <strong>源自第 {{ (sourceNode.image?.index ?? 0) + 1 }} 张原图</strong>
-            <span>确认后在工作台读取原图</span>
+            <span>确认生成时按需读取原图</span>
           </template>
           <template v-else>
             <strong>视频草稿 · 未提交</strong>
-            <span>确认报价后在视频工作台生成</span>
+            <span>点击查看草稿与来源，去工作台确认后生成</span>
           </template>
         </div>
-      </div>
+      </button>
 
       <p v-if="node.prompt" class="cc-prompt-preview">{{ node.prompt }}</p>
-      <p v-else class="cc-meta">暂未填写运镜描述，可在右侧面板或工作台编辑。</p>
+      <p v-else class="cc-meta">暂未填写运镜描述，点击查看草稿或前往工作台编辑。</p>
 
       <div v-if="takes.length > 1" class="cc-takes-strip nodrag nopan" role="group" aria-label="成片版本切换">
         <button
@@ -84,32 +110,69 @@
 
       <div class="cc-node-foot nodrag nopan">
         <button
+          v-if="isCompleted && activeJob"
           type="button"
           class="cc-btn is-primary is-sm"
-          :disabled="sourceAuthUnknown"
+          @click.stop="emit('previewJob', activeJob, $event.currentTarget as HTMLElement, node.id)"
+        >
+          查看成片
+        </button>
+        <button
+          v-else-if="activeJob && !activeTake?.unavailable"
+          type="button"
+          class="cc-btn is-sm"
+          @click.stop="emit('previewJob', activeJob, $event.currentTarget as HTMLElement, node.id)"
+        >
+          任务状态
+        </button>
+        <button
+          v-else
+          type="button"
+          class="cc-btn is-sm"
+          @click.stop="emit('inspectDraft', node.id, $event.currentTarget as HTMLElement)"
+        >
+          {{ node.prompt ? '编辑草稿' : '编辑描述' }}
+        </button>
+
+        <button
+          type="button"
+          class="cc-btn is-sm"
+          :class="{ 'is-primary': !isCompleted }"
+          :disabled="sourceAuthUnknown || inputUnavailable"
           @click.stop="emit('openInVideoStudio', node.id)"
         >
-          去工作台确认
+          前往工作台确认生成
         </button>
+
         <button
-          v-if="activeJob && !activeTake?.unavailable && activeJob.status === 'completed'"
-          type="button"
-          class="cc-btn is-sm"
-          @click.stop="emit('previewJob', activeJob, $event.currentTarget as HTMLElement)"
-        >
-          播放成片
-        </button>
-        <button
-          v-if="sourceNode"
+          v-if="compareParentId"
           type="button"
           class="cc-btn is-sm"
           :disabled="sourceAuthUnknown"
-          @click.stop="emit('compare', sourceNode.id)"
+          @click.stop="emit('compare', compareParentId)"
         >
           同源对比
         </button>
       </div>
     </div>
+
+    <Handle type="source" :position="Position.Right" class="cc-port-source" />
+    <span v-if="canBranch" class="cc-port-stem" aria-hidden="true"></span>
+    <button
+      v-if="canBranch"
+      type="button"
+      class="cc-quick-branch nodrag nopan"
+      :title="quickBranchLabel"
+      :aria-label="quickBranchLabel"
+      @pointerdown.stop
+      @mousedown.stop
+      @touchstart.stop
+      @click.stop="emit('createDraft', node.id)"
+    >
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M8 3.5v9M3.5 8h9" />
+      </svg>
+    </button>
   </article>
 </template>
 
@@ -121,12 +184,15 @@ import VideoPoster from '@/features/video-studio/VideoPoster.vue'
 import type { VideoPosterCache } from '@/features/video-studio/posterCache'
 import { formatVideoDuration, measuredDurationMs, type WorkspaceDurationStore } from '@/features/video-studio/mediaDuration'
 import type { CanvasImageThumbCache } from '../imageThumbCache'
-import type { CanvasAssetStatus, CanvasNodeDoc, CanvasTake } from '../types'
+import type { CanvasAssetStatus, CanvasNodeDoc, CanvasResolvedInput, CanvasTake } from '../types'
 
 const props = defineProps<{
   node: CanvasNodeDoc
   sourceNode: CanvasNodeDoc | null
   sourceAsset?: CanvasAssetStatus
+  resolvedInput?: CanvasResolvedInput
+  provenanceBadge: string
+  compareParentId: string | null
   takes: readonly CanvasTake[]
   activeTake: CanvasTake | null
   branchLabel: string
@@ -140,9 +206,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   openInVideoStudio: [draftNodeId: string]
-  compare: [imageNodeId: string]
+  compare: [parentNodeId: string]
   pinTake: [draftNodeId: string, requestId: string]
-  previewJob: [job: VideoJob, trigger: HTMLElement]
+  previewJob: [job: VideoJob, trigger: HTMLElement, nodeId: string]
+  inspectDraft: [draftNodeId: string, trigger: HTMLElement]
+  createDraft: [sourceNodeId: string]
 }>()
 
 const activeJob = computed(() => props.activeTake?.job ?? null)
@@ -154,6 +222,16 @@ const branchClass = computed(() =>
 )
 const sourceAvailable = computed(() => props.sourceAsset?.available === true && Boolean(props.sourceNode?.image))
 const sourceAuthUnknown = computed(() => Boolean(props.sourceNode) && props.sourceAsset?.available === undefined)
+const inputUnavailable = computed(() =>
+  props.resolvedInput?.available === false ||
+  (Boolean(props.sourceNode) && props.sourceAsset?.available === false),
+)
+const canBranch = computed(() => isCompleted.value || !inputUnavailable.value)
+const quickBranchLabel = computed(() =>
+  isCompleted.value
+    ? `用这版成片（v${props.activeTake?.takeNumber ?? 1}）尾帧续接下一镜`
+    : '沿用此镜素材续接下一镜',
+)
 const sourceThumb = computed(() => props.thumbCache.get(props.sourceNode?.image))
 
 const durationLabel = computed(() => {
@@ -180,7 +258,7 @@ const statusLabel = computed(() => {
 })
 
 const statusPillClass = computed(() => {
-  if (props.activeTake?.unavailable) return 'is-error'
+  if (props.activeTake?.unavailable || inputUnavailable.value) return 'is-error'
   const status = activeJob.value?.status
   if (status === 'completed') return 'is-img'
   if (status === 'failed' || status === 'expired') return 'is-error'

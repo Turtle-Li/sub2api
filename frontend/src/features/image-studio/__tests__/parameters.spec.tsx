@@ -32,6 +32,7 @@ async function change(host: HTMLElement, name: string, value: string) {
   const option = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="option"]')).find(button => button.querySelector('strong')?.textContent === value)
   if (!option) throw new Error(`Missing model ${value}`)
   await act(async () => { option.click() })
+  await act(async () => { element<HTMLButtonElement>(host, '.studio-picker-confirm').click() })
   return
  }
  await act(async () => { const select = element<HTMLSelectElement>(host, `select[aria-label="${name}"]`); select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })) })
@@ -134,4 +135,68 @@ it('isolates parameter state and pending file reads when the authenticated user 
  expect(element<HTMLTextAreaElement>(host, 'textarea').value).toBe('')
  expect(host.querySelector('.studio-header')).toBeNull()
  expect(host.textContent).not.toContain('使用分组')
+})
+
+it('drives aspect ratio and resolution via LiquidSelect mouse/keyboard interaction and portals inside open mobile drawer', async () => {
+ const pricedSeedream: BatchImageModel = {
+  ...seedream,
+  prices: {
+   '1K': { min: 0.1, max: 0.1 },
+   '2K': { min: 0.25, max: 0.25 },
+   '4K': { min: 0.6, max: 0.6 },
+  },
+ }
+ const origMatchMedia = window.matchMedia
+ window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+  matches: query.includes('max-width: 760px'),
+  media: query,
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+ })) as unknown as typeof window.matchMedia
+ try {
+  const { host, submit } = await mount([pricedSeedream])
+  const composerDialog = element<HTMLDialogElement>(host, 'dialog.studio-composer')
+  expect(composerDialog.open).toBe(false)
+
+  // Open mobile composer drawer
+  await act(async () => element<HTMLButtonElement>(host, '.studio-mobile-create').click())
+  expect(composerDialog.open).toBe(true)
+  expect(host.querySelector('.studio-estimate strong')?.textContent).toBe('0.25 额度')
+
+  // Open resolution LiquidSelect via button click -> menu must portal inside open composer dialog (top-layer safe)
+  const sizeTrigger = element<HTMLButtonElement>(host, 'button.lg-select-trigger[aria-label="图片尺寸"]')
+  await act(async () => sizeTrigger.click())
+  const sizeMenu = composerDialog.querySelector<HTMLDivElement>('.lg-select-menu[role="listbox"][aria-label="图片尺寸"]')
+  expect(sizeMenu).not.toBeNull()
+  const sizeOptions = Array.from(sizeMenu!.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+  expect(sizeOptions.map(opt => opt.textContent?.trim())).toEqual(['1K', '2K', '4K'])
+  await act(async () => sizeOptions[2]!.click())
+  expect(composerDialog.open).toBe(true)
+  expect(sizeTrigger.textContent).toContain('4K')
+  expect(host.querySelector('.studio-estimate strong')?.textContent).toBe('0.6 额度')
+
+  // Open aspect ratio LiquidSelect via keyboard ArrowDown + select next option with ArrowDown + Enter
+  const ratioTrigger = element<HTMLButtonElement>(host, 'button.lg-select-trigger[aria-label="图片比例"]')
+  ratioTrigger.focus()
+  await act(async () => ratioTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+  expect(composerDialog.querySelector('.lg-select-menu[aria-label="图片比例"]')).not.toBeNull()
+  await act(async () => ratioTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+  await act(async () => ratioTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(composerDialog.querySelector('.lg-select-menu[aria-label="图片比例"]')).toBeNull()
+  expect(ratioTrigger.textContent).toContain('16:9')
+
+  // Escape closes open menu without closing the mobile composer dialog
+  await act(async () => ratioTrigger.click())
+  expect(composerDialog.querySelector('.lg-select-menu[aria-label="图片比例"]')).not.toBeNull()
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  expect(composerDialog.querySelector('.lg-select-menu[aria-label="图片比例"]')).toBeNull()
+  expect(composerDialog.open).toBe(true)
+  expect(document.activeElement).toBe(ratioTrigger)
+
+  // Verify generated payload matches selected LiquidSelect values
+  await act(async () => generate(host).click())
+  expect(submit.mock.calls[0]?.[0]).toMatchObject({ image_size: '4K', aspect_ratio: '16:9' })
+ } finally {
+  window.matchMedia = origMatchMedia
+ }
 })

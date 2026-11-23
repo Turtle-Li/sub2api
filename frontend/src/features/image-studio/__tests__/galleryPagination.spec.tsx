@@ -330,3 +330,38 @@ it('uses the size learned for a legacy cover on metadata refresh without replaci
   expect(frame.style.aspectRatio).toBe('0.75')
   expect(client.thumbnail).not.toHaveBeenCalled()
 })
+
+it('filters gallery items via LiquidSelect status control while keeping segmented tabs and query status in sync', async () => {
+  const okRow = task('done-item', 2, false)
+  const failedRow = task('failed-item', 1, true)
+  const tasks = vi.fn<ReturnType<typeof studioAPI>['tasks']>(async (_cursor, query) => {
+    if (query?.status === 'failed') return page([failedRow])
+    return page([okRow, failedRow])
+  })
+  vi.mocked(studioAPI).mockReturnValue(clientWith(tasks))
+
+  await show()
+  expect(ids()).toEqual([okRow.id, failedRow.id])
+  expect(tasks).toHaveBeenCalledWith('', expect.objectContaining({ status: 'current' }))
+
+  const statusWrap = host.querySelector<HTMLElement>('.lg-select.studio-gallery-status')!
+  expect(statusWrap).not.toBeNull()
+  const statusTrigger = statusWrap.querySelector<HTMLButtonElement>('button.lg-select-trigger[aria-label="筛选作品"]')!
+  expect(statusTrigger.textContent).toContain('全部作品')
+
+  // Open LiquidSelect menu and pick "失败"
+  await act(async () => statusTrigger.click())
+  const menu = document.body.querySelector<HTMLDivElement>('.lg-select-menu[role="listbox"][aria-label="筛选作品"]')
+  expect(menu).not.toBeNull()
+  const failedOption = Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    .find(option => option.textContent?.trim() === '失败')
+  expect(failedOption).toBeDefined()
+  await act(async () => failedOption!.click())
+
+  expect(statusTrigger.textContent).toContain('失败')
+  expect(tasks).toHaveBeenCalledWith('', expect.objectContaining({ status: 'failed' }))
+  expect(ids()).toEqual([failedRow.id])
+  const failedTab = Array.from(host.querySelectorAll<HTMLButtonElement>('.studio-gallery-tabs button'))
+    .find(btn => btn.textContent?.trim() === '失败')
+  expect(failedTab?.getAttribute('aria-pressed')).toBe('true')
+})

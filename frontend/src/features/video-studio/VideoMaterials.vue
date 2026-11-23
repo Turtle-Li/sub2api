@@ -39,6 +39,14 @@
     </button>
     <p class="vs-hint">{{ formatHint }}，每个不超过 8 MiB；最多 {{ mode === 'frames' ? 2 : refLimit(model) }} 个。<template v-if="model.provider === 'goodput'">H3 编码后的整份请求限 8 MiB。</template></p>
     <p v-if="inspecting" role="status" class="vs-hint">正在检查素材…</p>
+    <div v-if="canvasSourceBrokenReason" role="alert" class="vs-notice vs-canvas-source-alert">
+      <strong>画布分支约定来源已变动 · 已暂停按原分支提交</strong>
+      <p>{{ canvasSourceBrokenReason }}</p>
+      <div class="vs-actions">
+        <button v-if="canRestoreCanvasSource" type="button" class="vs-button" @click="restoreCanvasSource">恢复约定素材</button>
+        <button type="button" class="vs-text" @click="emit('detachCanvasDraft')">脱离画布另建任务</button>
+      </div>
+    </div>
     <p v-if="invalidRoles" role="alert" class="vs-error">{{ invalidRoles }}</p>
     <div v-if="fileError" role="alert" class="vs-error">{{ fileError }} <button type="button" class="vs-text" @click="fileError = ''">撤销这次选择</button></div>
   </fieldset>
@@ -54,8 +62,11 @@ type Source = NonNullable<ReturnType<typeof pendingImage>>
 type Asset = { label: string; file: File; preview: string; kind: VideoReferenceKind } | { label: string; source: Source; preview?: never; kind: 'image' }
 type Mode = 'frames' | 'refs'
 type Change = { model: VideoModel; mode: Mode; keepReferences: boolean }
-const props = defineProps<{ model: VideoModel; userId: number; source: Source | null; disabled: boolean }>()
-const emit = defineEmits<{ choose: [model: VideoModel] }>()
+const props = withDefaults(defineProps<{ model: VideoModel; userId: number; source: Source | null; disabled: boolean; tailFrame?: boolean; canvasSourceRequired?: boolean }>(), {
+  tailFrame: false,
+  canvasSourceRequired: false,
+})
+const emit = defineEmits<{ choose: [model: VideoModel]; detachCanvasDraft: [] }>()
 const canFrame = (m: VideoModel) => m.provider === 'goodput' && m.supports_frames
 const refLimit = (m: VideoModel) => Math.max(0, Math.min(10, m.max_references))
 const modelRefKinds = (m: VideoModel): VideoReferenceKind[] => m.reference_kinds?.length ? [...new Set(m.reference_kinds)] : ['image']
@@ -82,7 +93,12 @@ const inspecting = ref(false)
 const lifetime = new AbortController()
 
 const invalidRoles = computed(() => {
-  if (spentSource.value && assets.value.some(a => 'source' in a)) return '原图授权已结束。请替换或移除这张图，或回到生图工作台重新带入。'
+  const spentAsset = assets.value.find(a => 'source' in a)
+  if (spentSource.value && spentAsset && 'source' in spentAsset) {
+    return props.tailFrame
+      ? '固定成片的尾帧授权已结束或提取未成功。请返回画布重新确认或替换图片，本次不会无图生成。'
+      : '原图授权已结束。请替换或移除这张图，或回到生图工作台重新带入。'
+  }
   if (mode.value === 'frames' && !canFrame(props.model)) return '此模型已不支持首尾帧，请切换素材用途。'
   if (mode.value === 'frames' && slots.value[1] && !slots.value[0]) return '尾帧需要搭配首帧，请补上首帧或移除尾帧。'
   if (mode.value === 'frames' && (assets.value.length > 2 || assets.value.some(a => a.kind !== 'image'))) return '首尾帧仅支持最多 2 张图片，请先移除非图片或多余素材。'
@@ -90,13 +106,47 @@ const invalidRoles = computed(() => {
   if (mode.value === 'refs' && assets.value.some(asset => !referenceKinds.value.includes(asset.kind))) return '当前模型不支持其中一种素材类型，请移除后再提交。'
   return ''
 })
-const ready = computed(() => !change.value && !invalidRoles.value && !fileError.value && !inspecting.value)
+const primarySlotAsset = computed(() => (mode.value === 'frames' ? slots.value[0] : assets.value[0]) ?? null)
+const canvasSourceIntact = computed(() => {
+  if (!props.canvasSourceRequired) return true
+  if (!props.source || props.source.userId !== props.userId || spentSource.value) return false
+  if (!canFrame(props.model) && refLimit(props.model) < 1) return false
+  const first = primarySlotAsset.value
+  return Boolean(first && 'source' in first && first.source === props.source)
+})
+const canRestoreCanvasSource = computed(() =>
+  Boolean(
+    props.canvasSourceRequired &&
+      !canvasSourceIntact.value &&
+      props.source &&
+      props.source.userId === props.userId &&
+      !spentSource.value &&
+      pendingImage(props.userId) === props.source &&
+      (canFrame(props.model) || refLimit(props.model) >= 1),
+  ),
+)
+const canvasSourceBrokenReason = computed(() => {
+  if (!props.canvasSourceRequired || canvasSourceIntact.value) return ''
+  const noun = props.tailFrame ? '上一镜真实尾帧 PNG' : '画布关联原图'
+  if (!canFrame(props.model) && refLimit(props.model) < 1) {
+    return `当前模型不支持携带图片素材，无法按该分支约定的「${noun}」提交。请切换支持图片的模型，或脱离画布另建任务。`
+  }
+  const stillSomewhere = assets.value.some((a, idx) => idx > 0 && 'source' in a && a.source === props.source)
+  if (stillSomewhere) {
+    return `该分支约定「${noun}」必须位于第 1 个素材槽位。调换顺序后不能按原续镜身份绑定，请恢复首位或脱离画布另建任务。`
+  }
+  return `你已移除或替换了该分支约定的「${noun}」。为避免付费生成无图/错源结果却记入原分支，请恢复约定素材、返回画布改源，或脱离画布另建独立任务。`
+})
+const ready = computed(() => !change.value && !invalidRoles.value && !fileError.value && !inspecting.value && canvasSourceIntact.value)
 const conversionText = computed(() => {
   if (!change.value) return ''
   let position = 0
   return slots.value.flatMap((a, i) => a ? [`${role(i)}「${a.label}」→ ${role(position++, change.value!.mode, change.value!.model)}`] : []).join('；')
 })
 function typeLabel(asset: Asset) {
+  if ('source' in asset && props.tailFrame) {
+    return '尾帧 PNG · 确认时提取'
+  }
   return ({ image: '图片', video: '视频', audio: '音频', file: 'PDF 文档' } as const)[asset.kind]
 }
 function closeChange() {
@@ -162,7 +212,26 @@ function chooseModel(target: VideoModel) {
 function canPick(i: number) { return !change.value && !inspecting.value && (!i || !!slots.value[0]) && (mode.value === 'frames' || i < refLimit(props.model)) }
 function dispose(asset: Asset | null | undefined, forget: boolean) {
   if (asset?.preview) URL.revokeObjectURL(asset.preview)
-  if (forget && asset && 'source' in asset && pendingImage(props.userId) === asset.source) clearImage()
+  // While bound to a canvas media draft, keep `props.source` in memory until explicit detach/unmount
+  // so accidental slot removal or swap can be restored in one click without silent degradation.
+  if (forget && !props.canvasSourceRequired && asset && 'source' in asset && pendingImage(props.userId) === asset.source) {
+    clearImage()
+  }
+}
+function restoreCanvasSource() {
+  if (!props.source || props.source.userId !== props.userId || pendingImage(props.userId) !== props.source) return
+  const keptLocal = assets.value.filter((a): a is Extract<Asset, { file: File }> => 'file' in a)
+  const bound: Asset = { source: props.source, label: props.source.label, kind: 'image' }
+  if (mode.value === 'frames') {
+    const secondImg = keptLocal.find(a => a.kind === 'image') ?? null
+    keptLocal.filter(a => a !== secondImg).forEach(a => dispose(a, false))
+    slots.value = secondImg ? [bound, secondImg] : [bound]
+  } else {
+    const maxExtra = Math.max(0, refLimit(props.model) - 1)
+    keptLocal.slice(maxExtra).forEach(a => dispose(a, false))
+    slots.value = [bound, ...keptLocal.slice(0, maxExtra)]
+  }
+  fileError.value = ''
 }
 function remove(i: number) {
   dispose(slots.value[i], true)
@@ -217,7 +286,7 @@ async function pick(i: number, event: Event) {
     else validateVideoReference(head)
     lifetime.signal.throwIfAborted()
     const kind = mode.value === 'frames' ? 'image' : referenceKinds.value.find(item => videoReferenceTypes[item].includes(file.type))
-    if (!kind) throw new Error('当前渠道不支持这种素材类型。')
+    if (!kind) throw new Error('当前模型不支持这种素材类型。')
     const next = [...slots.value]
     const asset: Asset = { label: file.name, file, preview: kind === 'image' ? URL.createObjectURL(file) : '', kind }
     dispose(next[i], true); next[i] = asset; slots.value = next; fileError.value = ''
@@ -231,8 +300,13 @@ async function prepare(signal: AbortSignal): Promise<Pick<VideoSubmission, 'firs
     if ('source' in asset && asset.source.userId !== props.userId) throw new Error('无权读取这张原图，请移除或替换。')
     let url: string
     if ('source' in asset) {
+      const tailMode = props.tailFrame
       try { url = await readImage(asset.source, signal) }
       catch (e) {
+        if (tailMode) {
+          const detail = e instanceof Error && e.message ? e.message : ''
+          throw new Error(detail || '无法从已固定成片提取真实尾帧 PNG（可能已过期、撤权、超时或超出 8 MiB），未降级无图，未提交视频。')
+        }
         if (e instanceof RangeError || (e instanceof TypeError && /MiB|图片格式|原图数据/.test(e.message))) throw new Error('带入的原图须为 PNG、JPEG 或 WebP，且不超过 8 MiB。请替换图片；未提交视频。')
         throw new Error('无法读取带入的原图，可能已过期或权限已变更。请移除或替换；未提交视频。')
       }
@@ -264,5 +338,5 @@ watch(() => props.source, (nextSource, prevSource) => {
   slots.value = mode.value === 'frames' ? filtered : filtered.filter(a => a !== null)
   spentSource.value = false
 })
-defineExpose({ chooseModel, prepare, reset, ready })
+defineExpose({ chooseModel, prepare, reset, ready, canvasSourceIntact, restoreCanvasSource })
 </script>

@@ -1,5 +1,5 @@
 <template>
-  <section class="vs-gallery" aria-labelledby="vs-gallery-title">
+  <section class="vs-gallery wb-gallery" aria-labelledby="vs-gallery-title">
     <div v-if="outstanding.length" class="vs-notice vs-outstanding" aria-live="polite">
       <strong>尚未确认的提交 · 请勿重发</strong><p>原任务号已保留。查询只读取状态，不会再次生成。</p>
       <div v-for="id in outstanding" :key="id" class="vs-lookup-row"><code>{{ id }}</code><button type="button" class="vs-button" :disabled="checking && tracked === id" @click="lookup(id)">查询原任务</button></div>
@@ -10,9 +10,9 @@
       <button type="button" class="vs-text" :disabled="checking" @click="readTracked">{{ checking ? '查询中…' : '更新状态' }}</button>
       <button type="button" class="vs-icon" aria-label="关闭任务跟踪" @click="stopTracking"><Icon name="x" size="xs" aria-hidden="true" /></button>
     </div>
-    <VideoDelivery ref="delivery" :mobile="mobile" :cache="posterCache" :durations="measuredDurations" :jobs="visibleJobs" :canvas-enabled="canvasEnabled" @expired="markExpired" @focus-card="focusCard" @reuse="(job, opener) => emit('reuse', job, opener)" @canvas="job => emit('canvas', job)" />
-    <div class="vs-gallery-head">
-      <div class="vs-title-line"><h2 id="vs-gallery-title" ref="galleryHeading" tabindex="-1">我的视频</h2><span class="vs-count">已加载 {{ jobs.length }} 条</span></div>
+    <VideoDelivery ref="delivery" :mobile="mobile" :cache="posterCache" :durations="measuredDurations" :jobs="visibleJobs" :model-labels="modelLabels" :canvas-enabled="canvasEnabled" @expired="markExpired" @focus-card="focusCard" @reuse="(job, opener) => emit('reuse', job, opener)" @canvas="job => emit('canvas', job)" />
+    <div class="vs-gallery-head wb-gallery-head">
+      <div class="vs-title-line wb-gallery-title"><h2 id="vs-gallery-title" ref="galleryHeading" tabindex="-1">我的视频</h2><span class="vs-count wb-gallery-count">已加载 {{ jobs.length }} 条</span></div>
       <div v-if="jobs.length" class="vs-filters" role="group" aria-label="筛选已加载的视频">
         <button v-for="option in filters" :key="option.value" type="button" :aria-pressed="filter === option.value" @click="filter = option.value">{{ option.label }}</button>
       </div>
@@ -64,19 +64,26 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import Icon from '@/components/icons/Icon.vue'
-import { videoStudio, type VideoJob } from '@/features/video-studio/api'
+import { videoModelDisplayName, videoStudio, type VideoJob } from '@/features/video-studio/api'
 import VideoDelivery from './VideoDelivery.vue'
 import VideoPoster from './VideoPoster.vue'
 import { useGalleryLayout } from './galleryLayout'
 import { createWorkspaceDurationStore, formatVideoDuration, measuredDurationMs } from './mediaDuration'
 import { createVideoPosterCache } from './posterCache'
 
-withDefaults(defineProps<{ outstanding: string[]; example: string; mobile: boolean; canvasEnabled?: boolean }>(), {
+const props = withDefaults(defineProps<{
+  outstanding: string[]
+  example: string
+  mobile: boolean
+  canvasEnabled?: boolean
+  modelLabels?: Readonly<Record<string, string>>
+}>(), {
   canvasEnabled: false,
+  modelLabels: () => ({}),
 })
 const emit = defineEmits<{ resolved: [job: VideoJob]; example: [opener: HTMLElement]; reuse: [job: VideoJob, opener?: HTMLElement]; canvas: [job: VideoJob] }>()
 const states: Record<VideoJob['status'], string> = { submitting: '提交中', queued: '排队中', running: '生成中', completed: '已完成', failed: '生成失败', uncertain: '状态待核实', expired: '已过期' }
-const modelLabel = (id: string) => ({ 'minimax/h3': 'H3', 'minimax/h3-fast': 'H3 Fast', 'muse-video': 'Muse' })[id] || id
+const modelLabel = (id: string) => videoModelDisplayName(id, props.modelLabels)
 const measuredDurations = createWorkspaceDurationStore()
 function durationBadge(job: VideoJob) {
   return formatVideoDuration(measuredDurationMs(job, measuredDurations.get(job.id)))

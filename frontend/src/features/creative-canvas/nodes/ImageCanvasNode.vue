@@ -4,7 +4,7 @@
     :class="{ 'is-selected': selected, 'is-unavailable': !available }"
     :aria-label="node.title || '图片原图'"
   >
-    <Handle type="target" :position="Position.Left" />
+    <Handle type="target" :position="Position.Left" class="cc-port-target" />
     <div class="cc-node-head">
       <span class="cc-pill is-img">图片原图</span>
       <span class="cc-meta">{{ branchCount > 0 ? `${branchCount} 条分支` : '原图保留' }}</span>
@@ -74,16 +74,22 @@
       </div>
     </div>
 
-    <Handle type="source" :position="Position.Right" class="cc-handle-image-source" />
+    <Handle type="source" :position="Position.Right" class="cc-port-source" />
+    <span v-if="available" class="cc-port-stem" aria-hidden="true"></span>
     <button
       v-if="available"
       type="button"
       class="cc-quick-branch nodrag nopan"
       title="从此图新建一条视频草稿分支"
       aria-label="从此图新建一条视频草稿分支"
+      @pointerdown.stop
+      @mousedown.stop
+      @touchstart.stop
       @click.stop="emit('createDraft', node.id)"
     >
-      +
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M8 3.5v9M3.5 8h9" />
+      </svg>
     </button>
   </article>
 </template>
@@ -103,8 +109,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  createDraft: [imageNodeId: string]
-  compare: [imageNodeId: string]
+  createDraft: [sourceNodeId: string]
+  compare: [parentNodeId: string]
 }>()
 
 const available = computed(() => props.asset?.available === true && Boolean(props.node.image))

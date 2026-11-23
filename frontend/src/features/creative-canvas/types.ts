@@ -31,6 +31,7 @@ export interface CanvasNodeDoc {
 export interface CanvasEdgeDoc {
   readonly source: string
   readonly target: string
+  readonly take_id?: string
 }
 
 export interface CanvasDocument {
@@ -59,6 +60,12 @@ export interface CanvasAttempt {
   readonly job?: VideoJob
 }
 
+export interface CanvasResolvedInput {
+  readonly image?: CanvasImageLocator
+  readonly video_id?: string
+  readonly available: boolean
+}
+
 export interface CreativeCanvas {
   readonly id: string
   readonly title: string
@@ -67,6 +74,7 @@ export interface CreativeCanvas {
   readonly document: CanvasDocument
   readonly assets: Readonly<Record<string, CanvasAssetStatus>>
   readonly attempts: readonly CanvasAttempt[]
+  readonly inputs?: Readonly<Record<string, CanvasResolvedInput>>
 }
 
 export interface CanvasTake {
@@ -91,6 +99,13 @@ export type AddToCanvasPayload =
       readonly title?: string
     }
 
+export type CanvasDraftContinuationMode =
+  | 'none'
+  | 'direct-image'
+  | 'inherit-input'
+  | 'take-tail'
+  | 'imported-video-tail'
+
 export interface CanvasDraftHandoff {
   readonly userId: number
   readonly canvasId: string
@@ -100,4 +115,7 @@ export interface CanvasDraftHandoff {
   readonly draftTitle: string
   readonly prompt: string
   readonly expectsSourceImage: boolean
+  readonly expectsTailFrame?: boolean
+  readonly continuationMode?: CanvasDraftContinuationMode
+  readonly sourceSummary?: string
 }

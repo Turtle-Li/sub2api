@@ -35,6 +35,7 @@ it('prefers an exact available 2.6 variant without overriding a deliberate selec
   await act(async () => trigger.click())
   const previous = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="option"]')).find(b => b.textContent?.includes('gpt-image-2.5-sunburst'))!
   await act(async () => previous.click())
+  await act(async () => host.querySelector<HTMLButtonElement>('.studio-picker-confirm')?.click())
   const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000)
   try {
     await act(async () => window.dispatchEvent(new Event('focus')))
@@ -239,7 +240,9 @@ it('shows the requested tier immediately while sizing the detail from each outpu
   if (!detail) throw new Error('No task dialog')
   const ratio = () => Number(detail.style.getPropertyValue('--detail-aspect'))
   const tier = () => [...detail.querySelectorAll('dt')].find(label => label.textContent === '分辨率档位')?.nextElementSibling?.textContent
+  const pixels = () => [...detail.querySelectorAll('dt')].find(label => label.textContent === '实际像素')?.nextElementSibling?.textContent
   expect(tier()).toBe('2K')
+  expect(pixels()).toBeUndefined()
   expect(detail.dataset.layout).toBe('portrait')
   expect(ratio()).toBeCloseTo(2 / 3)
   expect(image.mock.calls.map(([, index]) => index)).toEqual([0])
@@ -252,16 +255,17 @@ it('shows the requested tier immediately while sizing the detail from each outpu
   }
   await decode(1024, 1536)
   expect(tier()).toBe('2K')
-  expect(detail.textContent).not.toContain('1024 × 1536')
+  expect(pixels()).toBe('1024 × 1536')
   const next = detail.querySelector<HTMLButtonElement>('.studio-detail-actions button[aria-label="下一张"]')
   if (!next) throw new Error('No next-image control in detail actions')
   await act(async () => next.click())
   expect(ratio()).toBe(1)
   expect(tier()).toBe('2K')
+  expect(pixels()).toBeUndefined()
   expect(image.mock.calls.map(([, index]) => index)).toEqual([0, 1])
   await decode(1536, 1024)
   expect(detail.dataset.layout).toBe('landscape')
   expect(ratio()).toBe(1.5)
   expect(tier()).toBe('2K')
-  expect(detail.textContent).not.toContain('1536 × 1024')
+  expect(pixels()).toBe('1536 × 1024')
 })
