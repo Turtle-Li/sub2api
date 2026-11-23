@@ -204,7 +204,8 @@ func TestCreativeCanvasJWTPostgresJourney(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-func TestCreativeCanvasSimultaneousReceiptsStayOnTheirBranches(t *testing.T) {
+func canvasWalletTestRouter(t *testing.T) (*gin.Engine, *service.User, *service.Group, service.CreativeCanvasStore, service.VideoStudioStore) {
+	t.Helper()
 	ctx := t.Context()
 	db := integrationDB
 	client := testEntClient(t)
@@ -228,6 +229,13 @@ func TestCreativeCanvasSimultaneousReceiptsStayOnTheirBranches(t *testing.T) {
 	route.Use(func(c *gin.Context) { c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: u.ID}) })
 	route.GET("/:id", h.Get)
 	route.PUT("/:id", h.Put)
+	route.POST("/:id/nodes/:node/attempts", h.Bind)
+	return route, u, group, store, keys.VideoStudioStore()
+}
+
+func TestCreativeCanvasSimultaneousReceiptsStayOnTheirBranches(t *testing.T) {
+	ctx := t.Context()
+	route, u, group, store, jobs := canvasWalletTestRouter(t)
 	b, e := store.Create(ctx, u.ID, "镜头比对")
 	require.NoError(t, e)
 	a, z := uuid.NewString(), uuid.NewString()
@@ -247,10 +255,10 @@ func TestCreativeCanvasSimultaneousReceiptsStayOnTheirBranches(t *testing.T) {
 	}
 	// The studio writer, not the board, materializes results in reverse order. No provider is configured.
 	for _, id := range []string{s3, s2, s1} {
-		inserted, e := keys.VideoStudioStore().ClaimVideoStudioJob(ctx, service.VideoStudioJob{ID: id, UserID: u.ID, KeyID: 0, GroupID: group.ID, Model: service.MuseVideoModel, Seconds: 6, Size: "16:9", Fingerprint: "local"})
+		inserted, e := jobs.ClaimVideoStudioJob(ctx, service.VideoStudioJob{ID: id, UserID: u.ID, KeyID: 0, GroupID: group.ID, Model: service.MuseVideoModel, Seconds: 6, Size: "16:9", Fingerprint: "local"})
 		require.NoError(t, e)
 		require.True(t, inserted)
-		require.NoError(t, keys.VideoStudioStore().UpdateVideoStudioJob(ctx, u.ID, id, "test-only-"+id, "completed", false))
+		require.NoError(t, jobs.UpdateVideoStudioJob(ctx, u.ID, id, "test-only-"+id, "completed", false))
 		board := read()
 		for _, x := range board.Attempts {
 			if x.RequestID == id {
@@ -279,6 +287,111 @@ func TestCreativeCanvasSimultaneousReceiptsStayOnTheirBranches(t *testing.T) {
 	require.ErrorIs(t, store.Bind(ctx, u.ID, b.ID, a, s1, 2), service.ErrCanvasConflict)
 	require.NoError(t, store.Bind(ctx, u.ID, b.ID, a, s1, again.Revision))
 	require.NoError(t, store.Remove(ctx, u.ID, b.ID, 3))
-	_, err = keys.VideoStudioStore().FindVideoStudioJob(ctx, u.ID, s3)
+	_, err := jobs.FindVideoStudioJob(ctx, u.ID, s3)
 	require.NoError(t, err)
+}
+
+// Uses stored, offline studio receipts; the canvas never submits jobs or retrieves a media file.
+func TestCreativeCanvasContinuationAuthorityAndLegacyEditor(t *testing.T) {
+	ctx := t.Context()
+	route, u, group, store, jobs := canvasWalletTestRouter(t)
+	board, err := store.Create(ctx, u.ID, "多镜分支")
+	require.NoError(t, err)
+	a, b, c, clip, loose := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	v1, v2, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	doc := board.Document
+	for _, id := range []string{a, b, c, loose} {
+		doc.Nodes = append(doc.Nodes, service.CanvasNode{ID: id, Kind: "video-draft"})
+	}
+	req := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var data bytes.Buffer
+		if body != nil {
+			require.NoError(t, json.NewEncoder(&data).Encode(body))
+		}
+		w := httptest.NewRecorder()
+		route.ServeHTTP(w, httptest.NewRequest(method, "/"+board.ID+path, &data))
+		return w
+	}
+	save := func(d service.CanvasDocument, rev int64, version int) *httptest.ResponseRecorder {
+		return req("PUT", "", service.CanvasUpdate{Title: board.Title, Revision: rev, Document: d, GraphVersion: version})
+	}
+	bind := func(node, request string, rev int64, version int) *httptest.ResponseRecorder {
+		return req("POST", "/nodes/"+node+"/attempts", map[string]any{"request_id": request, "revision": rev, "graph_version": version})
+	}
+	read := func() service.CreativeCanvas {
+		t.Helper()
+		w := req("GET", "", nil)
+		require.Equal(t, 200, w.Code, w.Body.String())
+		var d struct{ Data service.CreativeCanvas }
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &d))
+		return d.Data
+	}
+	require.Equal(t, 200, save(doc, 1, 0).Code) // A v1 board remains writable by its original client.
+	for _, pair := range [][2]string{{a, v1}, {a, v2}, {loose, other}} {
+		require.Equal(t, 200, bind(pair[0], pair[1], 2, 0).Code)
+		ok, e := jobs.ClaimVideoStudioJob(ctx, service.VideoStudioJob{ID: pair[1], UserID: u.ID, KeyID: 0, GroupID: group.ID, Model: service.MuseVideoModel, Seconds: 6, Size: "16:9", Fingerprint: "local-continuation"})
+		require.NoError(t, e)
+		require.True(t, ok)
+		require.NoError(t, jobs.UpdateVideoStudioJob(ctx, u.ID, pair[1], "fixture-"+pair[1], "completed", false))
+	}
+	doc.Nodes = append(doc.Nodes, service.CanvasNode{ID: clip, Kind: "video", VideoID: v2})
+	doc.Edges = []service.CanvasEdge{{Source: a, Target: b, TakeID: other}, {Source: b, Target: c}}
+	require.Equal(t, 400, save(doc, 2, 2).Code, "a completed take from a sibling is not a take of the parent")
+	doc.Edges[0].TakeID = uuid.NewString()
+	require.Equal(t, 422, save(doc, 2, 2).Code, "a missing media reference cannot be attached")
+	otherOwner := mustCreateUser(t, testEntClient(t), &service.User{Balance: 5})
+	foreign := uuid.NewString()
+	inserted, e := jobs.ClaimVideoStudioJob(ctx, service.VideoStudioJob{ID: foreign, UserID: otherOwner.ID, KeyID: 0, GroupID: group.ID, Model: service.MuseVideoModel, Seconds: 6, Size: "16:9", Fingerprint: "other-local"})
+	require.NoError(t, e)
+	require.True(t, inserted)
+	require.NoError(t, jobs.UpdateVideoStudioJob(ctx, otherOwner.ID, foreign, "offline-foreign", "completed", false))
+	doc.Edges[0].TakeID = foreign
+	require.Equal(t, 422, save(doc, 2, 2).Code, "another owner's completed video in the same group is not a source")
+	doc.Edges[0].TakeID = v1
+	require.Equal(t, 409, save(doc, 2, 0).Code)
+	require.Equal(t, 200, save(doc, 2, 2).Code)
+	view := read()
+	require.Equal(t, v1, view.Inputs[c].VideoID)
+	require.True(t, view.Inputs[c].Available)
+	require.Equal(t, v1, view.Inputs[b].VideoID)
+	legacy := doc
+	legacy.Edges = []service.CanvasEdge{}
+	require.Equal(t, 409, save(legacy, 3, 0).Code, "a stale editor must not remove unknown edges")
+	request := uuid.NewString()
+	require.Equal(t, 409, bind(c, request, 3, 0).Code, "old handoff must not bind as text-only")
+	require.Equal(t, 409, bind(c, request, 2, 2).Code)
+	require.Equal(t, 200, bind(c, request, 3, 2).Code)
+	require.Equal(t, 200, bind(c, request, 3, 2).Code)
+	doc.Nodes[0].PinnedID = v2
+	require.Equal(t, 200, save(doc, 3, 2).Code)
+	require.Equal(t, v1, read().Inputs[c].VideoID, "changing the parent preview must not switch descendant media")
+	doc.Edges[0].TakeID = v2
+	require.Equal(t, 400, save(doc, 4, 2).Code, "already bound grandchild keeps its original input")
+	doc.Edges[0].TakeID = v1
+	next := uuid.NewString()
+	doc.Nodes = append(doc.Nodes, service.CanvasNode{ID: next, Kind: "video-draft"})
+	doc.Edges = append(doc.Edges, service.CanvasEdge{Source: clip, Target: next})
+	require.Equal(t, 200, save(doc, 4, 2).Code)
+	require.Equal(t, v2, read().Inputs[next].VideoID)
+	// Expire only the first version; the new imported-video branch keeps its own grant.
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_studio_jobs SET created_at=now()-interval '1 year' WHERE user_id=$1 AND id=$2`, u.ID, v1)
+	require.NoError(t, err)
+	view = read()
+	require.False(t, view.Inputs[c].Available)
+	require.True(t, view.Inputs[next].Available)
+	require.Equal(t, v1, view.Inputs[c].VideoID)
+	require.Equal(t, 422, bind(c, uuid.NewString(), 5, 2).Code)
+	// Even an already bound request cannot bypass revocation. The canvas writes no ledger/charged job.
+	require.Equal(t, 422, bind(c, request, 5, 2).Code)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE groups SET allow_image_generation=false WHERE id=$1`, group.ID)
+	require.NoError(t, err)
+	require.False(t, read().Inputs[next].Available)
+	require.Equal(t, 422, bind(next, uuid.NewString(), 5, 2).Code, "an existing continuation cannot bypass loss of its studio grant")
+	var jobCount, attemptCount int
+	var balance float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT balance,(SELECT count(*) FROM video_studio_jobs WHERE user_id=$1),(SELECT count(*) FROM creative_canvas_attempts WHERE user_id=$1) FROM users WHERE id=$1`, u.ID).Scan(&balance, &jobCount, &attemptCount))
+	require.Equal(t, 3., balance)
+	require.Equal(t, 3, jobCount)
+	require.Equal(t, 4, attemptCount)
 }

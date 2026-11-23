@@ -120,6 +120,29 @@ func (r *creativeCanvasRepository) Get(ctx context.Context, u int64, id string) 
 	}
 	return b, tx.Commit()
 }
+
+// Old bindings stored {route,batchId,itemId,index} or JSON null. Keep those identities byte-compatible;
+// a video binding is identified by its immutable studio job ID, not the URL or extracted bytes.
+func canvasInputSnapshot(in service.CanvasInput) ([]byte, error) {
+	if in.VideoID != "" {
+		return json.Marshal(in)
+	}
+	return json.Marshal(in.Image)
+}
+
+func decodeCanvasInputSnapshot(data []byte) (service.CanvasInput, error) {
+	var v struct {
+		*service.CanvasImage
+		VideoID string `json:"video_id"`
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &v); err != nil {
+			return service.CanvasInput{}, err
+		}
+	}
+	return service.CanvasInput{Image: v.CanvasImage, VideoID: v.VideoID}, nil
+}
+
 func (r *creativeCanvasRepository) Save(ctx context.Context, u int64, id string, update service.CanvasUpdate) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -133,30 +156,44 @@ func (r *creativeCanvasRepository) Save(ctx context.Context, u int64, id string,
 	if b.Revision != update.Revision {
 		return service.ErrCanvasConflict
 	}
+	oldLineage, err := b.Document.Lineage()
+	if err != nil {
+		return err
+	}
+	lineage, err := update.Document.Lineage()
+	if err != nil {
+		return err
+	}
+	if err := service.CheckCanvasGraphVersion(update.GraphVersion, len(oldLineage.Continuation) > 0 || len(lineage.Continuation) > 0); err != nil {
+		return err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT request_id::text,node_id::text,source_image FROM creative_canvas_attempts WHERE user_id=$1 AND canvas_id=$2`, u, id)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	bound := map[string]string{}
-	sources := map[string]*service.CanvasImage{}
+	sources := map[string]service.CanvasInput{}
 	for rows.Next() {
 		var a, n string
 		var data []byte
 		if err = rows.Scan(&a, &n, &data); err != nil {
 			return err
 		}
-		var source *service.CanvasImage
-		if len(data) > 0 {
-			if err = json.Unmarshal(data, &source); err != nil {
-				return err
-			}
+		source, err := decodeCanvasInputSnapshot(data)
+		if err != nil {
+			return err
 		}
 		bound[a] = n
 		sources[n] = source
 	}
 	if err = rows.Err(); err != nil {
 		return err
+	}
+	for _, edge := range lineage.Parent {
+		if edge.TakeID != "" && bound[edge.TakeID] != edge.Source {
+			return service.ErrCanvasInvalid
+		}
 	}
 	for _, n := range update.Document.Nodes {
 		if n.PinnedID != "" && bound[n.PinnedID] != n.ID {
@@ -166,7 +203,7 @@ func (r *creativeCanvasRepository) Save(ctx context.Context, u int64, id string,
 			if n.Kind != "video-draft" {
 				return service.ErrCanvasInvalid
 			}
-			if next := update.Document.SourceImage(n.ID); next != nil && (original == nil || *original != *next) {
+			if next := lineage.Input[n.ID]; (next.Image != nil || next.VideoID != "") && !original.Equal(next) {
 				return service.ErrCanvasInvalid
 			}
 		}
@@ -216,10 +253,19 @@ func (r *creativeCanvasRepository) Bind(ctx context.Context, u int64, id, node, 
 	if !slices.ContainsFunc(b.Document.Nodes, func(n service.CanvasNode) bool { return n.ID == node && n.Kind == "video-draft" }) {
 		return service.ErrCanvasNotFound
 	}
+	lineage, err := b.Document.Lineage()
+	if err != nil {
+		return err
+	}
+	source, err := canvasInputSnapshot(lineage.Input[node])
+	if err != nil {
+		return err
+	}
 	var board, n string
-	err = tx.QueryRowContext(ctx, `SELECT canvas_id::text,node_id::text FROM creative_canvas_attempts WHERE user_id=$1 AND request_id=$2`, u, request).Scan(&board, &n)
+	var sameInput bool
+	err = tx.QueryRowContext(ctx, `SELECT canvas_id::text,node_id::text,source_image IS NOT DISTINCT FROM $3::jsonb FROM creative_canvas_attempts WHERE user_id=$1 AND request_id=$2`, u, request, string(source)).Scan(&board, &n, &sameInput)
 	if err == nil {
-		if board == id && n == node {
+		if board == id && n == node && sameInput {
 			return nil
 		}
 		return service.ErrCanvasConflict
@@ -230,10 +276,6 @@ func (r *creativeCanvasRepository) Bind(ctx context.Context, u int64, id, node, 
 	var count, nodeCount int
 	var claimed bool
 	var different bool
-	source, err := json.Marshal(b.Document.SourceImage(node))
-	if err != nil {
-		return err
-	}
 	err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER(WHERE node_id=$3),coalesce(bool_or(node_id=$3 AND source_image IS DISTINCT FROM $4::jsonb),false),EXISTS(SELECT 1 FROM video_studio_jobs WHERE user_id=$1 AND id=$5) FROM creative_canvas_attempts WHERE user_id=$1 AND canvas_id=$2`, u, id, node, string(source), request).Scan(&count, &nodeCount, &different, &claimed)
 	if err != nil {
 		return err

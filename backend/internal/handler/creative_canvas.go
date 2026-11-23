@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +163,20 @@ func (h *CreativeCanvasHandler) Put(c *gin.Context) {
 		canvasErr(c, service.ErrCanvasConflict)
 		return
 	}
+	oldLineage, e := old.Document.Lineage()
+	if e != nil {
+		canvasErr(c, e)
+		return
+	}
+	lineage, e := q.Document.Lineage()
+	if e != nil {
+		canvasErr(c, e)
+		return
+	}
+	if e := service.CheckCanvasGraphVersion(q.GraphVersion, len(oldLineage.Continuation) > 0 || len(lineage.Continuation) > 0); e != nil {
+		canvasErr(c, e)
+		return
+	}
 	// Already-persisted references keep their positions after revocation/expiry. Never accept a new foreign reference as a placeholder.
 	prev := map[string]service.CanvasNode{}
 	for _, n := range old.Document.Nodes {
@@ -172,6 +187,12 @@ func (h *CreativeCanvasHandler) Put(c *gin.Context) {
 		p := prev[n.ID]
 		if n.Image != nil && (p.Image == nil || *p.Image != *n.Image) || n.VideoID != "" && p.VideoID != n.VideoID {
 			check.Document.Nodes = append(check.Document.Nodes, n)
+		}
+		if n.Kind == "video-draft" && (lineage.Parent[n.ID] != oldLineage.Parent[n.ID] || !lineage.Input[n.ID].Equal(oldLineage.Input[n.ID])) {
+			in := lineage.Input[n.ID]
+			if in.Image != nil || in.VideoID != "" {
+				check.Document.Nodes = append(check.Document.Nodes, service.CanvasNode{ID: n.ID, Image: in.Image, VideoID: in.VideoID})
+			}
 		}
 	}
 	if e = h.resolve(c, u, &check); e != nil {
@@ -212,8 +233,9 @@ func (h *CreativeCanvasHandler) Bind(c *gin.Context) {
 		return
 	}
 	var q struct {
-		ID       string `json:"request_id"`
-		Revision int64  `json:"revision"`
+		ID           string `json:"request_id"`
+		Revision     int64  `json:"revision"`
+		GraphVersion int    `json:"graph_version,omitempty"`
 	}
 	if !canvasDecode(c, &q) {
 		return
@@ -229,8 +251,25 @@ func (h *CreativeCanvasHandler) Bind(c *gin.Context) {
 		canvasErr(c, err)
 		return
 	}
-	if image := board.Document.SourceImage(node); image != nil {
-		check := service.CreativeCanvas{Document: service.CanvasDocument{Nodes: []service.CanvasNode{{ID: node, Kind: "image", Image: image}}}}
+	if !slices.ContainsFunc(board.Document.Nodes, func(n service.CanvasNode) bool { return n.ID == node && n.Kind == "video-draft" }) {
+		canvasErr(c, service.ErrCanvasNotFound)
+		return
+	}
+	if board.Revision != q.Revision {
+		canvasErr(c, service.ErrCanvasConflict)
+		return
+	}
+	lineage, err := board.Document.Lineage()
+	if err != nil {
+		canvasErr(c, err)
+		return
+	}
+	if err := service.CheckCanvasGraphVersion(q.GraphVersion, lineage.Continuation[node]); err != nil {
+		canvasErr(c, err)
+		return
+	}
+	if input := lineage.Input[node]; input.Image != nil || input.VideoID != "" {
+		check := service.CreativeCanvas{Document: service.CanvasDocument{Nodes: []service.CanvasNode{{ID: node, Image: input.Image, VideoID: input.VideoID}}}}
 		if err = h.resolve(c, u, &check); err != nil {
 			canvasErr(c, err)
 			return
@@ -252,6 +291,17 @@ func (h *CreativeCanvasHandler) resolve(c *gin.Context, u int64, b *service.Crea
 	ctx := c.Request.Context()
 	if b.Assets == nil {
 		b.Assets = map[string]service.CanvasAsset{}
+	}
+	lineage, err := b.Document.Lineage()
+	if err != nil {
+		return err
+	}
+	if len(lineage.Continuation) > 0 {
+		b.Inputs = make(map[string]service.CanvasResolvedInput, len(lineage.Continuation))
+		for id := range lineage.Continuation {
+			in := lineage.Input[id]
+			b.Inputs[id] = service.CanvasResolvedInput{CanvasInput: in, Available: in.Image == nil && in.VideoID == ""}
+		}
 	}
 	imgs := []service.CanvasImage{}
 	ids := map[string]bool{}
@@ -303,6 +353,7 @@ func (h *CreativeCanvasHandler) resolve(c *gin.Context, u int64, b *service.Crea
 		legacy[id] = key
 		return key, nil
 	}
+	allowedImages := make(map[service.CanvasImage]bool, len(images))
 	for _, n := range b.Document.Nodes {
 		if n.Image == nil {
 			continue
@@ -315,6 +366,7 @@ func (h *CreativeCanvasHandler) resolve(c *gin.Context, u int64, b *service.Crea
 			}
 			ok = k != nil
 		}
+		allowedImages[*n.Image] = ok
 		b.Assets[n.ID] = service.CanvasAsset{Available: ok}
 	}
 	groups := map[int64]bool{}
@@ -372,10 +424,20 @@ func (h *CreativeCanvasHandler) resolve(c *gin.Context, u int64, b *service.Crea
 		lookup[visible[i].ID] = &visible[i]
 		delete(denied, visible[i].ID)
 	}
+	playable := func(j *service.VideoStudioJob) bool { return j != nil && j.Status == "completed" && j.Receipt != "" }
+	for id, in := range b.Inputs {
+		switch {
+		case in.Image != nil:
+			in.Available = allowedImages[*in.Image]
+		case in.VideoID != "":
+			in.Available = playable(lookup[in.VideoID])
+		}
+		b.Inputs[id] = in
+	}
 	for _, n := range b.Document.Nodes {
 		if n.VideoID != "" {
 			j := lookup[n.VideoID]
-			b.Assets[n.ID] = service.CanvasAsset{Available: j != nil && j.Status == "completed" && j.Receipt != "", Job: j}
+			b.Assets[n.ID] = service.CanvasAsset{Available: playable(j), Job: j}
 		}
 	}
 	for i := range b.Attempts {

@@ -56,6 +56,7 @@ type CanvasNode struct {
 type CanvasEdge struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
+	TakeID string `json:"take_id,omitempty"`
 }
 type CanvasDocument struct {
 	Viewport CanvasViewport `json:"viewport"`
@@ -81,14 +82,16 @@ type CanvasAttempt struct {
 }
 type CreativeCanvas struct {
 	CanvasSummary
-	Document CanvasDocument         `json:"document"`
-	Assets   map[string]CanvasAsset `json:"assets"`
-	Attempts []CanvasAttempt        `json:"attempts"`
+	Document CanvasDocument                 `json:"document"`
+	Assets   map[string]CanvasAsset         `json:"assets"`
+	Attempts []CanvasAttempt                `json:"attempts"`
+	Inputs   map[string]CanvasResolvedInput `json:"inputs,omitempty"`
 }
 type CanvasUpdate struct {
-	Title    string         `json:"title"`
-	Revision int64          `json:"revision"`
-	Document CanvasDocument `json:"document"`
+	GraphVersion int            `json:"graph_version,omitempty"`
+	Title        string         `json:"title"`
+	Revision     int64          `json:"revision"`
+	Document     CanvasDocument `json:"document"`
 }
 
 // The canvas store has no submission, provider-poll, media-download or billing capabilities.
@@ -140,41 +143,6 @@ func (d CanvasDocument) Validate() error {
 			return ErrCanvasInvalid
 		}
 	}
-	// Directed type rules form a DAG by construction. One image can feed many drafts, but a draft has one first image.
-	seen := map[CanvasEdge]bool{}
-	parent := map[string]bool{}
-	for _, e := range d.Edges {
-		s, t := kinds[e.Source], kinds[e.Target]
-		if seen[e] || !(s == "image" && t == "video-draft" || s == "note" && (t == "image" || t == "video-draft")) {
-			return ErrCanvasInvalid
-		}
-		seen[e] = true
-		if s == "image" {
-			if parent[e.Target] {
-				return ErrCanvasInvalid
-			}
-			parent[e.Target] = true
-		}
-	}
-	return nil
-}
-func (d CanvasDocument) Images() map[string]CanvasImage {
-	m := map[string]CanvasImage{}
-	for _, n := range d.Nodes {
-		if n.Image != nil {
-			m[n.ID] = *n.Image
-		}
-	}
-	return m
-}
-func (d CanvasDocument) SourceImage(node string) *CanvasImage {
-	images := d.Images()
-	for _, e := range d.Edges {
-		if e.Target == node {
-			if i, ok := images[e.Source]; ok {
-				return &i
-			}
-		}
-	}
-	return nil
+	_, err := d.Lineage()
+	return err
 }
