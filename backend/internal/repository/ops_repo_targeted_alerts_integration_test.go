@@ -109,12 +109,14 @@ func TestOpsTargetedUpstreamQueryMatchesOnlyOneHop(t *testing.T) {
 		ErrorKeywords: []string{`literal%_\text`}}
 	match, err := repo.CountAccountUpstreamErrors(ctx, filter)
 	require.NoError(t, err)
-	require.Equal(t, service.OpsAccountUpstreamErrorMatch{Count: 3, LatestAccountID: account248, LatestUpstreamStatusCode: 402,
+	// Long-stream failover: failed hop occurred before window start, recovered log was persisted within window.
+	// Querying by persisted created_at ensures long failover streams are not silently dropped.
+	require.Equal(t, service.OpsAccountUpstreamErrorMatch{Count: 4, LatestAccountID: account248, LatestUpstreamStatusCode: 402,
 		LatestProviderCode: "vendor:balance", LatestPlatform: service.PlatformOpenAI, MatchedAccountIDs: []int64{account248}}, match)
 	filter.AccountIDs = nil
 	match, err = repo.CountAccountUpstreamErrors(ctx, filter)
 	require.NoError(t, err)
-	require.Equal(t, int64(4), match.Count)
+	require.Equal(t, int64(5), match.Count)
 	require.Equal(t, account258, match.LatestAccountID)
 	require.Equal(t, []int64{account248, account258}, match.MatchedAccountIDs)
 	filter.ProviderCodes = []string{"vendor:rate"}

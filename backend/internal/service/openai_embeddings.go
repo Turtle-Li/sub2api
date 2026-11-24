@@ -115,6 +115,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 		respBody := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, respBody, upstreamModel); failure != nil {
+			return nil, failure
+		}
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)

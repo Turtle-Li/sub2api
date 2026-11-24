@@ -28,6 +28,60 @@ var providerErrorCodePattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,64}$`)
 
 func IsValidProviderErrorCode(code string) bool { return providerErrorCodePattern.MatchString(code) }
 
+func extractTrustedBalanceFields(raw []byte, statusCode int, platform string, result *UpstreamBalanceClassification, billingCode, workspaceDeactivated *bool) string {
+	var message string
+	for _, field := range []string{"error.code", "code", "error.type"} {
+		value := gjson.GetBytes(raw, field)
+		if value.Type != gjson.String || !IsValidProviderErrorCode(value.Str) {
+			continue
+		}
+		if result.ProviderCode == "" {
+			result.ProviderCode = value.Str
+		}
+		switch value.Str {
+		case "gateway_reservation_insufficient", "insufficient_quota", "billing_not_active":
+			if !*billingCode {
+				result.ProviderCode = value.Str
+			}
+			*billingCode = true
+		case "deactivated_workspace":
+			*workspaceDeactivated = true
+		}
+	}
+	// This one fixed OpenAI code also has a deployed detail envelope.
+	if statusCode == http.StatusPaymentRequired && platform == PlatformOpenAI {
+		if dc := gjson.GetBytes(raw, "detail.code"); dc.Type == gjson.String && dc.Str == "deactivated_workspace" {
+			*workspaceDeactivated = true
+		}
+	}
+	if m := gjson.GetBytes(raw, "error.message"); m.Type == gjson.String {
+		message = m.Str
+	}
+	return message
+}
+
+func extractEmbeddedJSONErrorEnvelope(message string) []byte {
+	trimmed := strings.TrimSpace(message)
+	if !strings.HasPrefix(trimmed, "{") {
+		return nil
+	}
+	candidate := trimmed
+	if !gjson.Valid(candidate) {
+		lastBrace := strings.LastIndex(trimmed, "}")
+		if lastBrace <= 0 {
+			return nil
+		}
+		candidate = trimmed[:lastBrace+1]
+		if !gjson.Valid(candidate) {
+			return nil
+		}
+	}
+	if !gjson.Get(candidate, "error").IsObject() {
+		return nil
+	}
+	return []byte(candidate)
+}
+
 // ClassifyUpstreamBalanceError uses only provider-owned error fields. Other
 // fields (including arbitrary detail, top-level message and echoed payloads)
 // are not evidence of a billing error.
@@ -36,29 +90,12 @@ func ClassifyUpstreamBalanceError(platform string, statusCode int, body []byte) 
 	var billingCode, workspaceDeactivated bool
 	var message string
 	if gjson.ValidBytes(body) {
-		for _, field := range []string{"error.code", "code", "error.type"} {
-			value := gjson.GetBytes(body, field)
-			if value.Type != gjson.String || !IsValidProviderErrorCode(value.Str) {
-				continue
-			}
-			if result.ProviderCode == "" {
-				result.ProviderCode = value.Str
-			}
-			switch value.Str {
-			case "gateway_reservation_insufficient", "insufficient_quota", "billing_not_active":
-				if !billingCode {
-					result.ProviderCode = value.Str
-				}
-				billingCode = true
-			case "deactivated_workspace":
-				workspaceDeactivated = true
+		message = extractTrustedBalanceFields(body, statusCode, platform, &result, &billingCode, &workspaceDeactivated)
+		if embedded := extractEmbeddedJSONErrorEnvelope(message); len(embedded) > 0 {
+			if innerMsg := extractTrustedBalanceFields(embedded, statusCode, platform, &result, &billingCode, &workspaceDeactivated); innerMsg != "" {
+				message = innerMsg
 			}
 		}
-		// This one fixed OpenAI code also has a deployed detail envelope.
-		if statusCode == http.StatusPaymentRequired && platform == PlatformOpenAI && gjson.GetBytes(body, "detail.code").Str == "deactivated_workspace" {
-			workspaceDeactivated = true
-		}
-		message = gjson.GetBytes(body, "error.message").Str
 	} else if len(body) <= 512 {
 		message = string(body)
 	}
@@ -145,13 +182,49 @@ func probeUpstreamBalanceResponse(ctx context.Context, c *gin.Context, limiter *
 }
 
 func (s *OpenAIGatewayService) probeOpenAIBalanceResponse(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, model string) *UpstreamFailoverError {
-	failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, resp, model)
+	if resp == nil || (resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusPaymentRequired) {
+		return nil
+	}
+	var body []byte
+	var readErr error
+	if resp.Body != nil {
+		body, readErr = io.ReadAll(io.LimitReader(resp.Body, upstreamBalanceProbeLimit+1))
+	}
+	evidence := body
+	if len(body) > upstreamBalanceProbeLimit || readErr != nil {
+		evidence = nil
+	}
+	redactedEvidence := evidence
+	if len(redactedEvidence) > 0 {
+		redactedEvidence = s.redactAgentIdentitySensitiveBody(ctx, account, redactedEvidence)
+	}
+	failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, redactedEvidence, model)
+	if resp.Body != nil {
+		if failure != nil {
+			_ = resp.Body.Close()
+			resp.Body = http.NoBody
+		} else {
+			unread := io.Reader(resp.Body)
+			if readErr != nil {
+				unread = io.MultiReader(&replayUpstreamReadError{err: readErr}, unread)
+			}
+			resp.Body = replayUpstreamBody{io.MultiReader(bytes.NewReader(body), unread), resp.Body}
+		}
+	}
 	if failure != nil && account.Platform == PlatformGrok && s.rateLimitService == nil {
 		// Standalone Grok gateways can omit the shared rate-limit service. Keep
 		// the same provider policy they use for other upstream HTTP failures.
 		s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, model), account, failure.StatusCode, resp.Header, failure.ResponseBody)
 	}
 	return failure
+}
+
+func redactAccountSensitiveBody(account *Account, body []byte) []byte {
+	if len(body) == 0 || account == nil {
+		return body
+	}
+	redacted := sanitizeOpenAIPassthroughClientErrorText(account, string(body))
+	return []byte(redacted)
 }
 
 func newHiddenUpstreamBalanceFailure(ctx context.Context, c *gin.Context, limiter *RateLimitService, account *Account, status int, headers http.Header, body []byte, model string) *UpstreamFailoverError {
@@ -162,6 +235,11 @@ func newHiddenUpstreamBalanceFailure(ctx context.Context, c *gin.Context, limite
 	if !classification.HideFromClient {
 		return nil
 	}
+	safeBody := redactAccountSensitiveBody(account, body)
+	safeMsg := sanitizeOpenAIPassthroughClientErrorText(account, extractUpstreamErrorMessage(safeBody))
+	if safeMsg == "" {
+		safeMsg = classification.NormalizedReason
+	}
 	// Retain only narrowly scoped evidence for diagnostics and keywords. No
 	// application-supplied error passthrough rule can expose a hidden attempt.
 	setOpsUpstreamError(c, status, classification.NormalizedReason, "")
@@ -170,14 +248,14 @@ func newHiddenUpstreamBalanceFailure(ctx context.Context, c *gin.Context, limite
 		ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
 		UpstreamStatusCode: status, UpstreamRequestID: headers.Get("x-request-id"),
 		ProviderCode: classification.ProviderCode, Kind: "failover", Reason: classification.NormalizedReason,
-		Message:                  sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body)),
+		Message:                  safeMsg,
 		protectedUpstreamBalance: true,
 	})
 	if limiter != nil {
-		limiter.HandleUpstreamError(ctx, account, status, headers, body, model)
+		limiter.HandleUpstreamError(ctx, account, status, headers, safeBody, model)
 	}
 	return &UpstreamFailoverError{
-		StatusCode: status, ResponseBody: body, HiddenUpstreamBalance: true,
+		StatusCode: status, ResponseBody: safeBody, HiddenUpstreamBalance: true,
 		RetryableOnSameAccount: false, Scope: GatewayFailureScopeAccount,
 		Reason: GatewayFailureReason(classification.NormalizedReason),
 	}

@@ -99,6 +99,10 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 
 	if resp.StatusCode >= 400 {
+		if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, respBody, prepared.UpstreamModel); failure != nil {
+			writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", UpstreamBalanceClientMessage)
+			return fmt.Errorf("responses input_tokens: upstream error: %d", resp.StatusCode)
+		}
 		if isOpenAIResponsesInputTokensUnsupported(account, resp.StatusCode, respBody) {
 			writeOpenAIResponsesInputTokensFallback(c, account, prepared, resp.StatusCode, "upstream_unsupported")
 			return nil
@@ -339,6 +343,10 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	}
 
 	if resp.StatusCode >= 400 {
+		if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, respBody, prepared.UpstreamModel); failure != nil {
+			writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", UpstreamBalanceClientMessage)
+			return fmt.Errorf("input_tokens upstream error: %d", resp.StatusCode)
+		}
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if account.Type == AccountTypeOAuth && isOpenAIOAuthInputTokensUnsupported(resp.StatusCode, respBody) {
 			writeOpenAIOAuthInputTokensFallback(c, account, prepared, resp.StatusCode)

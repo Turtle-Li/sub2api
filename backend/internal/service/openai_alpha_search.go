@@ -95,6 +95,9 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
+		if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, respBody, openAIAlphaSearchSchedulingModel(account, requestedModel)); failure != nil {
+			return nil, failure
+		}
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) ||
 			isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode) {
@@ -179,6 +182,9 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
+		if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, respBody, openAIAlphaSearchSchedulingModel(account, requestedModel)); failure != nil {
+			return nil, failure
+		}
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))

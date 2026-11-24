@@ -241,7 +241,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 			var upErr *service.GeminiCachedContentUpstreamError
 			if errors.As(err, &upErr) {
 				reqLog.Info("gemini.cached_content.upstream_create_failed", zap.Int64("account_id", account.ID), zap.Int("status", upErr.StatusCode))
-				if upErr.RetryableOnOtherAccount() {
+				if upErr.RetryableOnOtherAccount() || service.ClassifyUpstreamBalanceError(account.Platform, upErr.StatusCode, upErr.Body).HideFromClient {
 					lastUpstreamErr = upErr
 					excluded[account.ID] = struct{}{}
 					continue
@@ -774,6 +774,11 @@ func writeGeminiCachedContentBillingError(c *gin.Context, err error) {
 // 只有上游网关账号的这类响应反映持有缓存的上游账号状态，原样回写。
 func (h *GatewayHandler) writeGeminiCachedContentUpstreamError(c *gin.Context, upErr *service.GeminiCachedContentUpstreamError) {
 	status := upErr.StatusCode
+	if cls := service.ClassifyUpstreamBalanceError(service.PlatformGemini, status, upErr.Body); cls.HideFromClient {
+		service.SetOpsUpstreamError(c, status, cls.NormalizedReason, "")
+		googleError(c, http.StatusBadGateway, service.UpstreamBalanceClientMessage)
+		return
+	}
 	message := strings.TrimSpace(extractGoogleErrorMessage(upErr.Body))
 	service.SetOpsUpstreamError(c, status, message, "")
 	if upErr.NotFound() {

@@ -1052,10 +1052,10 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 ) error {
 	reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
 	canonicalModel := canonicalOpenAIAccountSchedulingModel(account, reqModel)
-	if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, responseBody, canonicalModel); failure != nil {
+	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
+	if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, body, canonicalModel); failure != nil {
 		return failure
 	}
-	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -1105,11 +1105,11 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 ) error {
 	reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
 	canonicalModel := canonicalOpenAIAccountSchedulingModel(account, reqModel)
-	if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, responseBody, canonicalModel); failure != nil {
+	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
+	if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, resp.StatusCode, resp.Header, body, canonicalModel); failure != nil {
 		return failure
 	}
 	MarkResponseCommitted(c)
-	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
 
 	// cyber_policy 仍按原始 body 打内部标记，供 handler 事后写风控/邮件；面向客户端的
 	// 错误体在下方统一重建。cyber 是上游网络安全策略拦截，不冷却账号，

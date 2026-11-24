@@ -217,8 +217,6 @@ WITH matched AS MATERIALIZED (
     WHERE jsonb_typeof(e.upstream_errors) IS DISTINCT FROM 'array'
   ) hop
   WHERE e.created_at >= $1 AND e.created_at < $2
-    AND hop.at_unix_ms >= (EXTRACT(EPOCH FROM $1::timestamptz) * 1000)::bigint
-    AND hop.at_unix_ms < (EXTRACT(EPOCH FROM $2::timestamptz) * 1000)::bigint
     AND ($3::bigint IS NULL OR e.group_id = $3)
     AND ($4::text = '' OR hop.platform = $4)
     AND hop.status_code BETWEEN 400 AND 599

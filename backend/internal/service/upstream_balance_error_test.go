@@ -27,6 +27,8 @@ func TestClassifyUpstreamBalanceError(t *testing.T) {
 		{"workspace code", PlatformOpenAI, `{"error":{"code":"deactivated_workspace"}}`, "deactivated_workspace", 402, true, false},
 		{"workspace unrelated scope", PlatformAnthropic, `{"code":"deactivated_workspace"}`, "deactivated_workspace", 402, true, true},
 		{"nested billing code", PlatformOpenAI, `{"error":{"code":"gateway_reservation_insufficient","message":"not a billing phrase"}}`, "gateway_reservation_insufficient", 400, true, true},
+		{"embedded json envelope billing code", PlatformOpenAI, `{"error":{"type":"invalid_request_error","message":"{\"error\":{\"code\":\"gateway_reservation_insufficient\",\"message\":\"可用资金不足\"}}"}}`, "gateway_reservation_insufficient", 400, true, true},
+		{"non-string error message object ignored", PlatformOpenAI, `{"error":{"message":{"secret":"internal","text":"your credit balance is too low"}}}`, "", 400, false, false},
 		{"top-level error code", PlatformGemini, `{"code":"billing_not_active"}`, "billing_not_active", 400, true, true},
 		{"error type", PlatformAnthropic, `{"error":{"type":"insufficient_quota"}}`, "insufficient_quota", 400, true, true},
 		{"explicit official sentence", PlatformAnthropic, `{"error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`, "invalid_request_error", 400, true, true},
@@ -50,6 +52,42 @@ func TestClassifyUpstreamBalanceError(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("extractUpstreamErrorMessage rejects non-string object and array", func(t *testing.T) {
+		require.Equal(t, "", extractUpstreamErrorMessage([]byte(`{"error":{"message":{"private":"secret"}}}`)))
+		require.Equal(t, "", extractUpstreamErrorMessage([]byte(`{"error":{"message":["private"]}}`)))
+		require.Equal(t, "", extractUpstreamErrorMessage([]byte(`{"detail":{"private":"secret"}}`)))
+		require.Equal(t, "", extractUpstreamErrorMessage([]byte(`{"message":{"private":"secret"}}`)))
+		require.Equal(t, "safe text", extractUpstreamErrorMessage([]byte(`{"error":{"message":"safe text"}}`)))
+	})
+
+	t.Run("newHiddenUpstreamBalanceFailure redacts account credentials and upstream host", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		repo := &balanceTestAccountRepo{}
+		limiter := NewRateLimitService(repo, nil, balanceTestConfig(), nil, nil)
+		account := &Account{
+			ID: 248, Name: "AIAPI", Platform: PlatformAnthropic, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"api_key":  "sk-secret-provider-key-9999",
+				"base_url": "https://secret-relay.example.com/v1",
+			},
+		}
+		raw := []byte(`{"error":{"code":"gateway_reservation_insufficient","message":"key sk-secret-provider-key-9999 failed at secret-relay.example.com"}}`)
+		failure := newHiddenUpstreamBalanceFailure(context.Background(), c, limiter, account, http.StatusPaymentRequired, http.Header{}, raw, "claude-opus-5")
+		require.NotNil(t, failure)
+		require.NotContains(t, string(failure.ResponseBody), "sk-secret-provider-key-9999")
+		require.NotContains(t, string(failure.ResponseBody), "secret-relay.example.com")
+		require.NotContains(t, repo.lastErrorMsg, "sk-secret-provider-key-9999")
+		require.NotContains(t, repo.lastErrorMsg, "secret-relay.example.com")
+		evts, _ := c.Get(OpsUpstreamErrorsKey)
+		opsEvents, ok := evts.([]*OpsUpstreamErrorEvent)
+		require.True(t, ok)
+		require.Len(t, opsEvents, 1)
+		require.NotContains(t, opsEvents[0].Message, "sk-secret-provider-key-9999")
+		require.NotContains(t, opsEvents[0].Message, "secret-relay.example.com")
+	})
 }
 
 type balanceTestUpstream struct {

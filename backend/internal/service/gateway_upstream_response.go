@@ -293,24 +293,28 @@ func SanitizeUpstreamErrorMessage(message string) string {
 
 func extractUpstreamErrorMessage(body []byte) string {
 	// Claude 风格：{"type":"error","error":{"type":"...","message":"..."}}
-	if m := gjson.GetBytes(body, "error.message").String(); strings.TrimSpace(m) != "" {
-		inner := strings.TrimSpace(m)
+	// 只接受 JSON 字符串，避免 error.message 为对象/数组时序列化整段原始 JSON 透出非标字段。
+	if m := gjson.GetBytes(body, "error.message"); m.Type == gjson.String && strings.TrimSpace(m.Str) != "" {
+		inner := strings.TrimSpace(m.Str)
 		// 有些上游会把完整 JSON 作为字符串塞进 message
 		if strings.HasPrefix(inner, "{") {
-			if innerMsg := gjson.Get(inner, "error.message").String(); strings.TrimSpace(innerMsg) != "" {
-				return innerMsg
+			if innerMsg := gjson.Get(inner, "error.message"); innerMsg.Type == gjson.String && strings.TrimSpace(innerMsg.Str) != "" {
+				return innerMsg.Str
 			}
 		}
-		return m
+		return m.Str
 	}
 
 	// ChatGPT 内部 API 风格：{"detail":"..."}
-	if d := gjson.GetBytes(body, "detail").String(); strings.TrimSpace(d) != "" {
-		return d
+	if d := gjson.GetBytes(body, "detail"); d.Type == gjson.String && strings.TrimSpace(d.Str) != "" {
+		return d.Str
 	}
 
-	// 兜底：尝试顶层 message
-	return gjson.GetBytes(body, "message").String()
+	// 兜底：尝试顶层 message（仅接受字符串）
+	if top := gjson.GetBytes(body, "message"); top.Type == gjson.String {
+		return top.Str
+	}
+	return ""
 }
 
 func extractUpstreamErrorCode(body []byte) string {
