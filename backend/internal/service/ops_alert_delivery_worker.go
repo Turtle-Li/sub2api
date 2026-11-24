@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -30,24 +31,25 @@ redis.call('PEXPIRE', KEYS[1], 3600000)
 return 1
 `)
 
-func (s *OpsAlertEvaluatorService) planOpsAlertDeliveries(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent) ([]OpsAlertDeliveryTarget, error) {
+func (s *OpsAlertEvaluatorService) planOpsAlertDeliveries(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent) []OpsAlertDeliveryTarget {
 	plan := make([]OpsAlertDeliveryTarget, 0, 2)
 	if runtimeCfg != nil && isOpsAlertSilenced(time.Now(), rule, event, runtimeCfg.Silencing) {
-		return plan, nil
+		return plan
 	}
 	if rule.NotifyEmail && s.emailService != nil && s.opsService != nil {
 		cfg, err := s.opsService.GetEmailNotificationConfig(ctx)
 		if err != nil {
-			return nil, err
-		}
-		for _, recipient := range opsAlertEmailRecipients(cfg, rule, event.Severity) {
-			plan = append(plan, OpsAlertDeliveryTarget{Channel: OpsAlertDeliveryEmail, Target: recipient})
+			slog.WarnContext(ctx, "ops_alert_email_settings_unavailable", "rule_id", rule.ID)
+		} else {
+			for _, recipient := range opsAlertEmailRecipients(cfg, rule, event.Severity) {
+				plan = append(plan, OpsAlertDeliveryTarget{Channel: OpsAlertDeliveryEmail, Target: recipient})
+			}
 		}
 	}
 	if rule.NotifyFeishu && s.feishuSender != nil {
 		plan = append(plan, OpsAlertDeliveryTarget{Channel: OpsAlertDeliveryFeishu, Target: OpsAlertFeishuTarget})
 	}
-	return plan, nil
+	return plan
 }
 
 func opsAlertEmailRecipients(cfg *OpsEmailNotificationConfig, rule *OpsAlertRule, severity string) []string {
@@ -58,6 +60,7 @@ func opsAlertEmailRecipients(cfg *OpsEmailNotificationConfig, rule *OpsAlertRule
 	if len(rule.NotifyEmails) > 0 {
 		addresses, err := NormalizeOpsAlertEmails(rule.NotifyEmails)
 		if err != nil {
+			slog.Warn("ops_alert_email_recipients_invalid", "rule_id", rule.ID)
 			return nil // Invalid saved rules never fall back to another audience.
 		}
 		return addresses

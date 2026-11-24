@@ -678,11 +678,13 @@ rm -rf "$(state_path sub2api-green)"
 : >"$CALLS"
 SUB2API_FEISHU_ENABLED=true PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_ENABLED=true'
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_OPS_FEISHU_ALERTS_ENABLED=false'
 assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false'
 assert_not_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_WEBHOOK_URL='
 rm -rf "$(state_path sub2api-green)"
-printf 'SUB2API_FEISHU_ENABLED=true\n' >>"$(state_path sub2api)/env"
+printf 'SUB2API_FEISHU_ENABLED=true\nSUB2API_OPS_FEISHU_ALERTS_ENABLED=true\n' >>"$(state_path sub2api)/env"
 PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_OPS_FEISHU_ALERTS_ENABLED=true'
 assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false'
 # A stale/precreated candidate missing the bot mount cannot be reused.
 sed -i.bak '/sub2api_feishu_vault/d' "$(state_path sub2api-green)/mounts"
@@ -693,8 +695,17 @@ assert_not_contains "$CALLS" 'start sub2api-green'
 rm -rf "$(state_path sub2api-green)"
 SUB2API_FEISHU_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_ENABLED=false'
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_OPS_FEISHU_ALERTS_ENABLED=true'
 assert_not_contains "$(state_path sub2api-green)/mounts" 'sub2api_feishu_vault'
 rm -rf "$(state_path sub2api-green)"
+SUB2API_OPS_FEISHU_ALERTS_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_ENABLED=true'
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_OPS_FEISHU_ALERTS_ENABLED=false'
+assert_not_contains "$(state_path sub2api-green)/env" 'SUB2API_OPS_FEISHU_ALERTS_ENABLED=true'
+rm -rf "$(state_path sub2api-green)"
+printf 'SUB2API_OPS_FEISHU_ALERTS_ENABLED=false\n' >>"$(state_path sub2api)/env"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then fail 'duplicate inherited Ops Feishu switches accepted'; fi
+assert_contains "$OUTPUT" 'duplicate Ops Feishu enable switch'
 printf 'SUB2API_FEISHU_ENABLED=false\n' >>"$(state_path sub2api)/env"
 if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then fail 'duplicate inherited Feishu switches accepted'; fi
 assert_contains "$OUTPUT" 'duplicate Feishu enable switch'
@@ -719,6 +730,20 @@ for feishu_fault in missing_mount writable_mount wrong_flag duplicate_flag; do
   assert_not_contains "$CALLS" 'start sub2api-green'
   rm -rf "$(state_path sub2api-green)"
 done
+
+# Rollback/recovery targeting an existing historical fallback container without
+# SUB2API_OPS_FEISHU_ALERTS_ENABLED must still succeed even if the forward
+# release environment explicitly sets SUB2API_OPS_FEISHU_ALERTS_ENABLED=true,
+# while a forward release without rollback preserve must still reject it.
+SUB2API_FEISHU_ENABLED=true SUB2API_OPS_FEISHU_ALERTS_ENABLED=false DUAL_NODE_RUNTIME_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+sed -i.bak '/^SUB2API_OPS_FEISHU_ALERTS_ENABLED=/d' "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
+if SUB2API_FEISHU_ENABLED=true SUB2API_OPS_FEISHU_ALERTS_ENABLED=true DUAL_NODE_RUNTIME_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'forward external reuse accepted candidate missing SUB2API_OPS_FEISHU_ALERTS_ENABLED'
+fi
+SUB2API_FEISHU_ENABLED=true SUB2API_OPS_FEISHU_ALERTS_ENABLED=true PRESERVE_SOURCE_CONTAINER=sub2api-green REMOVE_EXISTING_NEW_CONTAINER=false DUAL_NODE_RUNTIME_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$OUTPUT" 'precreated, stopped, and verified'
+rm -rf "$(state_path sub2api-green)"
 
 # Single-node local reuse also enforces the managed ingress trio. This path has
 # a smaller compatibility verifier than dual-node mode and must not silently

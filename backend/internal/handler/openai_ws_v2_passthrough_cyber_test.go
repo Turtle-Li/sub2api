@@ -39,6 +39,29 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 
 func newOpenAIWSModeHandlerHarness(t *testing.T, upstreamURL, mode string, readTimeoutSeconds int, concurrencyCache service.ConcurrencyCache, settings ...map[string]string) *openAIWSPassthroughHandlerHarness {
 	t.Helper()
+	accounts := []service.Account{newOpenAIWSModeHandlerAccount(9951, upstreamURL, mode)}
+	return newOpenAIWSModeHandlerWithAccountsHarness(t, accounts, readTimeoutSeconds, concurrencyCache, settings...)
+}
+
+func newOpenAIWSModeHandlerAccount(id int64, upstreamURL, mode string) service.Account {
+	return service.Account{
+		ID:          id,
+		Name:        "openai-ws-passthrough-cyber",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": upstreamURL},
+		Extra: map[string]any{
+			"openai_apikey_responses_websockets_v2_enabled": true,
+			"openai_apikey_responses_websockets_v2_mode":    mode,
+		},
+	}
+}
+
+func newOpenAIWSModeHandlerWithAccountsHarness(t *testing.T, accounts []service.Account, readTimeoutSeconds int, concurrencyCache service.ConcurrencyCache, settings ...map[string]string) *openAIWSPassthroughHandlerHarness {
+	t.Helper()
 	gatewayCache := testutil.NewRedisGatewayCache(t)
 
 	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
@@ -56,20 +79,6 @@ func newOpenAIWSModeHandlerHarness(t *testing.T, upstreamURL, mode string, readT
 	settingSvc := service.NewSettingService(settingRepo, nil)
 
 	groupID := int64(4301)
-	account := service.Account{
-		ID:          9951,
-		Name:        "openai-ws-passthrough-cyber",
-		Platform:    service.PlatformOpenAI,
-		Type:        service.AccountTypeAPIKey,
-		Status:      service.StatusActive,
-		Schedulable: true,
-		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "sk-test", "base_url": upstreamURL},
-		Extra: map[string]any{
-			"openai_apikey_responses_websockets_v2_enabled": true,
-			"openai_apikey_responses_websockets_v2_mode":    mode,
-		},
-	}
 	cfg := &config.Config{}
 	cfg.RunMode = config.RunModeSimple
 	cfg.Default.RateMultiplier = 1
@@ -84,21 +93,24 @@ func newOpenAIWSModeHandlerHarness(t *testing.T, upstreamURL, mode string, readT
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 3
 
-	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
+	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 2)}
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billingCacheSvc.Stop)
 	concurrencySvc := service.NewConcurrencyService(concurrencyCache)
 	gatewaySvc := service.NewOpenAIGatewayService(
 		accountRepo, usageRepo, nil, nil, nil, nil, gatewayCache, cfg, nil, concurrencySvc,
 		service.NewBillingService(cfg, nil), nil, billingCacheSvc, nil, &service.DeferredService{},
 		nil, nil, nil, nil, nil, settingSvc, nil,
 	)
+	t.Cleanup(gatewaySvc.CloseOpenAIWSPool)
 	h := &OpenAIGatewayHandler{
 		gatewayService:           gatewaySvc,
 		billingCacheService:      billingCacheSvc,
 		apiKeyService:            &service.APIKeyService{},
 		contentModerationService: moderationSvc,
 		concurrencyHelper:        NewConcurrencyHelper(concurrencySvc, SSEPingFormatNone, time.Second),
+		maxAccountSwitches:       len(accounts) - 1,
 	}
 
 	apiKey := &service.APIKey{

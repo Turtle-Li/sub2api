@@ -169,6 +169,24 @@ type creditsOveragesRetryResult struct {
 	failure *UpstreamFailoverError
 }
 
+func (s *AntigravityGatewayService) probeAntigravityBalanceResponse(
+	p antigravityRetryLoopParams,
+	resp *http.Response,
+	creditsInjected bool,
+) *UpstreamFailoverError {
+	limiter := s.rateLimitService
+	if creditsInjected {
+		// Paid credits can run out independently of the recoverable free quota.
+		// Mask this failure without applying the shared account-disabling policy.
+		limiter = nil
+	}
+	failure := probeUpstreamBalanceResponse(p.ctx, p.c, limiter, p.account, resp, p.requestedModel)
+	if failure != nil && creditsInjected && failure.Reason == "upstream_payment_required" {
+		s.setCreditsExhausted(p.ctx, p.account)
+	}
+	return failure
+}
+
 // attemptCreditsOveragesRetry 在确认免费配额耗尽后，尝试注入 AI Credits 继续请求。
 func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 	p antigravityRetryLoopParams,
@@ -194,10 +212,7 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 	}
 
 	creditsResp, err := p.httpUpstream.Do(creditsReq, p.proxyURL, p.account.ID, p.account.Concurrency)
-	if failure := probeUpstreamBalanceResponse(p.ctx, p.c, s.rateLimitService, p.account, creditsResp, p.requestedModel); failure != nil {
-		if failure.Reason == "upstream_payment_required" {
-			s.setCreditsExhausted(p.ctx, p.account)
-		}
+	if failure := s.probeAntigravityBalanceResponse(p, creditsResp, true); failure != nil {
 		return &creditsOveragesRetryResult{handled: true, failure: failure}
 	}
 	if err == nil && creditsResp != nil && creditsResp.StatusCode < 400 {

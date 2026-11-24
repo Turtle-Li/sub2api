@@ -7,11 +7,14 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -144,6 +147,83 @@ func TestHandleSmartRetry_QuotaExhausted_UsesCreditsAndStoresIndependentState(t 
 	require.Len(t, upstream.requestBodies, 1)
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
 	require.Empty(t, repo.modelRateLimitCalls, "overages 成功后不应写入普通 model_rate_limits")
+}
+
+type antigravityCreditsBalanceAccountRepo struct {
+	stubAntigravityAccountRepo
+	setErrorCalls int
+}
+
+func (r *antigravityCreditsBalanceAccountRepo) SetError(context.Context, int64, string) error {
+	r.setErrorCalls++
+	return nil
+}
+
+func TestHandleSmartRetry_CreditsBalanceFailurePreservesFreeTierCooldown(t *testing.T) {
+	const model = "claude-sonnet-4-5"
+	plainQuota := `{"error":{"status":"RESOURCE_EXHAUSTED","message":"QUOTA_EXHAUSTED"}}`
+	structuredQuota := `{"error":{"status":"RESOURCE_EXHAUSTED","message":"QUOTA_EXHAUSTED","details":[
+		{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{"model":"claude-sonnet-4-5"}},
+		{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}
+	]}}`
+	for _, tc := range []struct {
+		name, freeBody, creditsBody string
+		creditsStatus               int
+		freeCooldown                time.Duration
+		testConnection              bool
+	}{
+		{"402_with_default_free_cooldown", plainQuota, `{"error":{"message":"Private billing note"}}`, http.StatusPaymentRequired, antigravityDefaultRateLimitDuration, false},
+		{"400_with_explicit_free_cooldown", structuredQuota, `{"error":{"code":"insufficient_quota","message":"Insufficient credits: private billing note"}}`, http.StatusBadRequest, 30 * time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(antigravityFallbackSecondsEnv, "")
+			account := &Account{
+				ID: 103, Type: AccountTypeOAuth, Platform: PlatformAntigravity,
+				Status: StatusActive, Schedulable: true, Extra: map[string]any{"allow_overages": true},
+			}
+			repo := &antigravityCreditsBalanceAccountRepo{}
+			svc := &AntigravityGatewayService{
+				accountRepo: repo, rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+			}
+			creditsResp := &http.Response{StatusCode: tc.creditsStatus, Body: io.NopCloser(strings.NewReader(tc.creditsBody))}
+			upstream := &mockSmartRetryUpstream{responses: []*http.Response{creditsResp}, errors: []error{nil}}
+			out := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(out)
+			params := antigravityRetryLoopParams{
+				ctx: t.Context(), c: c, account: account, accountRepo: repo, handleError: svc.handleUpstreamError,
+				body: []byte(`{"model":"claude-sonnet-4-5","request":{}}`), requestedModel: model,
+				httpUpstream: upstream, accessToken: "test-token", action: "generateContent",
+			}
+			if tc.testConnection {
+				params.handleError = testConnectionHandleError
+			}
+			freeResp := &http.Response{StatusCode: http.StatusTooManyRequests}
+			started := time.Now()
+			result := svc.handleSmartRetry(params, freeResp, []byte(tc.freeBody), "https://ag-1.test", 0, []string{"https://ag-1.test"})
+
+			require.Equal(t, smartRetryActionBreakWithResp, result.action)
+			var failure *UpstreamFailoverError
+			require.ErrorAs(t, result.err, &failure)
+			require.Equal(t, tc.creditsStatus, failure.StatusCode)
+			require.True(t, failure.MustHideUpstreamBalance(PlatformAntigravity))
+			require.True(t, failure.ShouldRetryNextAccount())
+			require.False(t, failure.RetryableOnSameAccount)
+			require.Equal(t, GatewayFailureReason("upstream_payment_required"), failure.Reason)
+			require.False(t, c.Writer.Written(), "the provider balance response must not be written to the client")
+			require.Empty(t, out.Body.String())
+			require.Len(t, upstream.requestBodies, 1)
+			require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+			require.Zero(t, repo.setErrorCalls, "a paid credits failure cannot disable the OAuth account")
+
+			cooldowns := make(map[string]time.Time)
+			for _, call := range repo.modelRateLimitCalls {
+				require.Equal(t, account.ID, call.accountID)
+				cooldowns[call.modelKey] = call.resetAt
+			}
+			require.WithinDuration(t, started.Add(creditsExhaustedDuration), cooldowns[creditsExhaustedKey], time.Second)
+			require.WithinDuration(t, started.Add(tc.freeCooldown), cooldowns[model], time.Second)
+		})
+	}
 }
 
 func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
@@ -541,4 +621,81 @@ func TestClearCreditsExhausted(t *testing.T) {
 		_, exists = rawLimits["claude-sonnet-4-5"]
 		require.True(t, exists, "普通模型限流应保留")
 	})
+}
+
+func TestAntigravityRetryLoop_ProactiveCreditsBalanceFailureDoesNotSetError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{
+			name:       "proactive_credits_402",
+			statusCode: http.StatusPaymentRequired,
+			body:       `{"error":{"message":"Payment required: insufficient balance"}}`,
+		},
+		{
+			name:       "proactive_credits_balance_400",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"insufficient_quota","message":"Your account has insufficient balance."}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &antigravityCreditsBalanceAccountRepo{}
+			limiter := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			upstream := &mockSmartRetryUpstream{
+				responses: []*http.Response{{
+					StatusCode: tc.statusCode,
+					Header:     http.Header{},
+					Body:       io.NopCloser(strings.NewReader(tc.body)),
+				}},
+				errors: []error{nil},
+			}
+			account := &Account{
+				ID:          106,
+				Name:        "acc-106",
+				Type:        AccountTypeOAuth,
+				Platform:    PlatformAntigravity,
+				Status:      StatusActive,
+				Schedulable: true,
+				Extra: map[string]any{
+					"allow_overages": true,
+					modelRateLimitsKey: map[string]any{
+						"claude-sonnet-4-5": map[string]any{
+							"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
+							"rate_limit_reset_at": time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+						},
+					},
+				},
+			}
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			svc := &AntigravityGatewayService{accountRepo: repo, rateLimitService: limiter}
+
+			result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
+				ctx:            context.Background(),
+				prefix:         "[test]",
+				account:        account,
+				accessToken:    "token",
+				action:         "generateContent",
+				body:           []byte(`{"model":"claude-sonnet-4-5","request":{}}`),
+				c:              c,
+				httpUpstream:   upstream,
+				accountRepo:    repo,
+				requestedModel: "claude-sonnet-4-5",
+			})
+
+			require.Nil(t, result)
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.MustHideUpstreamBalance(PlatformAntigravity))
+			require.True(t, failoverErr.ShouldRetryNextAccount())
+			require.False(t, failoverErr.RetryableOnSameAccount)
+			require.Equal(t, GatewayFailureReason("upstream_payment_required"), failoverErr.Reason)
+			require.Len(t, repo.modelRateLimitCalls, 1)
+			require.Equal(t, creditsExhaustedKey, repo.modelRateLimitCalls[0].modelKey)
+			require.Zero(t, repo.setErrorCalls, "proactive credits failure must never disable the account via SetError")
+		})
+	}
 }

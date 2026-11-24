@@ -251,3 +251,53 @@ func TestOpsTargetedAlertEmailAudienceAndFeishuSwitches(t *testing.T) {
 		}
 	}
 }
+
+type targetedAlertPlanningSettingRepo struct {
+	SettingRepository
+	failKey string
+}
+
+func (r targetedAlertPlanningSettingRepo) GetValue(_ context.Context, key string) (string, error) {
+	if key == r.failKey {
+		return "", errors.New("setting unavailable")
+	}
+	if key == SettingKeyOpsEmailNotificationConfig {
+		return `{"alert":{"enabled":true,"recipients":["ops@example.invalid"]}}`, nil
+	}
+	return `{}`, nil
+}
+
+func TestOpsAlertEvaluator_PersistsFeishuPlanWhenEmailUnavailable(t *testing.T) {
+	t.Setenv(runtimegate.StateFileEnv, "")
+	for _, tc := range []struct {
+		name, failKey string
+		emails        []string
+		wantEmail     bool
+	}{
+		{name: "email_config_read_failed", failKey: SettingKeyOpsEmailNotificationConfig},
+		{name: "invalid_saved_recipients", emails: []string{"bad@example.invalid\r\nBcc: injected@example.invalid"}},
+		{name: "shared_runtime_settings_read_failed", failKey: SettingKeyOpsAlertRuntimeSettings, wantEmail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := &OpsAlertRule{ID: 7, Name: "targeted", Enabled: true, Severity: "P1", MetricType: OpsAlertMetricAccountUpstreamError,
+				Operator: ">=", Threshold: 1, WindowMinutes: 5, SustainedMinutes: 1,
+				NotifyEmail: true, NotifyEmails: tc.emails, NotifyFeishu: true,
+				Filters: map[string]any{"account_ids": []int64{248}, "upstream_status_codes": []int{402}}}
+			repo := &targetedAlertTestRepo{rule: rule, match: OpsAccountUpstreamErrorMatch{
+				Count: 3, LatestAccountID: 248, LatestUpstreamStatusCode: 402, LatestPlatform: PlatformOpenAI,
+			}}
+			ops := &OpsService{opsRepo: repo, settingRepo: targetedAlertPlanningSettingRepo{failKey: tc.failKey}}
+			evaluator := NewOpsAlertEvaluatorService(ops, repo, &EmailService{}, nil, nil, nil, &targetedAlertTestSender{})
+
+			evaluator.evaluateOnce(time.Minute)
+
+			require.NotNil(t, repo.event, "email planning must not veto event creation")
+			require.Equal(t, OpsAlertStatusFiring, repo.event.Status)
+			want := []OpsAlertDeliveryTarget{{Channel: OpsAlertDeliveryFeishu, Target: OpsAlertFeishuTarget}}
+			if tc.wantEmail {
+				want = append(want, OpsAlertDeliveryTarget{Channel: OpsAlertDeliveryEmail, Target: "ops@example.invalid"})
+			}
+			require.ElementsMatch(t, want, repo.event.DeliveryPlan)
+		})
+	}
+}

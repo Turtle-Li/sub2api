@@ -107,6 +107,8 @@ fi
 UNIFIED_PAYMENT_VAULT_VOLUME="${SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME:-}"
 FEISHU_MODE="${SUB2API_FEISHU_ENABLED:-preserve}"
 FEISHU_ENABLED=false
+OPS_FEISHU_ALERTS_MODE="${SUB2API_OPS_FEISHU_ALERTS_ENABLED:-preserve}"
+OPS_FEISHU_ALERTS_ENABLED=false
 FEISHU_VAULT_VOLUME=sub2api_feishu_vault
 CONTAINER_FEISHU_VAULT_PATH=/run/sub2api-feishu-vault
 FEISHU_VAULT_MOUNT_ARGS=()
@@ -1096,9 +1098,15 @@ container_matches_batch_image_delivery_cos_env() {
 # Notification configuration contains only the public enable switch. Secret
 # webhook material is available through a separate read-only socket mount.
 resolve_feishu_expectation() {
-  local source_container inspect_env count value
+  local source_container inspect_env count
   case "$FEISHU_MODE" in true|false|preserve) ;; *) die "SUB2API_FEISHU_ENABLED must be true or false" ;; esac
-  if [ "$FEISHU_MODE" = preserve ]; then
+  case "$OPS_FEISHU_ALERTS_MODE" in true|false|preserve) ;; *) die "SUB2API_OPS_FEISHU_ALERTS_ENABLED must be true or false" ;; esac
+  if [ "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" = "$NEW_CONTAINER" ] && [ "$REMOVE_EXISTING_NEW_CONTAINER" = false ]; then
+    # Rollback/recovery reuses the historical target container as-is; never
+    # reject it because a forward release explicitly toggled Ops Feishu alerts.
+    OPS_FEISHU_ALERTS_MODE=preserve
+  fi
+  if [ "$FEISHU_MODE" = preserve ] || [ "$OPS_FEISHU_ALERTS_MODE" = preserve ]; then
     source_container="${FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-$OLD_CONTAINER}"
     case "$source_container" in "$OLD_CONTAINER"|"$NEW_CONTAINER") ;; *) die "invalid Feishu preserve source" ;; esac
     if ! container_exists "$source_container"; then
@@ -1112,6 +1120,8 @@ resolve_feishu_expectation() {
     new_temp_file
     inspect_env="$TEMP_FILE"
     docker inspect "$source_container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
+  fi
+  if [ "$FEISHU_MODE" = preserve ]; then
     count="$(awk '/^SUB2API_FEISHU_ENABLED=/ { n++ } END { print n+0 }' "$inspect_env")"
     case "$count" in
       0) FEISHU_ENABLED=false ;;
@@ -1125,6 +1135,19 @@ resolve_feishu_expectation() {
   if [ "$FEISHU_ENABLED" = true ]; then
     FEISHU_VAULT_MOUNT_ARGS=(--mount "type=volume,source=$FEISHU_VAULT_VOLUME,target=$CONTAINER_FEISHU_VAULT_PATH,readonly")
   fi
+  case "$OPS_FEISHU_ALERTS_MODE" in true|false|preserve) ;; *) die "SUB2API_OPS_FEISHU_ALERTS_ENABLED must be true or false" ;; esac
+  if [ "$OPS_FEISHU_ALERTS_MODE" = preserve ]; then
+    local ops_feishu_count
+    ops_feishu_count="$(awk '/^SUB2API_OPS_FEISHU_ALERTS_ENABLED=/ { n++ } END { print n+0 }' "$inspect_env" 2>/dev/null || echo 0)"
+    case "$ops_feishu_count" in
+      0) OPS_FEISHU_ALERTS_ENABLED=false ;;
+      1) OPS_FEISHU_ALERTS_ENABLED="$(sed -n 's/^SUB2API_OPS_FEISHU_ALERTS_ENABLED=//p' "$inspect_env")" ;;
+      *) die "duplicate Ops Feishu enable switch in existing runtime" ;;
+    esac
+  else
+    OPS_FEISHU_ALERTS_ENABLED="$OPS_FEISHU_ALERTS_MODE"
+  fi
+  require_bool SUB2API_OPS_FEISHU_ALERTS_ENABLED "$OPS_FEISHU_ALERTS_ENABLED"
 }
 
 validate_daypass_runtime() {
@@ -1185,10 +1208,19 @@ container_matches_feishu_env() {
   ! grep -q '^SUB2API_FEISHU_WEBHOOK_URL=' "$inspect_env" || return 1
   count="$(awk '/^SUB2API_FEISHU_ENABLED=/ { n++ } END { print n+0 }' "$inspect_env")"
   case "$count" in
-    0) [ "$FEISHU_ENABLED" = false ] ;;
+    0) [ "$FEISHU_ENABLED" = false ] || return 1 ;;
     1)
       actual="$(sed -n 's/^SUB2API_FEISHU_ENABLED=//p' "$inspect_env")"
-      [ "$actual" = "$FEISHU_ENABLED" ]
+      [ "$actual" = "$FEISHU_ENABLED" ] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  count="$(awk '/^SUB2API_OPS_FEISHU_ALERTS_ENABLED=/ { n++ } END { print n+0 }' "$inspect_env")"
+  case "$count" in
+    0) [ "$OPS_FEISHU_ALERTS_ENABLED" = false ] ;;
+    1)
+      actual="$(sed -n 's/^SUB2API_OPS_FEISHU_ALERTS_ENABLED=//p' "$inspect_env")"
+      [ "$actual" = "$OPS_FEISHU_ALERTS_ENABLED" ]
       ;;
     *) return 1 ;;
   esac
@@ -1235,7 +1267,7 @@ make_runtime_env_file() {
       SHOP_DAYPASS_BEARER|DAYPASS_SHOP_BEARER)
         die "raw day-pass bearer is forbidden"
         ;;
-      SUB2API_FEISHU_ENABLED)
+      SUB2API_FEISHU_ENABLED|SUB2API_OPS_FEISHU_ALERTS_ENABLED)
         continue
         ;;
       SUB2API_FEISHU_WEBHOOK_URL)
@@ -1317,7 +1349,7 @@ make_runtime_env_file() {
 	fi
 	write_batch_image_delivery_cos_overrides "$output_file"
   write_url_allowlist_overrides "$output_file"
-  printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
+  printf 'SUB2API_FEISHU_ENABLED=%s\nSUB2API_OPS_FEISHU_ALERTS_ENABLED=%s\n' "$FEISHU_ENABLED" "$OPS_FEISHU_ALERTS_ENABLED" >>"$output_file"
   printf 'SHOP_DAYPASS_ENABLED=%s\nSHOP_DAYPASS_PRODUCT_ID=%s\n' "$SHOP_DAYPASS_ENABLED" "$SHOP_DAYPASS_PRODUCT_ID" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
 }

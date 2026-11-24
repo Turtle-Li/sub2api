@@ -37,8 +37,9 @@ type antigravityRetryLoopParams struct {
 	handleError     func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult
 	requestedModel  string // 用于限流检查的原始请求模型
 	isStickySession bool   // 是否为粘性会话（用于账号切换时的缓存计费判断）
-	groupID         int64  // 用于模型级限流时清除粘性会话
-	sessionHash     string // 用于模型级限流时清除粘性会话
+	groupID          int64  // 用于模型级限流时清除粘性会话
+	sessionHash      string // 用于模型级限流时清除粘性会话
+	overagesInjected bool   // 预检查已主动注入 AI Credits
 }
 
 // antigravityRetryLoopResult 重试循环的结果
@@ -117,14 +118,13 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 
 	// AI Credits 超量请求：
 	// 仅在上游明确返回免费配额耗尽时才允许切换到 credits。
+	var creditsBalanceFailure *UpstreamFailoverError
 	if resp.StatusCode == http.StatusTooManyRequests &&
 		category == antigravity429QuotaExhausted &&
 		p.account.IsOveragesEnabled() &&
 		!p.account.isCreditsExhausted() {
 		result := s.attemptCreditsOveragesRetry(p, baseURL, modelName, waitDuration, resp.StatusCode, respBody)
-		if result.failure != nil {
-			return &smartRetryResult{action: smartRetryActionBreakWithResp, err: result.failure}
-		}
+		creditsBalanceFailure = result.failure
 		if result.handled && result.resp != nil {
 			return &smartRetryResult{
 				action: smartRetryActionBreakWithResp,
@@ -151,10 +151,15 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 
 		resetAt := time.Now().Add(rateLimitDuration)
 		if !s.setAntigravityModelRateLimits(p.ctx, p.accountRepo, p.account, modelName, p.prefix, resp.StatusCode, resetAt, false) {
-			p.handleError(p.ctx, p.prefix, p.account, resp.StatusCode, resp.Header, respBody, p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
+			if p.handleError != nil {
+				p.handleError(p.ctx, p.prefix, p.account, resp.StatusCode, resp.Header, respBody, p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
+			}
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d rate_limited account=%d (no model mapping)", p.prefix, resp.StatusCode, p.account.ID)
 		}
 		s.clearStickySession(p.ctx, p.groupID, p.sessionHash)
+		if creditsBalanceFailure != nil {
+			return &smartRetryResult{action: smartRetryActionBreakWithResp, err: creditsBalanceFailure}
+		}
 
 		// 返回账号切换信号，让上层切换账号重试
 		return &smartRetryResult{
@@ -165,6 +170,15 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				IsStickySession:   p.isStickySession,
 			},
 		}
+	}
+
+	if creditsBalanceFailure != nil {
+		// No explicit model cooldown was stored above. Apply the normal 429
+		// policy to the free-tier response before ending this account attempt.
+		if p.handleError != nil {
+			p.handleError(p.ctx, p.prefix, p.account, resp.StatusCode, resp.Header, respBody, p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
+		}
+		return &smartRetryResult{action: smartRetryActionBreakWithResp, err: creditsBalanceFailure}
 	}
 
 	// 情况2: retryDelay < 阈值（或 MODEL_CAPACITY_EXHAUSTED），智能重试
@@ -227,7 +241,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			}
 
 			retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
-			if failure := probeUpstreamBalanceResponse(p.ctx, p.c, s.rateLimitService, p.account, retryResp, p.requestedModel); failure != nil {
+			if failure := s.probeAntigravityBalanceResponse(p, retryResp, p.overagesInjected); failure != nil {
 				return &smartRetryResult{action: smartRetryActionBreakWithResp, err: failure}
 			}
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
@@ -405,7 +419,7 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 		}
 
 		retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
-		if failure := probeUpstreamBalanceResponse(p.ctx, p.c, s.rateLimitService, p.account, retryResp, p.requestedModel); failure != nil {
+		if failure := s.probeAntigravityBalanceResponse(p, retryResp, p.overagesInjected); failure != nil {
 			return &smartRetryResult{action: smartRetryActionBreakWithResp, err: failure}
 		}
 		if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
@@ -477,6 +491,7 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 		if creditsBody := injectEnabledCreditTypes(p.body); creditsBody != nil {
 			p.body = creditsBody
 			overagesInjected = true
+			p.overagesInjected = true
 			logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: model_rate_limited_credits_inject model=%s account=%d (injecting enabledCreditTypes)",
 				p.prefix, p.requestedModel, p.account.ID)
 		}
@@ -579,7 +594,7 @@ urlFallbackLoop:
 				return nil, fmt.Errorf("upstream request failed after retries: %w", err)
 			}
 
-			if failure := probeUpstreamBalanceResponse(p.ctx, p.c, s.rateLimitService, p.account, resp, p.requestedModel); failure != nil {
+			if failure := s.probeAntigravityBalanceResponse(p, resp, overagesInjected); failure != nil {
 				return nil, failure
 			}
 			// 统一处理错误响应

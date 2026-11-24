@@ -328,8 +328,8 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				CreatedAt:      now,
 			}
 
-			firedEvent.DeliveryPlan, err = s.planOpsAlertDeliveries(ctx, runtimeCfg, rule, firedEvent)
-			if err != nil || !runtimegate.SharedWorkAllowed() {
+			firedEvent.DeliveryPlan = s.planOpsAlertDeliveries(ctx, runtimeCfg, rule, firedEvent)
+			if !runtimegate.SharedWorkAllowed() {
 				continue
 			}
 			_, err = s.opsRepo.CreateAlertEvent(ctx, firedEvent)
