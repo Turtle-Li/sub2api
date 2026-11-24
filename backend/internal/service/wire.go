@@ -625,6 +625,13 @@ func ProvideOpsAggregationService(
 	return svc
 }
 
+func ProvideOpsAlertFeishuSender(cfg *config.Config) FeishuPaymentTextSender {
+	if cfg != nil && cfg.Ops.FeishuAlertsEnabled && cfg.FeishuPaymentAlerts.Enabled {
+		return NewFeishuPaymentTextSender()
+	}
+	return nil
+}
+
 // ProvideOpsAlertEvaluatorService creates and starts OpsAlertEvaluatorService.
 func ProvideOpsAlertEvaluatorService(
 	opsService *OpsService,
@@ -633,8 +640,9 @@ func ProvideOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	feishuSender FeishuPaymentTextSender,
 ) *OpsAlertEvaluatorService {
-	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg, proxyRepo)
+	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg, proxyRepo, feishuSender)
 	svc.Start()
 	return svc
 }
@@ -1043,6 +1051,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAuditLogService,
 	ProvideOpsMetricsCollector,
 	ProvideOpsAggregationService,
+	ProvideOpsAlertFeishuSender,
 	ProvideOpsAlertEvaluatorService,
 	ProvideOpsCleanupService,
 	ProvideOpsScheduledReportService,

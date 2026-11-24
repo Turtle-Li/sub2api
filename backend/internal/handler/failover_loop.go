@@ -77,7 +77,7 @@ func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryC
 }
 
 func sameAccountRetryAllowed(failoverErr *service.UpstreamFailoverError, retryCount, retryLimit int) bool {
-	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+	if failoverErr == nil || !failoverErr.RetryableOnSameAccount || failoverErr.MustHideUpstreamBalance("") {
 		return false
 	}
 	if !sameAccountRetryDeadlineAllows(failoverErr) {
@@ -136,7 +136,8 @@ type FailoverState struct {
 	// FailedAccountIDs，而利润否决在同一请求内的判定不会改变（下游倍率 D 已在
 	// 请求开始冻结），被清空的账号会被立即重选并再次否决，形成没有任何上游请求、
 	// SwitchCount 也不前进的活锁。清空后必须把它们放回排除集。
-	profitVetoedAccountIDs map[int64]struct{}
+	profitVetoedAccountIDs  map[int64]struct{}
+	balanceFailedAccountIDs map[int64]struct{}
 	// profitVetoCount 本次请求累计的利润否决次数，用于 maxProfitVetoAttempts 上限。
 	profitVetoCount int
 }
@@ -176,16 +177,21 @@ func (s *FailoverState) ProfitVetoCount() int { return s.profitVetoCount }
 
 // allExclusionsAreProfitVetoed 判断排除列表是否已全部由利润门否决贡献。
 // 此时清空 FailedAccountIDs 会被原样恢复，退避重试不会带来任何新候选。
-func (s *FailoverState) allExclusionsAreProfitVetoed() bool {
-	if len(s.profitVetoedAccountIDs) == 0 || len(s.FailedAccountIDs) == 0 {
+func (s *FailoverState) allExclusionsAreDeterministic() bool {
+	if len(s.FailedAccountIDs) == 0 {
 		return false
 	}
 	for id := range s.FailedAccountIDs {
-		if _, ok := s.profitVetoedAccountIDs[id]; !ok {
+		if _, ok := s.profitVetoedAccountIDs[id]; !ok && !s.balanceFailedAccount(id) {
 			return false
 		}
 	}
 	return true
+}
+
+func (s *FailoverState) balanceFailedAccount(accountID int64) bool {
+	_, failed := s.balanceFailedAccountIDs[accountID]
+	return failed
 }
 
 // HandleFailoverError 处理 UpstreamFailoverError，返回下一步动作。
@@ -206,6 +212,13 @@ func (s *FailoverState) HandleFailoverError(
 	s.LastFailoverErr = failoverErr
 	if failoverErr == nil || !failoverErr.ShouldRetryNextAccount() {
 		return FailoverExhausted
+	}
+	hiddenBalance := failoverErr.MustHideUpstreamBalance(platform)
+	if hiddenBalance {
+		if s.balanceFailedAccountIDs == nil {
+			s.balanceFailedAccountIDs = make(map[int64]struct{})
+		}
+		s.balanceFailedAccountIDs[accountID] = struct{}{}
 	}
 
 	// 同账号重试不算切换账号，粘性会话仅在实际切换时强制缓存计费。
@@ -234,7 +247,7 @@ func (s *FailoverState) HandleFailoverError(
 	}
 
 	// 同账号重试用尽，执行临时封禁
-	if failoverErr.RetryableOnSameAccount {
+	if failoverErr.RetryableOnSameAccount && !hiddenBalance {
 		gatewayService.TempUnscheduleRetryableError(ctx, accountID, failoverErr)
 	}
 
@@ -287,8 +300,8 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAc
 		// 排除列表全由利润门否决贡献时，清空后会被原样恢复：退避重试拿不到
 		// 任何新候选，而利润否决不推进 SwitchCount，退避条件将永远成立。
 		// 这里直接判定耗尽，避免每 2s 空转一轮的活锁。
-		if s.allExclusionsAreProfitVetoed() {
-			logger.FromContext(ctx).Warn("gateway.failover_selection_exhausted_by_profit_veto",
+		if s.allExclusionsAreDeterministic() {
+			logger.FromContext(ctx).Warn("gateway.failover_selection_exhausted_by_deterministic_exclusions",
 				zap.Int("profit_veto_count", s.profitVetoCount),
 				zap.Int("excluded_accounts", len(s.FailedAccountIDs)),
 			)
@@ -311,6 +324,9 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAc
 		// 利润门否决的账号不参与退避重试的解除：判定依据（冻结的下游倍率）在
 		// 同一请求内不变，放它们回池只会被再次否决。
 		for id := range s.profitVetoedAccountIDs {
+			s.FailedAccountIDs[id] = struct{}{}
+		}
+		for id := range s.balanceFailedAccountIDs {
 			s.FailedAccountIDs[id] = struct{}{}
 		}
 		return FailoverContinue

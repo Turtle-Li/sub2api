@@ -782,6 +782,7 @@ type GatewayFailureReason string
 type UpstreamFailoverError struct {
 	StatusCode               int
 	ResponseBody             []byte        // 上游响应体，用于错误透传规则匹配
+	HiddenUpstreamBalance    bool          // 确定性上游付款错误：不得重试此账号或透传
 	ResponseHeaders          http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	ForceCacheBilling        bool          // Antigravity 粘性会话切换时设为 true
 	RetryableOnSameAccount   bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
@@ -1052,10 +1053,44 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 
 // BindStickySession sets session -> account binding with standard TTL.
 func (s *GatewayService) BindStickySession(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
-	if sessionHash == "" || accountID <= 0 || s.cache == nil {
+	if sessionHash == "" || accountID <= 0 || s.cache == nil || balanceStickyMutationDeferred(ctx, groupID, sessionHash) {
 		return nil
 	}
 	return s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, accountID, stickySessionTTL)
+}
+
+type balanceFailedAffinity struct {
+	groupID int64
+	hash    string
+}
+
+// WithDeferredBalanceStickyMutation keeps retry selection and admission from
+// eagerly replacing the original affinity. Only a successful attempt may CAS it.
+func WithDeferredBalanceStickyMutation(ctx context.Context, groupID *int64, sessionHash string) context.Context {
+	if sessionHash == "" || balanceStickyMutationDeferred(ctx, groupID, sessionHash) {
+		return ctx
+	}
+	return context.WithValue(ctx, balanceFailedAffinity{}, balanceFailedAffinity{derefGroupID(groupID), sessionHash})
+}
+
+func balanceStickyMutationDeferred(ctx context.Context, groupID *int64, sessionHash string) bool {
+	affinity, ok := ctx.Value(balanceFailedAffinity{}).(balanceFailedAffinity)
+	return ok && affinity.groupID == derefGroupID(groupID) && affinity.hash == sessionHash
+}
+
+// ReplaceFailedStickySession updates only the original gateway affinity. A
+// concurrent rebind, deletion or expiry wins over this request's late success.
+func (s *GatewayService) ReplaceFailedStickySession(ctx context.Context, groupID *int64, sessionHash string, failedID, nextID int64) error {
+	if sessionHash == "" || failedID <= 0 || nextID < 0 || failedID == nextID {
+		return nil
+	}
+	cache, ok := s.cache.(interface {
+		ReplaceFailedStickySession(context.Context, int64, string, int64, int64, time.Duration) error
+	})
+	if !ok {
+		return nil // Do not emulate compare-and-set with separate cache commands.
+	}
+	return cache.ReplaceFailedStickySession(ctx, derefGroupID(groupID), sessionHash, failedID, nextID, stickySessionTTL)
 }
 
 // bindGatewayStickySessionDuringSelection preserves the normal eager sticky
@@ -1076,7 +1111,7 @@ func (s *GatewayService) bindGatewayStickySessionDuringSelection(ctx context.Con
 // account remains bound and automatically becomes eligible again if its
 // account rate recovers.
 func (s *GatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
-	if sessionHash == "" || accountID <= 0 || s.cache == nil {
+	if sessionHash == "" || accountID <= 0 || s.cache == nil || balanceStickyMutationDeferred(ctx, groupID, sessionHash) {
 		return nil
 	}
 	if !gatewayProfitControlGateActive(ctx) {

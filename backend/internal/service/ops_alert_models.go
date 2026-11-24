@@ -29,13 +29,22 @@ type OpsAlertRule struct {
 	SustainedMinutes int `json:"sustained_minutes"`
 	CooldownMinutes  int `json:"cooldown_minutes"`
 
-	NotifyEmail bool `json:"notify_email"`
+	NotifyEmail   bool     `json:"notify_email"`
+	NotifyFeishu  bool     `json:"notify_feishu"`
+	NotifyEmails  []string `json:"notify_emails"`
+	CustomMessage string   `json:"custom_message"`
+	// Nil on a full rule write. PUT clients that predate these fields may omit them.
+	NotificationUpdate *OpsAlertNotificationUpdate `json:"-"`
 
 	Filters map[string]any `json:"filters,omitempty"`
 
 	LastTriggeredAt *time.Time `json:"last_triggered_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+type OpsAlertNotificationUpdate struct {
+	Feishu, Emails, CustomMessage bool
 }
 
 type OpsAlertEvent struct {
@@ -55,8 +64,47 @@ type OpsAlertEvent struct {
 	FiredAt    time.Time  `json:"fired_at"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 
-	EmailSent bool      `json:"email_sent"`
-	CreatedAt time.Time `json:"created_at"`
+	EmailSent            bool      `json:"email_sent"`
+	FeishuSent           bool      `json:"feishu_sent"`
+	EmailDeliveryStatus  string    `json:"email_delivery_status"`
+	FeishuDeliveryStatus string    `json:"feishu_delivery_status"`
+	CreatedAt            time.Time `json:"created_at"`
+
+	// A non-nil plan (including an empty one) marks a tracked, new event.
+	DeliveryPlan []OpsAlertDeliveryTarget `json:"-"`
+}
+
+const (
+	OpsAlertDeliveryEmail       = "email"
+	OpsAlertDeliveryFeishu      = "feishu"
+	OpsAlertFeishuTarget        = "payment_feishu"
+	OpsAlertDeliveryPending     = "pending"
+	OpsAlertDeliverySent        = "sent"
+	OpsAlertDeliveryFailed      = "failed"
+	OpsAlertDeliverySkipped     = "skipped"
+	OpsAlertDeliveryMaxAttempts = 5
+	OpsAlertDeliveryLifetime    = 30 * time.Minute
+)
+
+type OpsAlertDeliveryTarget struct {
+	Channel string
+	Target  string
+}
+
+type OpsAlertDelivery struct {
+	OpsAlertDeliveryTarget
+	ID           int64
+	EventID      int64
+	AttemptCount int
+	ClaimToken   string
+	CreatedAt    time.Time
+}
+
+type OpsAlertDeliveryOutcome struct {
+	Status      string
+	NextAttempt time.Time
+	ErrorCode   string // Bounded internal code, never the transport error.
+	Now         time.Time
 }
 
 type OpsAlertSilence struct {

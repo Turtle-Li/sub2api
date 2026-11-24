@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores/app'
 import Select from '@/components/common/Select.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import OpsAlertDeliveryBadges from './OpsAlertDeliveryBadges.vue'
 import { opsAPI, type AlertEventsQuery } from '@/api/admin/ops'
 import type { AlertEvent } from '../types'
 import { formatDateTime } from '../utils/opsFormatters'
@@ -195,10 +196,25 @@ function formatDimensionsSummary(event: AlertEvent): string {
   const platform = getDimensionString(event, 'platform')
   if (platform) parts.push(`platform=${platform}`)
   const groupId = event.dimensions?.group_id
-  if (groupId != null && groupId !== '') parts.push(`group_id=${String(groupId)}`)
+  if (groupId != null) parts.push(`group_id=${String(groupId)}`)
   const region = getDimensionString(event, 'region')
   if (region) parts.push(`region=${region}`)
   return parts.length ? parts.join(' ') : '-'
+}
+
+function formatLatestUpstream(event: AlertEvent): string {
+  const dimensions = event.dimensions
+  if (!dimensions) return ''
+  const parts: string[] = []
+  const id = dimensions.latest_account_id
+  if (id && id > 0) {
+    const name = dimensions.latest_account_name?.trim()
+    parts.push(name ? `${name} (#${id})` : `#${id}`)
+  }
+  const statusCode = dimensions.latest_upstream_status_code
+  if (statusCode && statusCode >= 400 && statusCode <= 599) parts.push(`HTTP ${statusCode}`)
+  if (dimensions.latest_provider_code) parts.push(dimensions.latest_provider_code)
+  return parts.join(' · ')
 }
 
 function closeDetail() {
@@ -431,22 +447,9 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
             </div>
             <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500 dark:text-gray-400">
               <span><span class="font-mono">#{{ row.rule_id }}</span> · {{ formatDurationLabel(row) }}</span>
-              <span class="inline-flex items-center gap-1">
-                <Icon
-                  v-if="row.email_sent"
-                  name="checkCircle"
-                  size="xs"
-                  class="text-green-600 dark:text-green-400"
-                />
-                <Icon
-                  v-else
-                  name="ban"
-                  size="xs"
-                  class="text-gray-400 dark:text-gray-500"
-                />
-                {{ row.email_sent ? t('admin.ops.alertEvents.table.emailSent') : t('admin.ops.alertEvents.table.emailIgnored') }}
-              </span>
             </div>
+            <div v-if="formatLatestUpstream(row)" class="break-words text-xs text-gray-700 dark:text-gray-200">{{ formatLatestUpstream(row) }}</div>
+            <OpsAlertDeliveryBadges :event="row" />
             <div class="text-[11px] text-gray-400 dark:text-gray-500">{{ formatDimensionsSummary(row) }}</div>
           </div>
         </div>
@@ -475,7 +478,7 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
                 {{ t('admin.ops.alertEvents.table.dimensions') }}
               </th>
               <th class="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                {{ t('admin.ops.alertEvents.table.email') }}
+                {{ t('admin.ops.alertEvents.notifications.title') }}
               </th>
             </tr>
           </thead>
@@ -515,30 +518,12 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
               <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
                 {{ formatDurationLabel(row) }}
               </td>
-              <td class="whitespace-nowrap px-4 py-3 text-[11px] text-gray-500 dark:text-gray-400">
+              <td class="min-w-[9rem] break-words px-4 py-3 text-[11px] text-gray-500 dark:text-gray-400">
                 {{ formatDimensionsSummary(row) }}
+                <div v-if="formatLatestUpstream(row)" class="mt-1 text-xs text-gray-700 dark:text-gray-200">{{ formatLatestUpstream(row) }}</div>
               </td>
-              <td class="whitespace-nowrap px-4 py-3 text-right text-xs">
-                <span
-                  class="inline-flex items-center justify-end gap-1.5"
-                  :title="row.email_sent ? t('admin.ops.alertEvents.table.emailSent') : t('admin.ops.alertEvents.table.emailIgnored')"
-                >
-                  <Icon
-                    v-if="row.email_sent"
-                    name="checkCircle"
-                    size="sm"
-                    class="text-green-600 dark:text-green-400"
-                  />
-                  <Icon
-                    v-else
-                    name="ban"
-                    size="sm"
-                    class="text-gray-400 dark:text-gray-500"
-                  />
-                  <span class="text-[11px] font-bold text-gray-600 dark:text-gray-300">
-                    {{ row.email_sent ? t('admin.ops.alertEvents.table.emailSent') : t('admin.ops.alertEvents.table.emailIgnored') }}
-                  </span>
-                </span>
+              <td class="px-4 py-3 text-right text-xs">
+                <OpsAlertDeliveryBadges :event="row" class="justify-end" />
               </td>
             </tr>
           </tbody>
@@ -589,6 +574,7 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
               <div v-if="selected.description" class="mt-1 whitespace-pre-wrap text-xs text-gray-600 dark:text-gray-300">
                 {{ selected.description }}
               </div>
+              <OpsAlertDeliveryBadges :event="selected" class="mt-2" />
             </div>
 
             <div class="flex flex-wrap gap-2">
@@ -649,6 +635,10 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
                 <div v-if="getDimensionString(selected, 'platform')">platform={{ getDimensionString(selected, 'platform') }}</div>
                 <div v-if="selected.dimensions?.group_id">group_id={{ selected.dimensions.group_id }}</div>
                 <div v-if="getDimensionString(selected, 'region')">region={{ getDimensionString(selected, 'region') }}</div>
+                <div v-if="formatLatestUpstream(selected)" class="break-words">{{ formatLatestUpstream(selected) }}</div>
+                <div v-if="(selected.dimensions?.matched_account_ids?.length ?? 0) > 1" class="break-words">
+                  {{ t('admin.ops.alertEvents.notifications.matchedAccounts') }}: {{ selected.dimensions?.matched_account_ids?.map((id) => `#${id}`).join(', ') }}
+                </div>
               </div>
             </div>
           </div>

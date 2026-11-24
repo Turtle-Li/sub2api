@@ -1734,6 +1734,9 @@ func applyOpsUpstreamFieldsFromContext(c *gin.Context, entry *service.OpsInsertE
 	if c == nil || entry == nil {
 		return
 	}
+	if code := c.GetString(service.OpsUpstreamProviderCodeKey); service.IsValidProviderErrorCode(code) {
+		entry.ProviderErrorCode = code
+	}
 	if v, ok := c.Get(service.OpsUpstreamStatusCodeKey); ok {
 		switch t := v.(type) {
 		case int:
@@ -1785,6 +1788,10 @@ func applyOpsUpstreamErrorEvents(entry *service.OpsInsertErrorLogInput, events [
 	entry.UpstreamStatusCode = nil
 	entry.UpstreamErrorMessage = nil
 	entry.UpstreamErrorDetail = nil
+	entry.ProviderErrorCode = ""
+	if service.IsValidProviderErrorCode(last.ProviderCode) {
+		entry.ProviderErrorCode = last.ProviderCode
+	}
 	if last.Stage == string(service.GatewayFailureStageAccountAuth) {
 		code := 0
 		entry.UpstreamStatusCode = &code
@@ -1810,6 +1817,7 @@ func suppressOpsUpstreamAttributionForLocalModelConfiguration(c *gin.Context, en
 	entry.UpstreamStatusCode = nil
 	entry.UpstreamErrorMessage = nil
 	entry.UpstreamErrorDetail = nil
+	entry.ProviderErrorCode = ""
 	entry.UpstreamErrors = nil
 }
 

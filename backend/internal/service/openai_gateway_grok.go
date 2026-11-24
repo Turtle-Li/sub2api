@@ -124,6 +124,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		// xAI can reject encrypted reasoning or a compaction blob copied from a
 		// different decoder/cache context. Retry once on the same account after
 		// preserving visible summaries and removing only opaque replay state.
+		if failure := s.probeOpenAIBalanceResponse(ctx, c, account, resp, upstreamModel); failure != nil {
+			return nil, failure
+		}
 		if attempt > 0 || (resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUnprocessableEntity) {
 			break
 		}
@@ -169,7 +172,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			kind = "failover"
 		}
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
@@ -1424,7 +1427,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			kind = "failover"
 		}
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,

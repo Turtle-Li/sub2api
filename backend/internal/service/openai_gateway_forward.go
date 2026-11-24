@@ -1120,6 +1120,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Handle error response
 		if resp.StatusCode >= 400 {
+			if failure := s.probeOpenAIBalanceResponse(ctx, c, account, resp, upstreamModel); failure != nil {
+				return nil, failure
+			}
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -1202,7 +1205,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					}
 					upstreamDetail = truncateString(string(respBody), maxBytes)
 				}
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 					ProxyID:            opsUpstreamProxyID(account),
 					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
@@ -1268,8 +1271,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 						_ = resp.Body.Close()
 					}
 					compactResp, compactBody := openAICompactFallbackErrorResponse(resp, signal)
+					if failure := newHiddenUpstreamBalanceFailure(ctx, c, s.rateLimitService, account, compactResp.StatusCode, compactResp.Header, compactBody, upstreamModel); failure != nil {
+						return nil, failure
+					}
 					if s.shouldFailoverOpenAIUpstreamResponse(account, compactResp.StatusCode, signal.message, compactBody) {
-						appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						appendOpsUpstreamResponseError(c, compactBody, OpsUpstreamErrorEvent{
 							ProxyID:            opsUpstreamProxyID(account),
 							ProxyName:          opsUpstreamProxyName(account),
 							Platform:           account.Platform,

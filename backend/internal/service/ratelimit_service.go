@@ -336,6 +336,15 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	// 同请求内与 fastpath 调用点的重复触发由方法内去重吸收。
 	s.maybeHandleOpenAITeamLinkedError(ctx, account, statusCode, responseBody)
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
+	// The OpenAI-compatible Grok gateway already owns the recoverable quota
+	// policy for native 402s, including its header snapshot and spending window.
+	// Route the single balance-failure side-effect call through that policy.
+	if account.Platform == PlatformGrok && statusCode == http.StatusPaymentRequired {
+		if gateway, ok := s.runtimeBlocker.(*OpenAIGatewayService); ok {
+			gateway.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, firstRequestedModel(requestedModel)), account, statusCode, headers, responseBody)
+			return !account.IsPoolMode()
+		}
+	}
 
 	// 池模式默认不标记本地账号状态；但管理员显式配置的临时不可调度规则优先。
 	// 401 只在非凭据级且命中显式模型级规则时由规则处理，其余保留池模式现有的认证处理。
@@ -442,14 +451,17 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 
 	switch statusCode {
 	case 400:
+		if ClassifyUpstreamBalanceError(account.Platform, statusCode, responseBody).IsBalanceExhausted {
+			if account.IsCNProvider() || account.IsOpenCodeZen() || account.IsCommandCode() {
+				s.handleCNProviderInsufficientBalance(ctx, account, "Credit balance exhausted (400)")
+			} else {
+				s.handleAuthError(ctx, account, "Credit balance exhausted (400)")
+			}
+			return true
+		}
 		// "organization has been disabled" → 永久禁用
 		if strings.Contains(strings.ToLower(upstreamMsg), "organization has been disabled") {
 			msg := "Organization disabled (400): " + upstreamMsg
-			s.handleAuthError(ctx, account, msg)
-			shouldDisable = true
-		} else if account.Platform == PlatformAnthropic && strings.Contains(strings.ToLower(upstreamMsg), "credit balance") {
-			// Anthropic API key 余额不足（语义等同 402），停止调度
-			msg := "Credit balance exhausted (400): " + upstreamMsg
 			s.handleAuthError(ctx, account, msg)
 			shouldDisable = true
 		} else if strings.Contains(strings.ToLower(upstreamMsg), "identity verification is required") {
@@ -556,6 +568,18 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			shouldDisable = true
 		}
 	case 402:
+		if account.Platform == PlatformGrok {
+			until := time.Now().Add(30 * time.Minute)
+			if account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(until) {
+				until = *account.TempUnschedulableUntil
+			}
+			const reason = "grok payment required"
+			s.notifyAccountSchedulingBlocked(account, until, reason)
+			stateCtx, cancel := openAIAccountStateContext(ctx)
+			defer cancel()
+			_ = s.accountRepo.SetTempUnschedulable(stateCtx, account.ID, until, reason)
+			return true
+		}
 		// 国产供应商 / OpenCode Zen / Command Code：余额（积分）不足是可恢复状态
 		// （充值/检测恢复后由周期任务自动解除），不能走 handleAuthError 永久置
 		// status=error。改为可恢复的临时停调。
@@ -565,7 +589,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			break
 		}
 		// OpenAI: deactivated_workspace 表示工作区已停用，直接标记 error
-		if account.Platform == PlatformOpenAI && gjson.GetBytes(responseBody, "detail.code").String() == "deactivated_workspace" {
+		if !ClassifyUpstreamBalanceError(account.Platform, statusCode, responseBody).IsBalanceExhausted {
 			msg := "Workspace deactivated (402): workspace has been deactivated"
 			s.handleAuthError(ctx, account, msg)
 			shouldDisable = true

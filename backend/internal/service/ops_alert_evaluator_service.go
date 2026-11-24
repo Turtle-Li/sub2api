@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -43,6 +44,7 @@ type OpsAlertEvaluatorService struct {
 	opsRepo      OpsRepository
 	emailService *EmailService
 	proxyRepo    ProxyRepository
+	feishuSender FeishuPaymentTextSender
 
 	redisClient *redis.Client
 	cfg         *config.Config
@@ -56,7 +58,8 @@ type OpsAlertEvaluatorService struct {
 	mu         sync.Mutex
 	ruleStates map[int64]*opsAlertRuleState
 
-	emailLimiter *slidingWindowLimiter
+	emailLimiter  *slidingWindowLimiter
+	feishuLimiter *slidingWindowLimiter
 
 	skipLogMu sync.Mutex
 	skipLogAt time.Time
@@ -76,17 +79,20 @@ func NewOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	feishuSender FeishuPaymentTextSender,
 ) *OpsAlertEvaluatorService {
 	return &OpsAlertEvaluatorService{
-		opsService:   opsService,
-		opsRepo:      opsRepo,
-		emailService: emailService,
-		proxyRepo:    proxyRepo,
-		redisClient:  redisClient,
-		cfg:          cfg,
-		instanceID:   uuid.NewString(),
-		ruleStates:   map[int64]*opsAlertRuleState{},
-		emailLimiter: newSlidingWindowLimiter(0, time.Hour),
+		opsService:    opsService,
+		opsRepo:       opsRepo,
+		emailService:  emailService,
+		proxyRepo:     proxyRepo,
+		feishuSender:  feishuSender,
+		redisClient:   redisClient,
+		cfg:           cfg,
+		instanceID:    uuid.NewString(),
+		ruleStates:    map[int64]*opsAlertRuleState{},
+		emailLimiter:  newSlidingWindowLimiter(0, time.Hour),
+		feishuLimiter: newSlidingWindowLimiter(opsAlertFeishuRateLimit, time.Hour),
 	}
 }
 
@@ -98,8 +104,9 @@ func (s *OpsAlertEvaluatorService) Start() {
 		if s.stopCh == nil {
 			s.stopCh = make(chan struct{})
 		}
-		s.wg.Add(1)
+		s.wg.Add(2)
 		go s.run()
+		go s.runAlertDeliveries()
 	})
 }
 
@@ -161,7 +168,7 @@ func (s *OpsAlertEvaluatorService) getInterval() time.Duration {
 }
 
 func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
-	if s == nil || s.opsRepo == nil {
+	if s == nil || s.opsRepo == nil || !runtimegate.SharedWorkAllowed() {
 		return
 	}
 	if s.cfg != nil && !s.cfg.Ops.Enabled {
@@ -213,12 +220,15 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		safeEnd = now
 	}
 
-	systemMetrics, _ := s.opsRepo.GetLatestSystemMetrics(ctx, 1)
+	systemMetrics, systemMetricsErr := s.opsRepo.GetLatestSystemMetrics(ctx, 1)
 
 	// Cleanup stale state for removed rules.
 	s.pruneRuleStates(rules)
 
 	for _, rule := range rules {
+		if !runtimegate.SharedWorkAllowed() {
+			break
+		}
 		if rule == nil || !rule.Enabled || rule.ID <= 0 {
 			continue
 		}
@@ -240,8 +250,17 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		windowStart := safeEnd.Add(-time.Duration(windowMinutes) * time.Minute)
 		windowEnd := safeEnd
 
-		metricValue, ok := s.computeRuleMetric(ctx, rule, systemMetrics, windowStart, windowEnd, scopePlatform, scopeGroupID)
-		if !ok {
+		if systemMetricsErr != nil && opsAlertRequiresSystemMetrics(rule.MetricType) {
+			s.resetRuleState(rule.ID, now)
+			continue
+		}
+		metric, err := s.computeRuleMetric(ctx, rule, systemMetrics, windowStart, windowEnd, scopePlatform, scopeGroupID)
+		if err != nil {
+			s.resetRuleState(rule.ID, now)
+			logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] metric unavailable due to query error (rule=%d)", rule.ID)
+			continue
+		}
+		if !metric.available {
 			s.resetRuleState(rule.ID, now)
 			if activeEvent, err := s.opsRepo.GetActiveAlertEvent(ctx, rule.ID); err == nil && activeEvent != nil {
 				resolvedAt := now
@@ -256,6 +275,7 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 			continue
 		}
 		rulesEvaluated++
+		metricValue := metric.value
 
 		breachedNow := compareMetric(metricValue, rule.Operator, rule.Threshold)
 		required := requiredSustainedBreaches(rule.SustainedMinutes, interval)
@@ -274,7 +294,7 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 
 			// Scoped silencing: if a matching silence exists, skip creating a firing event.
 			if s.opsService != nil {
-				platform := strings.TrimSpace(scopePlatform)
+				platform := metric.eventPlatform(scopePlatform)
 				region := scopeRegion
 				if platform != "" {
 					if ok, err := s.opsService.IsAlertSilenced(ctx, rule.ID, platform, scopeGroupID, region, now); err == nil && ok {
@@ -303,28 +323,27 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				Description:    buildOpsAlertDescription(rule, metricValue, windowMinutes, scopePlatform, scopeGroupID),
 				MetricValue:    float64Ptr(metricValue),
 				ThresholdValue: float64Ptr(rule.Threshold),
-				Dimensions:     buildOpsAlertDimensions(scopePlatform, scopeGroupID),
+				Dimensions:     metric.dimensions(scopePlatform, scopeGroupID, scopeRegion),
 				FiredAt:        now,
 				CreatedAt:      now,
 			}
 
-			created, err := s.opsRepo.CreateAlertEvent(ctx, firedEvent)
+			firedEvent.DeliveryPlan, err = s.planOpsAlertDeliveries(ctx, runtimeCfg, rule, firedEvent)
+			if err != nil || !runtimegate.SharedWorkAllowed() {
+				continue
+			}
+			_, err = s.opsRepo.CreateAlertEvent(ctx, firedEvent)
 			if err != nil {
 				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] create event failed (rule=%d): %v", rule.ID, err)
 				continue
 			}
 
 			eventsCreated++
-			if created != nil && created.ID > 0 {
-				if s.maybeSendAlertEmail(ctx, runtimeCfg, rule, created) {
-					emailsSent++
-				}
-			}
 			continue
 		}
 
 		// Not breached: resolve active event if present.
-		if activeEvent != nil {
+		if !breachedNow && activeEvent != nil {
 			resolvedAt := now
 			if err := s.opsRepo.UpdateAlertEventStatus(ctx, activeEvent.ID, OpsAlertStatusResolved, &resolvedAt); err != nil {
 				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] resolve event failed (event=%d): %v", activeEvent.ID, err)
@@ -446,7 +465,7 @@ func parseOpsAlertRuleScope(filters map[string]any) (platform string, groupID *i
 	if v, ok := filters["group_id"]; ok {
 		switch t := v.(type) {
 		case float64:
-			if t > 0 {
+			if t > 0 && t < math.MaxInt64 && math.Trunc(t) == t {
 				id := int64(t)
 				groupID = &id
 			}
@@ -465,6 +484,10 @@ func parseOpsAlertRuleScope(filters map[string]any) (platform string, groupID *i
 			if err == nil && n > 0 {
 				groupID = &n
 			}
+		case json.Number:
+			if n, err := t.Int64(); err == nil && n > 0 {
+				groupID = &n
+			}
 		}
 	}
 	if v, ok := filters["region"]; ok {
@@ -478,7 +501,7 @@ func parseOpsAlertRuleScope(filters map[string]any) (platform string, groupID *i
 	return platform, groupID, region
 }
 
-func (s *OpsAlertEvaluatorService) computeRuleMetric(
+func (s *OpsAlertEvaluatorService) computeOtherRuleMetric(
 	ctx context.Context,
 	rule *OpsAlertRule,
 	systemMetrics *OpsSystemMetricsSnapshot,
@@ -486,183 +509,143 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 	end time.Time,
 	platform string,
 	groupID *int64,
-) (float64, bool) {
+) (float64, bool, error) {
 	if rule == nil {
-		return 0, false
+		return 0, false, nil
 	}
 	switch strings.TrimSpace(rule.MetricType) {
 	case "cpu_usage_percent":
 		if systemMetrics != nil && systemMetrics.CPUUsagePercent != nil {
-			return *systemMetrics.CPUUsagePercent, true
+			return *systemMetrics.CPUUsagePercent, true, nil
 		}
-		return 0, false
+		return 0, false, nil
 	case "memory_usage_percent":
 		if systemMetrics != nil && systemMetrics.MemoryUsagePercent != nil {
-			return *systemMetrics.MemoryUsagePercent, true
+			return *systemMetrics.MemoryUsagePercent, true, nil
 		}
-		return 0, false
+		return 0, false, nil
 	case "bandwidth_utilization", "network_bandwidth_utilization_percent":
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
-		if err != nil || summary == nil || summary.MaxUtilizationPercent == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
 		}
-		return *summary.MaxUtilizationPercent, true
+		if summary == nil || summary.MaxUtilizationPercent == nil {
+			return 0, false, nil
+		}
+		return *summary.MaxUtilizationPercent, true, nil
 	case "network_rx_utilization_percent":
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
-		if err != nil || summary == nil || summary.RXUtilizationPercent == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
 		}
-		return *summary.RXUtilizationPercent, true
+		if summary == nil || summary.RXUtilizationPercent == nil {
+			return 0, false, nil
+		}
+		return *summary.RXUtilizationPercent, true, nil
 	case "network_tx_utilization_percent":
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
-		if err != nil || summary == nil || summary.TXUtilizationPercent == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
 		}
-		return *summary.TXUtilizationPercent, true
+		if summary == nil || summary.TXUtilizationPercent == nil {
+			return 0, false, nil
+		}
+		return *summary.TXUtilizationPercent, true, nil
 	case "network_saturation_suspected":
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
-		if err != nil || summary == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
 		}
-		return 0, true
+		if summary == nil {
+			return 0, false, nil
+		}
+		return 0, true, nil
 	case "concurrency_queue_depth":
 		if systemMetrics != nil && systemMetrics.ConcurrencyQueueDepth != nil {
-			return float64(*systemMetrics.ConcurrencyQueueDepth), true
+			return float64(*systemMetrics.ConcurrencyQueueDepth), true, nil
 		}
-		return 0, false
+		return 0, false, nil
 	case "group_available_accounts":
 		if groupID == nil || *groupID <= 0 {
-			return 0, false
+			return 0, false, nil
 		}
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
+		}
+		if availability == nil {
+			return 0, false, nil
 		}
 		if availability.Group == nil {
-			return 0, true
+			return 0, true, nil
 		}
-		return float64(availability.Group.AvailableCount), true
+		return float64(availability.Group.AvailableCount), true, nil
 	case "group_available_ratio":
 		if groupID == nil || *groupID <= 0 {
-			return 0, false
+			return 0, false, nil
 		}
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
 		}
-		return computeGroupAvailableRatio(availability.Group), true
-	case "account_rate_limited_count":
-		if s == nil || s.opsService == nil {
-			return 0, false
+		if availability == nil {
+			return 0, false, nil
 		}
-		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
-		}
-		return float64(countAccountsByCondition(availability.Accounts, func(acc *AccountAvailability) bool {
-			return acc.IsRateLimited
-		})), true
-	case "account_error_count":
-		if s == nil || s.opsService == nil {
-			return 0, false
-		}
-		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
-		}
-		return float64(countAccountsByCondition(availability.Accounts, func(acc *AccountAvailability) bool {
-			return acc.HasError && acc.TempUnschedulableUntil == nil
-		})), true
-	case "account_temp_unscheduled_count":
-		if s == nil || s.opsService == nil {
-			return 0, false
-		}
-		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
-		}
-		now := time.Now().UTC()
-		return float64(countAccountsByCondition(availability.Accounts, func(acc *AccountAvailability) bool {
-			return acc.TempUnschedulableUntil != nil && now.Before(*acc.TempUnschedulableUntil)
-		})), true
+		return computeGroupAvailableRatio(availability.Group), true, nil
 	case "group_rate_limit_ratio":
 		if groupID == nil || *groupID <= 0 {
-			return 0, false
+			return 0, false, nil
 		}
 		if s == nil || s.opsService == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
+		if err != nil {
+			return 0, false, err
+		}
+		if availability == nil {
+			return 0, false, nil
 		}
 		if availability.Group == nil || availability.Group.TotalAccounts <= 0 {
-			return 0, true
+			return 0, true, nil
 		}
-		return (float64(availability.Group.RateLimitCount) / float64(availability.Group.TotalAccounts)) * 100, true
-	case "account_error_ratio":
-		if s == nil || s.opsService == nil {
-			return 0, false
-		}
-		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
-		}
-		total := int64(len(availability.Accounts))
-		if total <= 0 {
-			return 0, true
-		}
-		errorCount := countAccountsByCondition(availability.Accounts, func(acc *AccountAvailability) bool {
-			return acc.HasError && acc.TempUnschedulableUntil == nil
-		})
-		return (float64(errorCount) / float64(total)) * 100, true
-	case "overload_account_count":
-		if s == nil || s.opsService == nil {
-			return 0, false
-		}
-		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
-		if err != nil || availability == nil {
-			return 0, false
-		}
-		return float64(countAccountsByCondition(availability.Accounts, func(acc *AccountAvailability) bool {
-			return acc.IsOverloaded
-		})), true
+		return (float64(availability.Group.RateLimitCount) / float64(availability.Group.TotalAccounts)) * 100, true, nil
 	case "proxy_expired_count":
 		if s == nil || s.proxyRepo == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		n, err := s.proxyRepo.CountExpired(ctx)
 		if err != nil {
-			return 0, false
+			return 0, false, err
 		}
-		return float64(n), true
+		return float64(n), true, nil
 	case "proxy_expiring_soon_count":
 		if s == nil || s.proxyRepo == nil {
-			return 0, false
+			return 0, false, nil
 		}
 		n, err := s.proxyRepo.CountExpiringSoon(ctx, time.Now())
 		if err != nil {
-			return 0, false
+			return 0, false, err
 		}
-		return float64(n), true
+		return float64(n), true, nil
 	}
 
 	overview, err := s.opsRepo.GetDashboardOverview(ctx, &OpsDashboardFilter{
@@ -673,30 +656,30 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		QueryMode: OpsQueryModeRaw,
 	})
 	if err != nil {
-		return 0, false
+		return 0, false, err
 	}
 	if overview == nil {
-		return 0, false
+		return 0, false, nil
 	}
 
 	switch strings.TrimSpace(rule.MetricType) {
 	case "success_rate":
 		if overview.RequestCountSLA <= 0 {
-			return 0, false
+			return 0, false, nil
 		}
-		return overview.SLA * 100, true
+		return overview.SLA * 100, true, nil
 	case "error_rate":
 		if overview.RequestCountSLA <= 0 {
-			return 0, false
+			return 0, false, nil
 		}
-		return overview.ErrorRate * 100, true
+		return overview.ErrorRate * 100, true, nil
 	case "upstream_error_rate":
 		if overview.RequestCountSLA <= 0 {
-			return 0, false
+			return 0, false, nil
 		}
-		return overview.UpstreamErrorRate * 100, true
+		return overview.UpstreamErrorRate * 100, true, nil
 	default:
-		return 0, false
+		return 0, false, nil
 	}
 }
 
@@ -747,7 +730,7 @@ func buildOpsAlertDescription(rule *OpsAlertRule, value float64, windowMinutes i
 	if windowMinutes <= 0 {
 		windowMinutes = 1
 	}
-	return fmt.Sprintf("%s %s %.2f (current %.2f) over last %dm (%s)",
+	description := fmt.Sprintf("%s %s %.2f (current %.2f) over last %dm (%s)",
 		opsAlertMetricDisplayName(rule.MetricType),
 		strings.TrimSpace(rule.Operator),
 		rule.Threshold,
@@ -755,6 +738,10 @@ func buildOpsAlertDescription(rule *OpsAlertRule, value float64, windowMinutes i
 		windowMinutes,
 		strings.TrimSpace(scope),
 	)
+	if custom := OpsAlertSafeNotificationText(rule.CustomMessage, OpsAlertCustomMessageMaxRunes); custom != "" {
+		description += "\n" + custom
+	}
+	return description
 }
 
 func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent) bool {
@@ -773,60 +760,51 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 		return false
 	}
 
-	if len(emailCfg.Alert.Recipients) == 0 {
-		return false
-	}
-	if !shouldSendOpsAlertEmailByMinSeverity(strings.TrimSpace(emailCfg.Alert.MinSeverity), strings.TrimSpace(rule.Severity)) {
+	if runtimeCfg != nil && isOpsAlertSilenced(time.Now().UTC(), rule, event, runtimeCfg.Silencing) {
 		return false
 	}
 
-	if runtimeCfg != nil && runtimeCfg.Silencing.Enabled {
-		if isOpsAlertSilenced(time.Now().UTC(), rule, event, runtimeCfg.Silencing) {
-			return false
-		}
-	}
-
-	// Apply/update rate limiter.
-	s.emailLimiter.SetLimit(emailCfg.Alert.RateLimitPerHour)
-
-	subject := fmt.Sprintf("[Ops Alert][%s] %s", strings.TrimSpace(rule.Severity), strings.TrimSpace(rule.Name))
-	body := buildOpsAlertEmailBody(rule, event)
-
+	// GoodPut keeps its pre-existing direct resend policy; it shares only the
+	// channel policy and transport with the tracked alerts.
 	anySent := false
-	for _, to := range emailCfg.Alert.Recipients {
-		addr := strings.TrimSpace(to)
-		if addr == "" {
-			continue
+	for _, address := range opsAlertEmailRecipients(emailCfg, rule, event.Severity) {
+		allowed, err := s.allowOpsAlertDelivery(ctx, OpsAlertDeliveryEmail, emailCfg.Alert.RateLimitPerHour, time.Now().UTC())
+		if err == nil && allowed && s.sendOpsAlertEmail(ctx, rule, event, address) == nil {
+			anySent = true
 		}
-		if !s.emailLimiter.Allow(time.Now().UTC()) {
-			continue
-		}
-		if s.emailService.notificationEmailService != nil {
-			if err := s.emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
-				Event:          NotificationEmailEventOpsAlert,
-				RecipientEmail: addr,
-				RecipientName:  emailRecipientName(addr),
-				SourceType:     "ops_alert",
-				SourceID:       fmt.Sprintf("%d", event.ID),
-				Variables:      opsAlertEmailVariables(rule, event),
-			}); err == nil {
-				anySent = true
-				continue
-			} else if !shouldFallbackNotificationEmail(err) {
-				continue
-			}
-		}
-		if err := s.emailService.SendEmail(ctx, addr, subject, body); err != nil {
-			// Ignore per-recipient failures; continue best-effort.
-			continue
-		}
-		anySent = true
 	}
-
 	if anySent {
 		_ = s.opsRepo.UpdateAlertEventEmailSent(context.Background(), event.ID, true)
 	}
 	return anySent
+}
+
+func (s *OpsAlertEvaluatorService) sendOpsAlertEmail(ctx context.Context, rule *OpsAlertRule, event *OpsAlertEvent, address string) error {
+	if !runtimegate.SharedWorkAllowed() || ctx.Err() != nil {
+		return context.Canceled
+	}
+	if templates := s.emailService.notificationEmailService; templates != nil {
+		err := templates.Send(ctx, NotificationEmailSendInput{
+			Event:          NotificationEmailEventOpsAlert,
+			RecipientEmail: address,
+			RecipientName:  emailRecipientName(address),
+			SourceType:     "ops_alert",
+			SourceID:       fmt.Sprintf("%d", event.ID),
+			Variables:      opsAlertEmailVariables(rule, event),
+		})
+		if err == nil || !shouldFallbackNotificationEmail(err) {
+			return err
+		}
+	}
+	cfg, err := s.emailService.GetSMTPConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if !runtimegate.SharedWorkAllowed() || ctx.Err() != nil {
+		return context.Canceled
+	}
+	subject := fmt.Sprintf("[Ops Alert][%s] %s", event.Severity, OpsAlertSafeNotificationText(rule.Name, 128))
+	return s.emailService.SendEmailWithConfig(cfg, address, subject, buildOpsAlertEmailBody(rule, event))
 }
 
 func opsAlertEmailVariables(rule *OpsAlertRule, event *OpsAlertEvent) map[string]string {

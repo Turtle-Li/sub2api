@@ -169,6 +169,26 @@ func (m *opsRepoMock) UpdateAlertEventEmailSent(ctx context.Context, eventID int
 	return nil
 }
 
+func (m *opsRepoMock) GetAlertRuleByID(context.Context, int64) (*OpsAlertRule, error) {
+	return nil, nil
+}
+
+func (m *opsRepoMock) CountAccountUpstreamErrors(context.Context, OpsAccountUpstreamErrorFilter) (OpsAccountUpstreamErrorMatch, error) {
+	return OpsAccountUpstreamErrorMatch{}, nil
+}
+
+func (m *opsRepoMock) ClaimAlertDelivery(context.Context, time.Time, string, time.Duration) (*OpsAlertDelivery, error) {
+	return nil, nil
+}
+
+func (m *opsRepoMock) StartAlertDelivery(context.Context, *OpsAlertDelivery, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (m *opsRepoMock) FinishAlertDelivery(context.Context, *OpsAlertDelivery, OpsAlertDeliveryOutcome) (bool, error) {
+	return false, nil
+}
+
 func (m *opsRepoMock) CreateAlertSilence(ctx context.Context, input *OpsAlertSilence) (*OpsAlertSilence, error) {
 	return input, nil
 }

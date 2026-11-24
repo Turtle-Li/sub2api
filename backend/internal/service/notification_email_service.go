@@ -436,7 +436,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 		return notificationEmailConfigErr(errors.New("email service is not configured"))
 	}
 	var sendErr error
-	if normalizedEvent == NotificationEmailEventInvoiceIssued || normalizedEvent == NotificationEmailEventInvoiceRejected || input.SourceType == "paid_fallback_incident" || input.SourceType == "model_group_probe" {
+	if normalizedEvent == NotificationEmailEventInvoiceIssued || normalizedEvent == NotificationEmailEventInvoiceRejected || input.SourceType == "paid_fallback_incident" || input.SourceType == "model_group_probe" || input.SourceType == "ops_alert" {
 		// These deliveries belong to the active background generation. Read
 		// all settings before the final fence so a handoff during template,
 		// deduplication or SMTP configuration I/O cannot start a new send.

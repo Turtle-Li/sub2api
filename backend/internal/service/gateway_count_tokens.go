@@ -174,6 +174,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("upstream request failed: %w", err)
 	}
 
+	if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, resp, reqModel); failure != nil {
+		return failure
+	}
 	// 读取响应体
 	countTokensTooLarge := func(c *gin.Context) {
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response too large")
@@ -196,6 +199,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		if buildErr == nil {
 			retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 			if retryErr == nil {
+				if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, retryResp, reqModel); failure != nil {
+					return failure
+				}
 				if retryResp.StatusCode < 400 {
 					// count_tokens 签名重试成功后记录最终 wire body，错误响应仍保留原 body 便于后续处理。
 					acceptedWireBody = retryWireBody
@@ -236,6 +242,12 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			upstreamDetail = truncateString(string(respBody), maxBytes)
 		}
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+		appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
+			Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+			ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+			UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+			Kind: "http_error", Message: upstreamMsg, Detail: upstreamDetail,
+		})
 
 		// 记录上游错误摘要便于排障（不回显请求内容）
 		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
@@ -312,6 +324,9 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 		return fmt.Errorf("upstream request failed: %w", err)
 	}
 
+	if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, resp, upstreamModel); failure != nil {
+		return failure
+	}
 	countTokensTooLarge := func(c *gin.Context) {
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response too large")
 	}
@@ -352,7 +367,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 			upstreamDetail = truncateString(string(respBody), maxBytes)
 		}
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,

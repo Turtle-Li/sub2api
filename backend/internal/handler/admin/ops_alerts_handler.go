@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -26,6 +28,7 @@ var validOpsAlertMetricTypes = []string{
 	"network_bandwidth_utilization_percent",
 	"concurrency_queue_depth",
 	service.OpsAlertMetricGoodPutVideoIncident,
+	service.OpsAlertMetricAccountUpstreamError,
 	"group_available_accounts",
 	"group_available_ratio",
 	"group_rate_limit_ratio",
@@ -78,8 +81,13 @@ type opsAlertRuleValidatedInput struct {
 	SustainedMinutes int
 	CooldownMinutes  int
 
-	Enabled     bool
-	NotifyEmail bool
+	Enabled            bool
+	NotifyEmail        bool
+	NotifyFeishu       bool
+	NotifyEmails       []string
+	CustomMessage      string
+	Filters            map[string]any
+	NotificationUpdate service.OpsAlertNotificationUpdate
 
 	WindowProvided    bool
 	SustainedProvided bool
@@ -200,7 +208,46 @@ func validateOpsAlertRulePayload(raw map[string]json.RawMessage) (*opsAlertRuleV
 	} else {
 		validated.NotifyEmail = true
 	}
+	if v, ok := raw["notify_feishu"]; ok {
+		validated.NotificationUpdate.Feishu = true
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &validated.NotifyFeishu) != nil {
+			return nil, fmt.Errorf("notify_feishu must be a boolean")
+		}
+	}
+	if v, ok := raw["notify_emails"]; ok {
+		validated.NotificationUpdate.Emails = true
+		var addresses []string
+		if err := json.Unmarshal(v, &addresses); err != nil {
+			return nil, fmt.Errorf("notify_emails must be an array of addresses")
+		}
+		normalized, err := service.NormalizeOpsAlertEmails(addresses)
+		if err != nil {
+			return nil, err
+		}
+		validated.NotifyEmails = normalized
+	}
+	if v, ok := raw["custom_message"]; ok {
+		validated.NotificationUpdate.CustomMessage = true
+		if json.Unmarshal(v, &validated.CustomMessage) != nil || utf8.RuneCountInString(validated.CustomMessage) > service.OpsAlertCustomMessageMaxRunes {
+			return nil, fmt.Errorf("custom_message must be a string of at most %d characters", service.OpsAlertCustomMessageMaxRunes)
+		}
+		validated.CustomMessage = service.OpsAlertSafeNotificationText(validated.CustomMessage, service.OpsAlertCustomMessageMaxRunes)
+	}
+	var filters map[string]any
+	if v, ok := raw["filters"]; ok {
+		decoder := json.NewDecoder(bytes.NewReader(v))
+		decoder.UseNumber()
+		if err := decoder.Decode(&filters); err != nil {
+			return nil, fmt.Errorf("filters must be an object")
+		}
+	}
+	normalizedFilters, err := service.NormalizeOpsAlertRuleFilters(metricType, filters)
+	if err != nil {
+		return nil, err
+	}
+	validated.Filters = normalizedFilters
 
+	allow15MinuteWindow := metricType == service.OpsAlertMetricGoodPutVideoIncident || metricType == service.OpsAlertMetricAccountUpstreamError
 	if v, ok := raw["window_minutes"]; ok {
 		validated.WindowProvided = true
 		if err := json.Unmarshal(v, &validated.WindowMinutes); err != nil {
@@ -209,11 +256,11 @@ func validateOpsAlertRulePayload(raw map[string]json.RawMessage) (*opsAlertRuleV
 		switch validated.WindowMinutes {
 		case 1, 5, 60:
 		case 15:
-			if metricType != service.OpsAlertMetricGoodPutVideoIncident {
+			if !allow15MinuteWindow {
 				return nil, fmt.Errorf("window_minutes must be one of: 1, 5, 60")
 			}
 		default:
-			if metricType == service.OpsAlertMetricGoodPutVideoIncident {
+			if allow15MinuteWindow {
 				return nil, fmt.Errorf("window_minutes must be one of: 1, 5, 15, 60")
 			}
 			return nil, fmt.Errorf("window_minutes must be one of: 1, 5, 60")
@@ -308,6 +355,10 @@ func (h *OpsHandler) CreateAlertRule(c *gin.Context) {
 	rule.Severity = validated.Severity
 	rule.Enabled = validated.Enabled
 	rule.NotifyEmail = validated.NotifyEmail
+	rule.NotifyFeishu = validated.NotifyFeishu
+	rule.NotifyEmails = validated.NotifyEmails
+	rule.CustomMessage = validated.CustomMessage
+	rule.Filters = validated.Filters
 
 	created, err := h.opsService.CreateAlertRule(c.Request.Context(), &rule)
 	if err != nil {
@@ -363,6 +414,11 @@ func (h *OpsHandler) UpdateAlertRule(c *gin.Context) {
 	rule.Severity = validated.Severity
 	rule.Enabled = validated.Enabled
 	rule.NotifyEmail = validated.NotifyEmail
+	rule.NotifyFeishu = validated.NotifyFeishu
+	rule.NotifyEmails = validated.NotifyEmails
+	rule.CustomMessage = validated.CustomMessage
+	rule.Filters = validated.Filters
+	rule.NotificationUpdate = &validated.NotificationUpdate
 
 	updated, err := h.opsService.UpdateAlertRule(c.Request.Context(), &rule)
 	if err != nil {

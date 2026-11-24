@@ -53,6 +53,18 @@ func (c *gatewayCache) SetSessionAccountID(ctx context.Context, groupID int64, s
 	return c.rdb.Set(ctx, key, accountID, ttl).Err()
 }
 
+var replaceFailedStickySession = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  if ARGV[2] == '0' then return redis.call('DEL', KEYS[1]) end
+  return redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+end
+return 0
+`)
+
+func (c *gatewayCache) ReplaceFailedStickySession(ctx context.Context, groupID int64, sessionHash string, failedID, nextID int64, ttl time.Duration) error {
+	return replaceFailedStickySession.Run(ctx, c.rdb, []string{buildSessionKey(groupID, sessionHash)}, failedID, nextID, ttl.Milliseconds()).Err()
+}
+
 func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Expire(ctx, key, ttl).Err()

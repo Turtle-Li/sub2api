@@ -145,8 +145,10 @@ func TestComputeRuleMetric_AccountTempUnscheduledCount(t *testing.T) {
 	}
 
 	rule := &OpsAlertRule{MetricType: "account_temp_unscheduled_count"}
-	val, ok := svc.computeRuleMetric(context.Background(), rule, nil,
+	valMetric, err := svc.computeRuleMetric(context.Background(), rule, nil,
 		now.Add(-5*time.Minute), now, "", nil)
+	require.NoError(t, err)
+	val, ok := valMetric.value, valMetric.available
 
 	require.True(t, ok)
 	require.InDelta(t, 2.0, val, 0.0001, "only 2 accounts have an active temp-unsched window")
@@ -247,7 +249,9 @@ func TestComputeRuleMetricNewIndicators(t *testing.T) {
 			rule := &OpsAlertRule{
 				MetricType: tt.metricType,
 			}
-			gotValue, gotOK := svc.computeRuleMetric(ctx, rule, nil, start, end, platform, tt.groupID)
+			gotValueMetric, err := svc.computeRuleMetric(ctx, rule, nil, start, end, platform, tt.groupID)
+			require.NoError(t, err)
+			gotValue, gotOK := gotValueMetric.value, gotValueMetric.available
 			require.Equal(t, tt.wantOK, gotOK)
 			if !tt.wantOK {
 				return
@@ -279,7 +283,9 @@ func TestComputeRuleMetricNetworkBandwidth(t *testing.T) {
 		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
 
 		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
-		got, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "bandwidth_utilization"}, nil, now.Add(-time.Minute), now, "", nil)
+		gotMetric, err := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "bandwidth_utilization"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.NoError(t, err)
+		got, ok := gotMetric.value, gotMetric.available
 		require.True(t, ok)
 		require.Greater(t, got, 35.0)
 		require.Less(t, got, 45.0)
@@ -300,7 +306,9 @@ func TestComputeRuleMetricNetworkBandwidth(t *testing.T) {
 		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
 
 		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
-		got, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "bandwidth_utilization"}, nil, now.Add(-time.Minute), now, "", nil)
+		gotMetric, err := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "bandwidth_utilization"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.NoError(t, err)
+		got, ok := gotMetric.value, gotMetric.available
 		require.False(t, ok)
 		require.Zero(t, got)
 	})
@@ -322,7 +330,9 @@ func TestComputeRuleMetricNetworkBandwidth(t *testing.T) {
 		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
 
 		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
-		got, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_bandwidth_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		gotMetric, err := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_bandwidth_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.NoError(t, err)
+		got, ok := gotMetric.value, gotMetric.available
 		require.True(t, ok)
 		require.Greater(t, got, 35.0)
 		require.Less(t, got, 45.0)
@@ -344,12 +354,16 @@ func TestComputeRuleMetricNetworkBandwidth(t *testing.T) {
 			TXBytes: 5_000_000,
 		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
 		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
-		tx, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_tx_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		txMetric, err := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_tx_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.NoError(t, err)
+		tx, ok := txMetric.value, txMetric.available
 		require.True(t, ok)
 		require.Greater(t, tx, 35.0)
 		require.Less(t, tx, 45.0)
 
-		rx, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_rx_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		rxMetric, err := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_rx_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.NoError(t, err)
+		rx, ok := rxMetric.value, rxMetric.available
 		require.True(t, ok)
 		require.Greater(t, rx, 9.0)
 		require.Less(t, rx, 11.0)

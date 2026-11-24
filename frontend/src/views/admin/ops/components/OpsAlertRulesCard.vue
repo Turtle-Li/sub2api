@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, useId } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
+import OpsAlertAccountPicker from './OpsAlertAccountPicker.vue'
 import { adminAPI } from '@/api'
 import { opsAPI } from '@/api/admin/ops'
 import type { AlertRule, MetricType, Operator } from '../types'
-import type { OpsSeverity } from '@/api/admin/ops'
+import type { CreateOpsAlertRuleRequest, OpsAlertRuleFilters, OpsSeverity } from '@/api/admin/ops'
 import { formatDateTime } from '../utils/opsFormatters'
 
 const { t } = useI18n()
@@ -48,13 +49,30 @@ const showEditor = ref(false)
 const saving = ref(false)
 const editingId = ref<number | null>(null)
 const draft = ref<AlertRule | null>(null)
+const formId = useId()
+const filterText = reactive({ status: '', codes: '', keywords: '', emails: '' })
 
 type MetricGroup = 'system' | 'group' | 'account'
 
 const BANDWIDTH_UTILIZATION_METRIC: MetricType = 'bandwidth_utilization'
 const LEGACY_BANDWIDTH_UTILIZATION_METRIC: MetricType = 'network_bandwidth_utilization_percent'
 const GOODPUT_VIDEO_INCIDENT_METRIC: MetricType = 'goodput_video_incident'
+const ACCOUNT_UPSTREAM_ERROR_METRIC: MetricType = 'account_upstream_error'
 const isGoodPutIncident = computed(() => draft.value?.metric_type === GOODPUT_VIDEO_INCIDENT_METRIC)
+const isAccountUpstreamError = computed(() => draft.value?.metric_type === ACCOUNT_UPSTREAM_ERROR_METRIC)
+const usesExtendedWindow = computed(() => isGoodPutIncident.value || isAccountUpstreamError.value)
+
+const accountMetricTypes = new Set<MetricType>([
+  ACCOUNT_UPSTREAM_ERROR_METRIC, 'account_rate_limited_count', 'account_error_count',
+  'account_error_ratio', 'account_temp_unscheduled_count', 'overload_account_count'
+])
+const usesAccountScope = computed(() => !!draft.value && accountMetricTypes.has(draft.value.metric_type))
+const draftAccountIds = computed<number[]>({
+  get: () => draft.value?.filters?.account_ids ?? [],
+  set: (accountIds) => {
+    if (draft.value) draft.value.filters = { ...draft.value.filters, account_ids: accountIds }
+  }
+})
 
 interface MetricDefinition {
   type: MetricType
@@ -81,8 +99,8 @@ function isBandwidthUtilizationMetric(metricType: unknown): boolean {
 function parsePositiveInt(value: unknown): number | null {
   if (value == null) return null
   if (typeof value === 'boolean') return null
-  const n = typeof value === 'number' ? value : Number.parseInt(String(value), 10)
-  return Number.isFinite(n) && n > 0 ? n : null
+  const n = Number(value)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
 }
 
 const groupOptionsBase = ref<SelectOption[]>([])
@@ -250,6 +268,14 @@ const metricDefinitions = computed(() => {
 
     // Account-level metrics
     {
+      type: ACCOUNT_UPSTREAM_ERROR_METRIC,
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.accountUpstreamError'),
+      description: t('admin.ops.alertRules.metricDescriptions.accountUpstreamError'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
       type: 'account_rate_limited_count',
       group: 'account',
       label: t('admin.ops.alertRules.metrics.accountRateLimitedCount'),
@@ -302,27 +328,30 @@ const selectedMetricDefinition = computed(() => {
   return metricDefinitions.value.find((m) => m.type === metricType) ?? null
 })
 
-function applyBandwidthMetricRecommendation(metricType: MetricType) {
-  if (!draft.value) return
-  if (!isBandwidthUtilizationMetric(metricType)) return
-  const definition = metricDefinitions.value.find((m) => m.type === BANDWIDTH_UTILIZATION_METRIC)
-  if (!definition) return
-
-  draft.value.operator = definition.recommendedOperator
-  draft.value.threshold = definition.recommendedThreshold
+function changeMetric(value: string | number | boolean | null) {
+  const rule = draft.value
+  const definition = metricDefinitions.value.find((m) => m.type === value && !m.disabled)
+  if (!rule || !definition || rule.metric_type === definition.type) return
+  rule.metric_type = definition.type
+  rule.operator = definition.recommendedOperator
+  rule.threshold = definition.recommendedThreshold
+  const filters = { ...rule.filters }
+  if (!accountMetricTypes.has(definition.type)) delete filters.account_ids
+  if (definition.type !== ACCOUNT_UPSTREAM_ERROR_METRIC) {
+    delete filters.upstream_status_codes
+    delete filters.provider_codes
+    delete filters.error_keywords
+    Object.assign(filterText, { status: '', codes: '', keywords: '' })
+  }
+  if (definition.type === ACCOUNT_UPSTREAM_ERROR_METRIC || (!usesExtendedWindow.value && rule.window_minutes === 15)) {
+    rule.window_minutes = 5
+  }
+  rule.filters = filters
 }
 
 function formatMetricType(metricType: string): string {
   return isBandwidthUtilizationMetric(metricType) ? BANDWIDTH_UTILIZATION_METRIC : metricType
 }
-
-watch(
-  () => draft.value?.metric_type,
-  (metricType, previousMetricType) => {
-    if (!metricType || !previousMetricType || metricType === previousMetricType) return
-    applyBandwidthMetricRecommendation(metricType)
-  }
-)
 
 const metricOptions = computed(() => {
   const buildGroup = (group: MetricGroup): SelectOption[] => {
@@ -354,7 +383,7 @@ const severityOptions = computed(() => {
 })
 
 const windowOptions = computed(() => {
-  const windows = isGoodPutIncident.value ? [1, 5, 15, 60] : [1, 5, 60]
+  const windows = usesExtendedWindow.value ? [1, 5, 15, 60] : [1, 5, 60]
   return windows.map((m) => ({ value: m, label: `${m}m` }))
 })
 
@@ -370,25 +399,72 @@ function newRuleDraft(): AlertRule {
     sustained_minutes: 2,
     severity: 'P1',
     cooldown_minutes: 10,
-    notify_email: true
+    notify_email: true,
+    notify_feishu: false,
+    notify_emails: [],
+    custom_message: ''
   }
+}
+
+function initializeEditor(rule: AlertRule) {
+  draft.value = { ...rule, filters: { ...rule.filters }, custom_message: rule.custom_message ?? '' }
+  filterText.status = rule.filters?.upstream_status_codes?.join(', ') ?? ''
+  filterText.codes = rule.filters?.provider_codes?.join(', ') ?? ''
+  filterText.keywords = rule.filters?.error_keywords?.join('\n') ?? ''
+  filterText.emails = rule.notify_emails?.join('\n') ?? ''
 }
 
 async function openCreate() {
   await loadBandwidthAlertAvailability()
   editingId.value = null
-  draft.value = newRuleDraft()
+  initializeEditor(newRuleDraft())
   showEditor.value = true
 }
 
 async function openEdit(rule: AlertRule) {
   await loadBandwidthAlertAvailability()
   editingId.value = rule.id ?? null
-  draft.value = JSON.parse(JSON.stringify(rule))
+  initializeEditor(rule)
   if (draft.value && draft.value.metric_type === LEGACY_BANDWIDTH_UTILIZATION_METRIC) {
     draft.value.metric_type = BANDWIDTH_UTILIZATION_METRIC
   }
   showEditor.value = true
+}
+
+function splitTokens(input: string, separator: RegExp): string[] {
+  return input.split(separator).map((item) => item.trim()).filter(Boolean)
+}
+
+const parsedFilterText = computed(() => ({
+  status: splitTokens(filterText.status, /[\s,，]+/),
+  codes: splitTokens(filterText.codes, /[\s,，]+/),
+  keywords: splitTokens(filterText.keywords, /\r?\n/),
+  emails: splitTokens(filterText.emails, /[\r\n,，]+/)
+}))
+
+function buildRuleRequest(rule: AlertRule): CreateOpsAlertRuleRequest {
+  const { id, last_triggered_at, created_at, updated_at, ...fields } = rule
+  const filters: OpsAlertRuleFilters = { ...rule.filters }
+  if (accountMetricTypes.has(rule.metric_type) && draftAccountIds.value.length) {
+    filters.account_ids = [...new Set(draftAccountIds.value)].sort((a, b) => a - b)
+  } else delete filters.account_ids
+  delete filters.upstream_status_codes
+  delete filters.provider_codes
+  delete filters.error_keywords
+  const parsed = parsedFilterText.value
+  if (rule.metric_type === ACCOUNT_UPSTREAM_ERROR_METRIC) {
+    if (parsed.status.length) filters.upstream_status_codes = [...new Set(parsed.status.map(Number))].sort((a, b) => a - b)
+    if (parsed.codes.length) filters.provider_codes = [...new Set(parsed.codes)].sort()
+    if (parsed.keywords.length) filters.error_keywords = [...new Set(parsed.keywords)].sort()
+  }
+  const emailOverrides = [...new Map(parsed.emails.map((address) => [address.toLowerCase(), address])).values()]
+  return {
+    ...fields,
+    filters: Object.keys(filters).length ? filters : null,
+    notify_feishu: rule.notify_feishu ?? false,
+    notify_emails: emailOverrides,
+    custom_message: (rule.custom_message ?? '').trim()
+  }
 }
 
 const editorValidation = computed(() => {
@@ -407,7 +483,7 @@ const editorValidation = computed(() => {
   if (!(typeof r.threshold === 'number' && Number.isFinite(r.threshold)))
     errors.push(t('admin.ops.alertRules.validation.thresholdRequired'))
   if (!windowOptions.value.some((option) => option.value === r.window_minutes)) {
-    errors.push(t(isGoodPutIncident.value ? 'admin.ops.alertRules.validation.goodPutWindowRange' : 'admin.ops.alertRules.validation.windowRange'))
+    errors.push(t(usesExtendedWindow.value ? 'admin.ops.alertRules.validation.extendedWindowRange' : 'admin.ops.alertRules.validation.windowRange'))
   }
   if (!(typeof r.sustained_minutes === 'number' && Number.isInteger(r.sustained_minutes) && r.sustained_minutes >= 1 && r.sustained_minutes <= 1440)) {
     errors.push(t('admin.ops.alertRules.validation.sustainedRange'))
@@ -415,6 +491,25 @@ const editorValidation = computed(() => {
   if (!(typeof r.cooldown_minutes === 'number' && Number.isInteger(r.cooldown_minutes) && r.cooldown_minutes >= 0 && r.cooldown_minutes <= 1440)) {
     errors.push(t('admin.ops.alertRules.validation.cooldownRange'))
   }
+  const parsed = parsedFilterText.value
+  if (isAccountUpstreamError.value) {
+    if (!draftAccountIds.value.length && !draftGroupId.value && !parsed.status.length && !parsed.codes.length) {
+      errors.push(t('admin.ops.alertRules.validation.upstreamScopeRequired'))
+    }
+    if (parsed.status.length > 20 || parsed.status.some((code) => !/^[45]\d{2}$/.test(code))) {
+      errors.push(t('admin.ops.alertRules.validation.upstreamStatuses'))
+    }
+    if (parsed.codes.length > 20 || parsed.codes.some((code) => !/^[a-zA-Z0-9_.:-]{1,64}$/.test(code))) {
+      errors.push(t('admin.ops.alertRules.validation.providerCodes'))
+    }
+    if (parsed.keywords.length > 20 || parsed.keywords.some((word) => [...word].length > 128 || /\p{Cc}/u.test(word))) {
+      errors.push(t('admin.ops.alertRules.validation.keywords'))
+    }
+  }
+  if (parsed.emails.length > 20 || parsed.emails.some((address) => !/^[^\s<>@]+@[^\s<>@]+$/.test(address))) {
+    errors.push(t('admin.ops.alertRules.validation.notifyEmails'))
+  }
+  if ([...(r.custom_message ?? '')].length > 500) errors.push(t('admin.ops.alertRules.validation.customMessage'))
   return { valid: errors.length === 0, errors }
 })
 
@@ -426,10 +521,11 @@ async function save() {
   }
   saving.value = true
   try {
+    const input = buildRuleRequest(draft.value)
     if (editingId.value) {
-      await opsAPI.updateAlertRule(editingId.value, draft.value)
+      await opsAPI.updateAlertRule(editingId.value, input)
     } else {
-      await opsAPI.createAlertRule(draft.value)
+      await opsAPI.createAlertRule(input)
     }
     showEditor.value = false
     draft.value = null
@@ -595,7 +691,7 @@ function cancelDelete() {
       width="wide"
       @close="showEditor = false"
     >
-      <div class="space-y-4">
+      <div v-if="draft" class="space-y-4">
         <div v-if="!editorValidation.valid" class="rounded-xl bg-red-50 p-4 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300">
           <div class="font-bold">{{ t('admin.ops.alertRules.validation.title') }}</div>
           <ul class="mt-1 list-disc pl-5">
@@ -616,7 +712,7 @@ function cancelDelete() {
 
           <div>
             <label class="input-label">{{ t('admin.ops.alertRules.form.metric') }}</label>
-            <Select v-model="draft!.metric_type" :options="metricOptions" />
+            <Select :model-value="draft.metric_type" :options="metricOptions" @update:model-value="changeMetric" />
             <div v-if="selectedMetricDefinition" class="mt-1 space-y-0.5 text-xs text-gray-500 dark:text-gray-400">
               <p>{{ selectedMetricDefinition.description }}</p>
               <p v-if="isBandwidthUtilizationMetric(draft!.metric_type) && !bandwidthLimitConfigured" class="font-semibold text-amber-600 dark:text-amber-300">
@@ -656,6 +752,30 @@ function cancelDelete() {
             </p>
           </div>
 
+          <OpsAlertAccountPicker
+            v-if="showEditor && usesAccountScope"
+            v-model="draftAccountIds"
+            :platform="draft.filters?.platform"
+            :group-id="draftGroupId"
+            class="md:col-span-2"
+          />
+
+          <template v-if="isAccountUpstreamError">
+            <div>
+              <label :for="`${formId}-status`" class="input-label">{{ t('admin.ops.alertRules.form.upstreamStatuses') }}</label>
+              <input :id="`${formId}-status`" v-model="filterText.status" class="input" type="text" placeholder="400, 402" />
+            </div>
+            <div>
+              <label :for="`${formId}-codes`" class="input-label">{{ t('admin.ops.alertRules.form.providerCodes') }}</label>
+              <input :id="`${formId}-codes`" v-model="filterText.codes" class="input" type="text" placeholder="insufficient_quota" />
+            </div>
+            <div class="md:col-span-2">
+              <label :for="`${formId}-keywords`" class="input-label">{{ t('admin.ops.alertRules.form.keywords') }}</label>
+              <textarea :id="`${formId}-keywords`" v-model="filterText.keywords" class="input min-h-16 resize-y" rows="2" :placeholder="t('admin.ops.alertRules.hints.onePerLine')" />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.alertRules.hints.sameAttempt') }}</p>
+            </div>
+          </template>
+
           <div v-if="!isGoodPutIncident">
             <label class="input-label">{{ t('admin.ops.alertRules.form.threshold') }}</label>
             <input v-model.number="draft!.threshold" class="input" type="number" />
@@ -686,9 +806,26 @@ function cancelDelete() {
             <input v-model="draft!.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
           </div>
 
-          <div class="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3 dark:bg-dark-800/50 md:col-span-2">
+          <label class="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3 dark:bg-dark-800/50 md:col-span-2">
             <span class="text-xs font-bold text-gray-700 dark:text-gray-200">{{ t('admin.ops.alertRules.form.notifyEmail') }}</span>
             <input v-model="draft!.notify_email" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          </label>
+          <div v-if="draft.notify_email" class="md:col-span-2">
+            <label :for="`${formId}-emails`" class="input-label">{{ t('admin.ops.alertRules.form.notifyEmails') }}</label>
+            <textarea :id="`${formId}-emails`" v-model="filterText.emails" class="input min-h-16 resize-y" rows="2" :placeholder="t('admin.ops.alertRules.hints.onePerLine')" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.alertRules.hints.notifyEmails') }}</p>
+          </div>
+          <label v-if="!isGoodPutIncident" class="flex items-center justify-between gap-4 rounded-xl bg-gray-50 px-4 py-3 dark:bg-dark-800/50 md:col-span-2">
+            <span>
+              <span class="block text-xs font-bold text-gray-700 dark:text-gray-200">{{ t('admin.ops.alertRules.form.notifyFeishu') }}</span>
+              <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.alertRules.hints.notifyFeishu') }}</span>
+            </span>
+            <input v-model="draft.notify_feishu" type="checkbox" class="h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          </label>
+          <div v-if="!isGoodPutIncident" class="md:col-span-2">
+            <label :for="`${formId}-custom-message`" class="input-label">{{ t('admin.ops.alertRules.form.customMessage') }}</label>
+            <textarea :id="`${formId}-custom-message`" v-model="draft.custom_message" class="input min-h-16 resize-y" rows="2" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.alertRules.hints.customMessage') }}</p>
           </div>
         </div>
       </div>

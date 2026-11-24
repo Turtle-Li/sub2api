@@ -791,12 +791,22 @@ export type MetricType =
   | 'account_rate_limited_count'
   | 'account_error_count'
   | 'account_error_ratio'
+  | 'account_upstream_error'
   | 'account_temp_unscheduled_count'
   | 'overload_account_count'
 export type Operator = '>' | '>=' | '<' | '<=' | '==' | '!='
 
-export interface AlertRule {
-  id?: number
+export interface OpsAlertRuleFilters {
+  platform?: string
+  group_id?: number | string | null
+  region?: string
+  account_ids?: number[]
+  upstream_status_codes?: number[]
+  provider_codes?: string[]
+  error_keywords?: string[]
+}
+
+export interface CreateOpsAlertRuleRequest {
   name: string
   description?: string
   enabled: boolean
@@ -808,11 +818,37 @@ export interface AlertRule {
   severity: OpsSeverity
   cooldown_minutes: number
   notify_email: boolean
-  filters?: Record<string, any>
+  notify_feishu?: boolean
+  /** An empty list or null uses the global recipients. Omission preserves the override on update. */
+  notify_emails?: string[] | null
+  /** Empty text clears the message. Omission preserves it on update. */
+  custom_message?: string | null
+  /** Replaces the filter set; null clears it. */
+  filters?: OpsAlertRuleFilters | null
+}
+
+export type UpdateOpsAlertRuleRequest = CreateOpsAlertRuleRequest
+
+export interface AlertRule extends CreateOpsAlertRuleRequest {
+  id?: number
   created_at?: string
   updated_at?: string
   last_triggered_at?: string | null
 }
+
+export interface OpsAlertEventDimensions {
+  [key: string]: unknown
+  platform?: string
+  group_id?: number
+  region?: string
+  latest_account_id?: number
+  latest_account_name?: string
+  latest_upstream_status_code?: number
+  latest_provider_code?: string
+  matched_account_ids?: number[] | null
+}
+
+export type OpsAlertDeliveryStatus = 'disabled' | 'pending' | 'sent' | 'failed' | 'unknown'
 
 export interface AlertEvent {
   id: number
@@ -823,10 +859,13 @@ export interface AlertEvent {
   description?: string
   metric_value?: number
   threshold_value?: number
-  dimensions?: Record<string, any>
+  dimensions?: OpsAlertEventDimensions
   fired_at: string
   resolved_at?: string | null
   email_sent: boolean
+  feishu_sent?: boolean
+  email_delivery_status?: OpsAlertDeliveryStatus
+  feishu_delivery_status?: OpsAlertDeliveryStatus
   created_at: string
 }
 
@@ -1285,12 +1324,12 @@ export async function listAlertRules(): Promise<AlertRule[]> {
   return data
 }
 
-export async function createAlertRule(rule: AlertRule): Promise<AlertRule> {
+export async function createAlertRule(rule: CreateOpsAlertRuleRequest): Promise<AlertRule> {
   const { data } = await apiClient.post<AlertRule>('/admin/ops/alert-rules', rule)
   return data
 }
 
-export async function updateAlertRule(id: number, rule: Partial<AlertRule>): Promise<AlertRule> {
+export async function updateAlertRule(id: number, rule: UpdateOpsAlertRuleRequest): Promise<AlertRule> {
   const { data } = await apiClient.put<AlertRule>(`/admin/ops/alert-rules/${id}`, rule)
   return data
 }

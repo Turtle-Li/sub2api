@@ -221,13 +221,16 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
 
 	// 7. Handle error response with failover
 	if resp.StatusCode >= 400 {
+		if failure := s.probeOpenAIBalanceResponse(ctx, c, account, resp, upstreamModel); failure != nil {
+			return nil, failure
+		}
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
 		if account.Platform == PlatformGrok {
 			kind := "http_error"
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 				kind = "failover"
 			}
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,

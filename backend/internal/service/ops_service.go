@@ -630,6 +630,9 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		msg := sanitizeUpstreamErrorMessage(strings.TrimSpace(out.Message))
 		msg = truncateString(msg, messageMaxLen)
 		out.Message = msg
+		if !IsValidProviderErrorCode(out.ProviderCode) {
+			out.ProviderCode = ""
+		}
 
 		detail := strings.TrimSpace(out.Detail)
 		// Drop fully-empty events (can happen if only status code was known).

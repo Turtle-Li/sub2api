@@ -614,6 +614,9 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= http.StatusBadRequest {
+		if failure := s.probeOpenAIBalanceResponse(ctx, c, account, resp, upstreamModel); failure != nil {
+			return nil, failure
+		}
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
 		if upstreamMsg == "" {
 			upstreamMsg = fmt.Sprintf("xAI upstream returned status %d", resp.StatusCode)
@@ -622,7 +625,7 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			kind = "failover"
 		}
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,

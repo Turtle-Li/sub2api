@@ -437,10 +437,21 @@ export default {
       },
       alertEvents: {
         title: '告警事件',
-        description: '最近的告警触发/恢复记录（仅邮件通知）',
+        description: '查看近期告警、恢复记录和通知投递状态。',
         loading: '加载中...',
         empty: '暂无告警事件',
         loadFailed: '加载告警事件失败',
+        notifications: {
+          title: '通知状态',
+          email: '邮件',
+          feishu: '飞书',
+          disabled: '未启用',
+          pending: '待发送',
+          sent: '已发送',
+          failed: '发送失败',
+          unknown: '历史未知',
+          matchedAccounts: '命中账号'
+        },
         status: {
           firing: '告警中',
           resolved: '已恢复',
@@ -480,12 +491,12 @@ export default {
           dimensions: '维度',
           email: '邮件已发送',
           emailSent: '已发送',
-          emailIgnored: '已忽略'
+          emailIgnored: '未发送'
         }
       },
       alertRules: {
         title: '告警规则',
-        description: '创建与管理系统阈值告警（仅邮件通知）',
+        description: '管理系统、分组和账号告警规则，以及邮件与飞书通知。',
         loading: '加载中...',
         empty: '暂无告警规则',
         loadFailed: '加载告警规则失败',
@@ -515,6 +526,7 @@ export default {
           memory: '内存使用率 (%)',
           queueDepth: '并发排队深度',
           goodPutVideoIncident: 'GoodPut H3 单任务异常',
+          accountUpstreamError: '账号上游错误次数',
           groupAvailableAccounts: '分组可用账号数',
           groupAvailableRatio: '分组可用比例 (%)',
           groupRateLimitRatio: '分组限流比例 (%)',
@@ -535,6 +547,7 @@ export default {
           memory: '当前实例内存使用率（0~100）。',
           queueDepth: '统计窗口内并发队列排队深度（等待中的请求数）。',
           goodPutVideoIncident: '回执丢失、计费秒数异常、超过所选窗口仍未结算，或成片下载失败后未恢复时，按任务和异常类型告警。',
+          accountUpstreamError: '统计窗口内符合条件的上游失败尝试；切号成功的请求也计入其失败尝试。',
           groupAvailableAccounts: '指定分组中当前可用账号数量（需要 group_id 过滤）。',
           groupAvailableRatio: '指定分组中可用账号占比（0~100，需要 group_id 过滤）。',
           groupRateLimitRatio: '指定分组中账号被限流的比例（0~100，需要 group_id 过滤）。',
@@ -548,7 +561,22 @@ export default {
           bandwidthLimitRequired: '使用此指标前，请先配置带宽上限。',
           recommended: '推荐：运算符 {operator}，阈值 {threshold}{unit}',
           groupRequired: '该指标为分组级别指标，必须选择分组（group_id）。',
-          groupOptional: '可选：通过 group_id 将规则限定到某个分组。'
+          groupOptional: '可选：通过 group_id 将规则限定到某个分组。',
+          onePerLine: '每行一项',
+          sameAttempt: '账号、状态码、供应商码和关键词必须命中同一次上游尝试。每类条件内匹配任意一项。',
+          notifyEmails: '留空使用全局收件人。全局开关、最低级别、静默和限流仍生效。',
+          notifyFeishu: '服务端需同时启用 Ops 与支付飞书开关；投递使用已配置的共享飞书群。',
+          customMessage: '最多 500 字。只填写运维说明，不要填写客户信息、提示词、密钥或地址。'
+        },
+        accounts: {
+          search: '搜索上游账号',
+          loading: '正在加载账号…',
+          failed: '加载账号失败',
+          empty: '没有匹配的账号',
+          selected: '已选 {count} / {max}',
+          remove: '移除 {account}',
+          previous: '上一页',
+          next: '下一页'
         },
         table: {
           name: '名称',
@@ -571,7 +599,14 @@ export default {
           sustained: '连续样本数（每分钟）',
           cooldown: '冷却期（分钟）',
           enabled: '启用',
-          notifyEmail: '发送邮件通知'
+          notifyEmail: '发送邮件通知',
+          accounts: '指定账号（可多选）',
+          upstreamStatuses: '上游 HTTP 状态码',
+          providerCodes: '供应商错误码',
+          keywords: '上游错误关键词',
+          notifyFeishu: '发送飞书通知',
+          notifyEmails: '本规则收件人',
+          customMessage: '通知备注'
         },
         validation: {
           bandwidthLimitRequired: '带宽使用率告警需要先配置带宽上限。',
@@ -584,6 +619,13 @@ export default {
           thresholdRequired: '阈值必须为数字',
           windowRange: '统计窗口必须为 1 / 5 / 60 分钟之一',
           goodPutWindowRange: '等待结算窗口必须为 1 / 5 / 15 / 60 分钟之一',
+          extendedWindowRange: '统计窗口必须为 1 / 5 / 15 / 60 分钟之一',
+          upstreamScopeRequired: '请至少指定账号、分组、上游状态码或供应商错误码。',
+          upstreamStatuses: '最多 20 个状态码，每项必须在 400 至 599 之间。',
+          providerCodes: '最多 20 个供应商码，每项为 1 至 64 个字母、数字或 _ . : -。',
+          keywords: '最多 20 个关键词，每项最多 128 字且不能包含控制字符。',
+          notifyEmails: '请提供最多 20 个有效的邮件地址。',
+          customMessage: '通知备注最多 500 字。',
           sustainedRange: '连续样本数必须在 1 到 1440 之间',
           cooldownRange: '冷却期必须在 0 到 1440 分钟之间'
         }

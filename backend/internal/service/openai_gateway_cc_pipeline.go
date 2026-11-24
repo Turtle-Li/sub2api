@@ -141,7 +141,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		}
 		upstreamDetail = truncateString(string(respBody), maxBytes)
 	}
-	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+	appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 		ProxyID:            opsUpstreamProxyID(account),
 		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,

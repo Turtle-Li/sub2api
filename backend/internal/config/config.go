@@ -1943,7 +1943,8 @@ type OpsConfig struct {
 	//
 	// NOTE: vNext still has a DB-backed feature flag (ops_monitoring_enabled) for runtime on/off.
 	// This config flag is the "hard switch" for deployments that want to disable ops completely.
-	Enabled bool `mapstructure:"enabled"`
+	Enabled             bool `mapstructure:"enabled"`
+	FeishuAlertsEnabled bool `mapstructure:"feishu_alerts_enabled"`
 
 	// UsePreaggregatedTables prefers ops_metrics_hourly/daily for long-window dashboard queries.
 	UsePreaggregatedTables bool `mapstructure:"use_preaggregated_tables"`
@@ -2155,6 +2156,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	if err := viper.BindEnv("feishu_payment_alerts.enabled", "SUB2API_FEISHU_ENABLED"); err != nil {
 		return nil, fmt.Errorf("bind SUB2API_FEISHU_ENABLED: %w", err)
+	}
+	if err := viper.BindEnv("ops.feishu_alerts_enabled", "SUB2API_OPS_FEISHU_ALERTS_ENABLED"); err != nil {
+		return nil, fmt.Errorf("bind SUB2API_OPS_FEISHU_ALERTS_ENABLED: %w", err)
 	}
 
 	// 默认值
@@ -2709,6 +2713,7 @@ func setDefaults() {
 
 	// Ops (vNext)
 	viper.SetDefault("ops.enabled", true)
+	viper.SetDefault("ops.feishu_alerts_enabled", false)
 	viper.SetDefault("ops.use_preaggregated_tables", true)
 	viper.SetDefault("ops.cleanup.enabled", true)
 	viper.SetDefault("ops.cleanup.schedule", "0 2 * * *")

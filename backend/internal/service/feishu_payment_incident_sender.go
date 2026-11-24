@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 )
 
 const (
@@ -112,6 +114,9 @@ func (s *feishuPaymentIncidentSender) SendText(ctx context.Context, message stri
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if ctx.Value(opsAlertSharedSendKey{}) == true && !runtimegate.SharedWorkAllowed() {
+		return context.Canceled
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return errFeishuPaymentWebhookDelivery

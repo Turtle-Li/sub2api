@@ -437,10 +437,21 @@ export default {
       },
       alertEvents: {
         title: 'Alert Events',
-        description: 'Recent alert firing/resolution records (email-only)',
+        description: 'Recent alerts, resolutions, and notification delivery status.',
         loading: 'Loading...',
         empty: 'No alert events',
         loadFailed: 'Failed to load alert events',
+        notifications: {
+          title: 'Notifications',
+          email: 'Email',
+          feishu: 'Feishu',
+          disabled: 'Not enabled',
+          pending: 'Pending',
+          sent: 'Sent',
+          failed: 'Failed',
+          unknown: 'Unknown (historical)',
+          matchedAccounts: 'Matched accounts'
+        },
         status: {
           firing: 'FIRING',
           resolved: 'RESOLVED',
@@ -480,12 +491,12 @@ export default {
           dimensions: 'Dimensions',
           email: 'Email Sent',
           emailSent: 'Sent',
-          emailIgnored: 'Ignored'
+          emailIgnored: 'Not sent'
         }
       },
       alertRules: {
         title: 'Alert Rules',
-        description: 'Create and manage threshold-based system alerts (email-only)',
+        description: 'Manage system, group, and account alerts and their email and Feishu notifications.',
         loading: 'Loading...',
         empty: 'No alert rules',
         loadFailed: 'Failed to load alert rules',
@@ -515,6 +526,7 @@ export default {
           memory: 'Memory Usage (%)',
           queueDepth: 'Concurrency Queue Depth',
           goodPutVideoIncident: 'GoodPut H3 Task Incident',
+          accountUpstreamError: 'Account upstream error count',
           groupAvailableAccounts: 'Group Available Accounts',
           groupAvailableRatio: 'Group Available Ratio (%)',
           groupRateLimitRatio: 'Group Rate Limit Ratio (%)',
@@ -535,6 +547,7 @@ export default {
           memory: 'Current instance memory usage (0-100).',
           queueDepth: 'Concurrency queue depth within the window (queued requests).',
           goodPutVideoIncident: 'Alerts per task and incident type: missing receipt, unverified usage, settlement overdue by the selected window, or an unresolved download failure.',
+          accountUpstreamError: 'Counts matching upstream error attempts in the window, including attempts recovered by switching accounts.',
           groupAvailableAccounts: 'Number of available accounts in the selected group (requires group_id).',
           groupAvailableRatio: 'Available account ratio in the selected group (0-100, requires group_id).',
           groupRateLimitRatio: 'Rate-limited account ratio in the selected group (0-100, requires group_id).',
@@ -548,7 +561,22 @@ export default {
           bandwidthLimitRequired: 'Configure a bandwidth limit before using this metric.',
           recommended: 'Recommended: operator {operator}, threshold {threshold}{unit}',
           groupRequired: 'This is a group-level metric; selecting a group (group_id) is required.',
-          groupOptional: 'Optional: limit the rule to a specific group via group_id.'
+          groupOptional: 'Optional: limit the rule to a specific group via group_id.',
+          onePerLine: 'One per line',
+          sameAttempt: 'All filter categories must match the same upstream attempt. Any value within a category can match.',
+          notifyEmails: 'Leave empty to use global recipients. Global enablement, severity, silencing, and rate limits still apply.',
+          notifyFeishu: 'Requires both the Ops and payment Feishu switches on the server. Uses the configured shared Feishu destination.',
+          customMessage: 'Up to 500 characters. Use operational notes only, without customer data, prompts, keys, or URLs.'
+        },
+        accounts: {
+          search: 'Search upstream accounts',
+          loading: 'Loading accounts…',
+          failed: 'Unable to load accounts',
+          empty: 'No matching accounts',
+          selected: '{count} / {max} selected',
+          remove: 'Remove {account}',
+          previous: 'Previous',
+          next: 'Next'
         },
         table: {
           name: 'Name',
@@ -571,7 +599,14 @@ export default {
           sustained: 'Sustained (samples)',
           cooldown: 'Cooldown (minutes)',
           enabled: 'Enabled',
-          notifyEmail: 'Send email notifications'
+          notifyEmail: 'Send email notifications',
+          accounts: 'Accounts (multiple selection)',
+          upstreamStatuses: 'Upstream HTTP status codes',
+          providerCodes: 'Provider error codes',
+          keywords: 'Upstream error keywords',
+          notifyFeishu: 'Send Feishu notifications',
+          notifyEmails: 'Recipients for this rule',
+          customMessage: 'Notification note'
         },
         validation: {
           bandwidthLimitRequired: 'A bandwidth limit is required for bandwidth utilization alerts.',
@@ -584,6 +619,13 @@ export default {
           thresholdRequired: 'Threshold must be a number',
           windowRange: 'Window must be one of: 1, 5, 60 minutes',
           goodPutWindowRange: 'Settlement window must be one of: 1, 5, 15, 60 minutes',
+          extendedWindowRange: 'Window must be one of: 1, 5, 15, 60 minutes',
+          upstreamScopeRequired: 'Select at least one account, group, upstream status, or provider code.',
+          upstreamStatuses: 'Enter at most 20 HTTP status codes from 400 to 599.',
+          providerCodes: 'Enter at most 20 codes, each 1–64 characters: letters, digits, or _ . : -.',
+          keywords: 'Enter up to 20 keywords, each at most 128 characters without control characters.',
+          notifyEmails: 'Enter up to 20 valid email addresses.',
+          customMessage: 'The note must not exceed 500 characters.',
           sustainedRange: 'Sustained must be between 1 and 1440 samples',
           cooldownRange: 'Cooldown must be between 0 and 1440 minutes'
         }

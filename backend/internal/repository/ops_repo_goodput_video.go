@@ -61,10 +61,7 @@ WHERE e.rule_id=$1 AND e.status='firing' AND e.goodput_video_job_id=job.id
 
 	// A real incident may recover before its first notification. Give those
 	// events a short delivery window without sending a second recovery email.
-	rows, err := tx.QueryContext(ctx, `
-SELECT id,rule_id,severity,status,title,description,metric_value,threshold_value,dimensions,
-	fired_at,resolved_at,email_sent,created_at
-FROM ops_alert_events
+	rows, err := tx.QueryContext(ctx, opsAlertEventRead+`
 WHERE rule_id=$1 AND goodput_video_job_id IS NOT NULL AND NOT email_sent
   AND (status='firing' OR (status='resolved' AND fired_at > NOW()-INTERVAL '30 minutes'))
 ORDER BY fired_at DESC,id DESC LIMIT 16`, rule.ID)

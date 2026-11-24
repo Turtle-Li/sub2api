@@ -462,6 +462,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			})
 		}
 
+		if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, resp, reqModel); failure != nil {
+			return nil, failure
+		}
 		if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken &&
 			attempt < maxRetryAttempts && time.Since(retryStart) < maxRetryElapsed {
 			if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
@@ -479,7 +482,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				_ = resp.Body.Close()
 
 				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
-					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 						ProxyID:            opsUpstreamProxyID(account),
 						ProxyName:          opsUpstreamProxyName(account),
 						Platform:           account.Platform,
@@ -527,6 +530,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					if buildErr == nil {
 						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 						if retryErr == nil {
+							if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, retryResp, reqModel); failure != nil {
+								return nil, failure
+							}
 							if retryResp.StatusCode < 400 {
 								// 重试请求被上游接受后同步 ParsedRequest，保证 usage/日志看到真实请求体。
 								lastWireBody = retryWireBody
@@ -542,7 +548,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 							retryRespBody, retryReadErr := s.readUpstreamErrorBody(retryResp)
 							_ = retryResp.Body.Close()
 							if retryReadErr == nil && retryResp.StatusCode == 400 && s.isSignatureErrorPattern(ctx, account, retryRespBody) {
-								appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+								appendOpsUpstreamResponseError(c, retryRespBody, OpsUpstreamErrorEvent{
 									ProxyID:            opsUpstreamProxyID(account),
 									ProxyName:          opsUpstreamProxyName(account),
 									Platform:           account.Platform,
@@ -570,6 +576,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									if buildErr2 == nil {
 										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, tlsProfile)
 										if retryErr2 == nil {
+											if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, retryResp2, reqModel); failure != nil {
+												return nil, failure
+											}
 											if retryResp2.StatusCode < 400 {
 												// 二阶段工具块降级成功时也必须更新当前 body。
 												lastWireBody = retryWireBody2
@@ -625,7 +634,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				// 不是签名错误（或整流器已关闭），继续检查 budget 约束
 				errMsg := extractUpstreamErrorMessage(respBody)
 				if isThinkingBudgetConstraintError(errMsg) && s.settingService.IsBudgetRectifierEnabled(ctx) {
-					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 						ProxyID:            opsUpstreamProxyID(account),
 						ProxyName:          opsUpstreamProxyName(account),
 						Platform:           account.Platform,
@@ -653,6 +662,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						if buildErr == nil {
 							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 							if retryErr == nil {
+								if failure := probeUpstreamBalanceResponse(ctx, c, s.rateLimitService, account, budgetRetryResp, reqModel); failure != nil {
+									return nil, failure
+								}
 								if budgetRetryResp.StatusCode < 400 {
 									// budget 修正请求成功后，ParsedRequest 也要描述被接受的修正版。
 									lastWireBody = budgetWireBody
@@ -697,7 +709,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 				respBody, _ := s.readUpstreamErrorBody(resp)
 				_ = resp.Body.Close()
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 					ProxyID:            opsUpstreamProxyID(account),
 					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
@@ -753,7 +765,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
 			s.handleRetryExhaustedSideEffects(ctx, resp, account, reqModel)
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
@@ -790,7 +802,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
 		s.handleFailoverSideEffects(ctx, resp, account, rateLimitModelAliases(reqModel, parsed.OriginalModel)...)
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
@@ -834,7 +846,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					}
 					upstreamDetail = truncateString(string(respBody), maxBytes)
 				}
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				appendOpsUpstreamResponseError(c, respBody, OpsUpstreamErrorEvent{
 					ProxyID:            opsUpstreamProxyID(account),
 					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
@@ -1113,7 +1125,7 @@ func (s *GatewayService) sseStreamErrorEventFailover(ctx context.Context, c *gin
 		upstreamDetail = truncateString(rawData, maxBytes)
 	}
 
-	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+	appendOpsUpstreamResponseError(c, body, OpsUpstreamErrorEvent{
 		ProxyID:            opsUpstreamProxyID(account),
 		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,

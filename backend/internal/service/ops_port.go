@@ -49,6 +49,11 @@ type OpsRepository interface {
 	CreateAlertEvent(ctx context.Context, event *OpsAlertEvent) (*OpsAlertEvent, error)
 	UpdateAlertEventStatus(ctx context.Context, eventID int64, status string, resolvedAt *time.Time) error
 	UpdateAlertEventEmailSent(ctx context.Context, eventID int64, emailSent bool) error
+	GetAlertRuleByID(ctx context.Context, id int64) (*OpsAlertRule, error)
+	CountAccountUpstreamErrors(ctx context.Context, filter OpsAccountUpstreamErrorFilter) (OpsAccountUpstreamErrorMatch, error)
+	ClaimAlertDelivery(ctx context.Context, now time.Time, token string, lease time.Duration) (*OpsAlertDelivery, error)
+	StartAlertDelivery(ctx context.Context, delivery *OpsAlertDelivery, now time.Time) (bool, error)
+	FinishAlertDelivery(ctx context.Context, delivery *OpsAlertDelivery, outcome OpsAlertDeliveryOutcome) (bool, error)
 
 	// Alert silences
 	CreateAlertSilence(ctx context.Context, input *OpsAlertSilence) (*OpsAlertSilence, error)
@@ -104,6 +109,7 @@ type OpsInsertErrorLogInput struct {
 	UpstreamStatusCode   *int
 	UpstreamErrorMessage *string
 	UpstreamErrorDetail  *string
+	ProviderErrorCode    string
 	// UpstreamErrors captures all upstream error attempts observed during handling this request.
 	// It is populated during request processing (gin context) and sanitized+serialized by OpsService.
 	UpstreamErrors []*OpsUpstreamErrorEvent

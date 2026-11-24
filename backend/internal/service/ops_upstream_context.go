@@ -447,6 +447,7 @@ type OpsUpstreamErrorEvent struct {
 	// Outcome
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
 	UpstreamRequestID  string `json:"upstream_request_id,omitempty"`
+	ProviderCode       string `json:"provider_code,omitempty"`
 
 	// UpstreamURL is the actual upstream URL that was called (host + path, query/fragment stripped).
 	// Helps debug 404/routing errors by showing which endpoint was targeted.
@@ -470,7 +471,16 @@ type OpsUpstreamErrorEvent struct {
 	// from persisted attempt JSON. The logger consults it only when this event is
 	// the final client-visible failure; recovered attempts remain provider-health
 	// telemetry and do not count as failed requests.
-	SkipMonitoring bool `json:"-"`
+	SkipMonitoring           bool `json:"-"`
+	protectedUpstreamBalance bool
+}
+
+const OpsUpstreamProviderCodeKey = "ops_upstream_provider_code"
+
+func setOpsUpstreamProviderCode(c *gin.Context, platform string, status int, body []byte) {
+	if c != nil {
+		c.Set(OpsUpstreamProviderCodeKey, ClassifyUpstreamBalanceError(platform, status, body).ProviderCode)
+	}
 }
 
 const (
@@ -480,6 +490,13 @@ const (
 	// proxies.name column is NOT NULL/non-empty, so this is a defensive value.
 	opsProxyNameUnnamed = "proxy"
 )
+
+// appendOpsUpstreamResponseError extracts a provider code from the very same
+// attempt before diagnostic-body truncation or logging policy can discard it.
+func appendOpsUpstreamResponseError(c *gin.Context, body []byte, ev OpsUpstreamErrorEvent) {
+	ev.ProviderCode = ClassifyUpstreamBalanceError(ev.Platform, ev.UpstreamStatusCode, body).ProviderCode
+	appendOpsUpstreamError(c, ev)
+}
 
 func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	if c == nil {
@@ -492,6 +509,9 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	normalizeOpsUpstreamProxyAttribution(&ev)
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
 	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
+	if !IsValidProviderErrorCode(ev.ProviderCode) {
+		ev.ProviderCode = ClassifyUpstreamBalanceError(ev.Platform, ev.UpstreamStatusCode, []byte(ev.UpstreamResponseBody)).ProviderCode
+	}
 	ev.Kind = strings.TrimSpace(ev.Kind)
 	ev.Stage = strings.TrimSpace(ev.Stage)
 	ev.Scope = strings.TrimSpace(ev.Scope)
@@ -514,7 +534,9 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	existing = append(existing, &evCopy)
 	c.Set(OpsUpstreamErrorsKey, existing)
 
-	checkSkipMonitoringForUpstreamEvent(c, &evCopy)
+	if !evCopy.protectedUpstreamBalance {
+		checkSkipMonitoringForUpstreamEvent(c, &evCopy)
+	}
 }
 
 // opsUpstreamProxyAttribution derives both attribution fields from one

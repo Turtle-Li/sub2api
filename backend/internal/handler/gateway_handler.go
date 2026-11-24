@@ -351,6 +351,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		c.Request = c.Request.WithContext(h.gatewayService.WithSingleAntigravityAccountGroupProbe(c.Request.Context(), apiKey.GroupID))
 
 		for {
+			if fs.balanceFailedAccount(sessionBoundAccountID) {
+				c.Request = c.Request.WithContext(service.WithDeferredBalanceStickyMutation(c.Request.Context(), apiKey.GroupID, sessionKey))
+			}
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
 				if failoverClientGone(c) {
@@ -572,6 +575,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				return
 			}
 
+			h.rebindStickyAfterBalanceFailure(c, fs, apiKey.GroupID, sessionKey, sessionBoundAccountID, account)
 			// RPM 计数递增（Forward 成功后）
 			// 注意：TOCTOU 竞态是已知且可接受的设计权衡，与 WindowCost 一致的 soft-limit 模式。
 			// 在高并发下可能短暂超出 RPM 限制，但不会导致请求失败。
@@ -689,6 +693,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				zap.Bool("has_bound_session", hasBoundSession),
 				zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
 			)
+			if fs.balanceFailedAccount(sessionBoundAccountID) {
+				c.Request = c.Request.WithContext(service.WithDeferredBalanceStickyMutation(c.Request.Context(), currentAPIKey.GroupID, sessionKey))
+			}
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
 				if failoverClientGone(c) {
@@ -1141,7 +1148,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// - 选中账号与粘性账号一致：刷新 TTL
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
-			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID) {
+			if fs.balanceFailedAccount(sessionBoundAccountID) {
+				h.rebindStickyAfterBalanceFailure(c, fs, currentAPIKey.GroupID, sessionKey, sessionBoundAccountID, account)
+			} else if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID) {
 				// Forward has completed; finish the bounded write even if the client disconnects.
 				bindCtx, cancelBind := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
 				bindErr := h.gatewayService.BindStickySession(bindCtx, currentAPIKey.GroupID, sessionKey, account.ID)
@@ -2078,6 +2087,15 @@ func (h *GatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotT
 }
 
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {
+	if writeHiddenUpstreamBalance(c, failoverErr, platform, streamStarted, func(stream bool) {
+		if stream {
+			writeNeutralAnthropicSSE(c)
+			return
+		}
+		h.errorResponse(c, http.StatusBadGateway, "upstream_error", service.UpstreamBalanceClientMessage)
+	}) {
+		return
+	}
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
 	if service.IsOpenAISilentRefusalErrorBody(responseBody) {
@@ -2387,26 +2405,66 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	}
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
-	// 选择支持该模型的账号
-	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
-	if err != nil {
-		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
-		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+	requestCtx := c.Request.Context()
+	bound, _ := h.gatewayService.GetCachedSessionAccountID(requestCtx, apiKey.GroupID, sessionHash)
+	fs := NewFailoverState(h.maxAccountSwitches, bound > 0)
+	for {
+		if fs.balanceFailedAccount(bound) {
+			requestCtx = service.WithDeferredBalanceStickyMutation(requestCtx, apiKey.GroupID, sessionHash)
 		}
-		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+		account, err := h.gatewayService.SelectAccountForModelWithExclusions(requestCtx, apiKey.GroupID, sessionHash, parsedReq.Model, fs.FailedAccountIDs)
+		if err != nil {
+			if fs.LastFailoverErr != nil {
+				h.handleFailoverExhausted(c, fs.LastFailoverErr, service.PlatformAnthropic, false)
+				return
+			}
+			reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
+			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+			}
+			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+			return
+		}
+		setOpsSelectedAccount(c, account.ID, account.Platform)
+
+		// 转发请求（不记录使用量）
+		if err := h.gatewayService.ForwardCountTokens(requestCtx, c, account, parsedReq); err != nil {
+			reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			// 上游未服务该会话，立即释放选号时注册的会话槽（客户端可能已断开，用独立 ctx）
+			h.gatewayService.ReleaseAccountSession(context.Background(), account, sessionHash)
+			var failure *service.UpstreamFailoverError
+			if errors.As(err, &failure) && failure.MustHideUpstreamBalance(account.Platform) {
+				switch fs.HandleFailoverError(requestCtx, h.gatewayService, account.ID, account.Platform, 0, failure) {
+				case FailoverContinue:
+					continue
+				case FailoverExhausted:
+					h.handleFailoverExhausted(c, failure, account.Platform, false)
+				case FailoverCanceled:
+					failoverClientGone(c)
+				}
+			}
+			return
+		}
+		if c.Writer.Status() < http.StatusBadRequest {
+			h.rebindStickyAfterBalanceFailure(c, fs, apiKey.GroupID, sessionHash, bound, account)
+		}
 		return
 	}
-	setOpsSelectedAccount(c, account.ID, account.Platform)
+}
 
-	// 转发请求（不记录使用量）
-	if err := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, parsedReq); err != nil {
-		reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-		// 错误响应已在 ForwardCountTokens 中处理
-		// 上游未服务该会话，立即释放选号时注册的会话槽（客户端可能已断开，用独立 ctx）
-		h.gatewayService.ReleaseAccountSession(context.Background(), account, sessionHash)
+func (h *GatewayHandler) rebindStickyAfterBalanceFailure(c *gin.Context, fs *FailoverState, groupID *int64, sessionHash string, boundID int64, account *service.Account) {
+	if !fs.balanceFailedAccount(boundID) {
 		return
+	}
+	nextID := account.ID
+	if account.IsPaidFallback() {
+		nextID = 0 // Clear only the failed ordinary affinity, never bind a reserve to it.
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+	defer cancel()
+	if err := h.gatewayService.ReplaceFailedStickySession(ctx, groupID, sessionHash, boundID, nextID); err != nil {
+		logger.FromContext(ctx).Warn("gateway.replace_balance_failed_sticky_session", zap.Int64("account_id", account.ID), zap.Error(err))
 	}
 }
 

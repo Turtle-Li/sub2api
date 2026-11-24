@@ -429,6 +429,15 @@ func (h *GatewayHandler) chatCompletionsErrorResponse(c *gin.Context, status int
 
 // handleCCFailoverExhausted writes a failover-exhausted error in CC format.
 func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
+	if writeHiddenUpstreamBalance(c, lastErr, service.PlatformAnthropic, streamStarted, func(stream bool) {
+		if stream {
+			writeNeutralOpenAIChatSSE(c)
+		} else {
+			h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "upstream_error", service.UpstreamBalanceClientMessage)
+		}
+	}) {
+		return
+	}
 	if streamStarted {
 		return
 	}

@@ -772,6 +772,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
+				if cachedContentBinding != nil && failoverErr.MustHideUpstreamBalance(account.Platform) {
+					h.handleGeminiFailoverExhausted(c, failoverErr)
+					return
+				}
 				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
 				switch failoverAction {
 				case FailoverContinue:
@@ -880,6 +884,21 @@ func parseGeminiModelAction(rest string) (model string, action string, err error
 }
 
 func (h *GatewayHandler) handleGeminiFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+	if writeHiddenUpstreamBalance(c, failoverErr, service.PlatformGemini, false, func(stream bool) {
+		if stream {
+			if flusher, ok := c.Writer.(http.Flusher); ok {
+				_, err := c.Writer.WriteString(`data: {"error":{"code":502,"message":"` + service.UpstreamBalanceClientMessage + `","status":"UNAVAILABLE"}}` + "\n\n")
+				if err != nil {
+					_ = c.Error(err)
+				}
+				flusher.Flush()
+			}
+		} else {
+			googleErrorWithType(c, http.StatusBadGateway, "upstream_error", "", service.UpstreamBalanceClientMessage)
+		}
+	}) {
+		return
+	}
 	if failoverErr == nil {
 		googleError(c, http.StatusBadGateway, "Upstream request failed")
 		return

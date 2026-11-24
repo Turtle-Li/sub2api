@@ -433,6 +433,15 @@ func (h *GatewayHandler) responsesErrorResponse(c *gin.Context, status int, code
 
 // handleResponsesFailoverExhausted writes a failover-exhausted error in Responses format.
 func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
+	if writeHiddenUpstreamBalance(c, lastErr, service.PlatformAnthropic, streamStarted, func(stream bool) {
+		if stream {
+			writeResponsesFailedSSE(c, "upstream_error", "", service.UpstreamBalanceClientMessage)
+		} else {
+			h.responsesErrorResponse(c, http.StatusBadGateway, "upstream_error", service.UpstreamBalanceClientMessage)
+		}
+	}) {
+		return
+	}
 	if lastErr != nil {
 		copyFailoverRetryAfter(c, lastErr.ResponseHeaders)
 	}
