@@ -429,6 +429,7 @@ type CreateAccountInput struct {
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
 	ProbeEnabled       *bool
+	GroupSyncEnabled   *bool
 	// PoolID optionally places the new account into an account pool (display-only grouping).
 	PoolID *int64
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
@@ -464,6 +465,7 @@ type UpdateAccountInput struct {
 	ExpiresAt             *int64
 	AutoPauseOnExpired    *bool
 	ProbeEnabled          *bool
+	GroupSyncEnabled      *bool
 	RateSyncEnabled       *bool
 	SkipMixedChannelCheck bool // 跳过混合渠道检查（用户已确认风险）
 }

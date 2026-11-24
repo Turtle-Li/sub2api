@@ -54,7 +54,7 @@ func (s *AccountTestService) runCodexDegradationProbe(ctx context.Context, accou
 	}
 	setOpenAIChatGPTAccountHeaders(req.Header, account)
 	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
-	account.ApplyHeaderOverrides(req.Header)
+	account.ApplyHeaderOverrides(req.Context(), req.Header)
 	// 网关同样在账号级覆写之后注入，保证票据与 Cookie 不被覆盖。
 	if !applyPinnedCodexTurnState(req.Header, account, upstreamModel) {
 		return nil, errCodexDegradationProbeNoPinnedState

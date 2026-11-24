@@ -836,7 +836,7 @@ func (s *ClineUpstreamService) chatCompletion(ctx context.Context, account *Acco
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(account.GetCNAPIKey()))
-	account.ApplyHeaderOverrides(req.Header)
+	account.ApplyHeaderOverrides(req.Context(), req.Header)
 	return s.doUpstream(req, account)
 }
 
@@ -855,7 +855,7 @@ func (s *ClineUpstreamService) accountGetModels(ctx context.Context, account *Ac
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(account.GetCNAPIKey()))
-	account.ApplyHeaderOverrides(req.Header)
+	account.ApplyHeaderOverrides(req.Context(), req.Header)
 	return s.doUpstream(req, account)
 }
 
