@@ -107,13 +107,19 @@ func ApplyOpenAIServiceTierBillingResolution(account *Account, result *OpenAIFor
 	return resolution
 }
 
-// ApplyForwardServiceTierBillingResolution is the ForwardResult counterpart of
-// ApplyOpenAIServiceTierBillingResolution.
+// ApplyForwardServiceTierBillingResolution settles a ForwardResult without an
+// account-specific response-tier contract.
 func ApplyForwardServiceTierBillingResolution(result *ForwardResult) ServiceTierBillingResolution {
+	return ApplyForwardAccountServiceTierBillingResolution(nil, result)
+}
+
+// ApplyForwardAccountServiceTierBillingResolution applies the same credential
+// policy as the OpenAI-specific usage path; other platforms use ordinary rules.
+func ApplyForwardAccountServiceTierBillingResolution(account *Account, result *ForwardResult) ServiceTierBillingResolution {
 	if result == nil {
 		return ServiceTierBillingResolution{}
 	}
-	resolution := ResolveBillingServiceTier(optionalStringValue(result.ServiceTier), result.UpstreamResponseServiceTier)
+	resolution := ResolveOpenAIServiceTierBilling(account, optionalStringValue(result.ServiceTier), result.UpstreamResponseServiceTier)
 	if resolution.Downgraded {
 		billing := resolution.Billing
 		result.ServiceTier = &billing

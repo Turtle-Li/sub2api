@@ -72,6 +72,8 @@ type OpsAlertEvent struct {
 
 	// A non-nil plan (including an empty one) marks a tracked, new event.
 	DeliveryPlan []OpsAlertDeliveryTarget `json:"-"`
+	// CreateAlertEvent resolves this active event in the same transaction as creating its replacement.
+	SupersedesEventID int64 `json:"-"`
 }
 
 const (

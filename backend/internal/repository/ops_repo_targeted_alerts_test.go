@@ -32,6 +32,28 @@ func TestOpsAlertOutboxRollsBackWhenQueueInsertFails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestOpsAlertEscalationRollsBackWhenQueueInsertFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	now := time.Now().UTC()
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE ops_alert_events SET status = 'resolved', resolved_at = \$3 WHERE id = \$1 AND rule_id = \$2 AND status = 'firing'`).
+		WithArgs(int64(1), int64(7), now).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`INSERT INTO ops_alert_events`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
+	failure := errors.New("fault while writing escalation delivery")
+	mock.ExpectExec(`INSERT INTO ops_alert_deliveries`).WithArgs(int64(2), "feishu", "payment_feishu").WillReturnError(failure)
+	mock.ExpectRollback()
+	repo := &opsRepository{db: db}
+	created, err := repo.CreateAlertEvent(context.Background(), &service.OpsAlertEvent{
+		RuleID: 7, Status: service.OpsAlertStatusFiring, FiredAt: now, SupersedesEventID: 1,
+		DeliveryPlan: []service.OpsAlertDeliveryTarget{{Channel: "feishu", Target: "payment_feishu"}},
+	})
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, created)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestOpsTargetedUpstreamQueryScansOneResultAndEscapesPattern(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

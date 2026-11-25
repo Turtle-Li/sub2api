@@ -120,6 +120,11 @@ func opsAlertDimensionInt(value any) int64 {
 		return v
 	case int:
 		return int64(v)
+	case float64:
+		if v >= -0x1p63 && v < 0x1p63 && float64(int64(v)) == v {
+			return int64(v)
+		}
+		return 0
 	default:
 		return 0
 	}

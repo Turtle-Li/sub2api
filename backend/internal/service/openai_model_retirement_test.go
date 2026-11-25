@@ -42,6 +42,28 @@ func TestGPT55RetirementModelSupport(t *testing.T) {
 	require.False(t, isRetiredOpenAISubscriptionModel(account, "gpt-5.50"))
 }
 
+func TestGPT55RetirementCodexOAuthRelay(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.5"}}}
+	for _, tc := range []struct {
+		name, wantFallback string
+		relay              bool
+	}{
+		{name: "opted-in relay", relay: true},
+		{name: "ordinary API key", wantFallback: "gpt-5.5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Extra: map[string]any{"openai_codex_oauth_relay": tc.relay}}
+			for _, model := range []string{"gpt-5.5", "gpt-5.5-2026-04-23", "gpt-5.5-openai-compact"} {
+				require.Equal(t, tc.relay, isRetiredOpenAISubscriptionModel(account, model), model)
+				require.Equal(t, !tc.relay, account.IsModelSupported(model), model)
+			}
+			require.True(t, account.IsModelSupported("gpt-6.1-sol"))
+			require.Equal(t, tc.wantFallback, svc.resolveOpenAICompactFallbackModel(account, "gpt-6.1-sol"))
+		})
+	}
+}
+
 func TestGPT55RetirementCatalogs(t *testing.T) {
 	oauth := Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	api := Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}

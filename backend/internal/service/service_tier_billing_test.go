@@ -39,6 +39,31 @@ func TestResolveBillingServiceTier(t *testing.T) {
 	}
 }
 
+func TestApplyForwardAccountServiceTierBillingResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantTier, wantReason string
+		account                    Account
+	}{
+		{name: "Codex OAuth", account: Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			wantTier: "priority", wantReason: "codex_oauth_default_echo"},
+		{name: "Codex OAuth relay", account: Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_codex_oauth_relay": true}},
+			wantTier: "priority", wantReason: "codex_oauth_relay_default_echo"},
+		{name: "ordinary OpenAI key", account: Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, wantTier: "default"},
+		{name: "Anthropic OAuth", account: Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, wantTier: "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			priority := "priority"
+			result := &ForwardResult{ServiceTier: &priority, UpstreamResponseServiceTier: "default"}
+			resolution := ApplyForwardAccountServiceTierBillingResolution(&tc.account, result)
+			require.Equal(t, tc.wantTier, resolution.Billing)
+			require.Equal(t, tc.wantTier == "default", resolution.Downgraded)
+			require.Equal(t, tc.wantReason, resolution.PolicyReason)
+			require.Equal(t, tc.wantTier, *result.ServiceTier)
+			require.Equal(t, "default", result.UpstreamResponseServiceTier)
+		})
+	}
+}
+
 func TestApplyServiceTierBillingResolutionOnlyRewritesDowngrades(t *testing.T) {
 	t.Run("codex exception only covers OpenAI default", func(t *testing.T) {
 		require.True(t, codexOAuthResponseTierIsNonAuthoritative("default"))

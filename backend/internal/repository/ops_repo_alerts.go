@@ -331,6 +331,21 @@ func (r *opsRepository) CreateAlertEvent(ctx context.Context, event *service.Ops
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if event.SupersedesEventID > 0 {
+		update, err := tx.ExecContext(ctx, `
+UPDATE ops_alert_events SET status = 'resolved', resolved_at = $3
+WHERE id = $1 AND rule_id = $2 AND status = 'firing'`, event.SupersedesEventID, event.RuleID, event.FiredAt)
+		if err != nil {
+			return nil, fmt.Errorf("resolve superseded alert event: %w", err)
+		}
+		updated, err := update.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if updated != 1 {
+			return nil, fmt.Errorf("superseded alert event %d is no longer firing for rule %d", event.SupersedesEventID, event.RuleID)
+		}
+	}
 	var id int64
 	err = tx.QueryRowContext(ctx, `
 INSERT INTO ops_alert_events (rule_id, severity, status, title, description,

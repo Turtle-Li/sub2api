@@ -3,14 +3,18 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
 
 type opsAlertMetricResult struct {
-	value     float64
-	available bool
-	match     *OpsAccountUpstreamErrorMatch
+	value                float64
+	available            bool
+	match                *OpsAccountUpstreamErrorMatch
+	accountErrorIDs      []int64
+	accountErrorNames    map[int64]string
+	latestErrorAccountID int64
 }
 
 func (m opsAlertMetricResult) eventPlatform(scopePlatform string) string {
@@ -22,7 +26,7 @@ func (m opsAlertMetricResult) eventPlatform(scopePlatform string) string {
 
 func (m opsAlertMetricResult) dimensions(platform string, groupID *int64, region *string) map[string]any {
 	dimensions := buildOpsAlertDimensions(m.eventPlatform(platform), groupID)
-	if dimensions == nil && (region != nil || m.match != nil) {
+	if dimensions == nil && (region != nil || m.match != nil || m.accountErrorIDs != nil) {
 		dimensions = make(map[string]any)
 	}
 	if region != nil {
@@ -38,7 +42,55 @@ func (m opsAlertMetricResult) dimensions(platform string, groupID *int64, region
 		}
 		dimensions["matched_account_ids"] = m.match.MatchedAccountIDs
 	}
+	if m.accountErrorIDs != nil {
+		dimensions["matched_account_ids"] = m.accountErrorIDs
+		if id := m.latestErrorAccountID; id > 0 {
+			dimensions["latest_account_id"] = id
+			dimensions["latest_account_name"] = m.accountErrorNames[id]
+		}
+	}
 	return dimensions
+}
+
+// accountErrorEscalation identifies the newest addition to a still-breached rule.
+// Legacy count events have no account identities to compare, so only a higher
+// count proves an addition. In that case use the highest currently matching ID.
+func (m opsAlertMetricResult) accountErrorEscalation(metric string, active *OpsAlertEvent) (int64, bool) {
+	if len(m.accountErrorIDs) == 0 {
+		return 0, false
+	}
+	previous, ok := active.Dimensions["matched_account_ids"]
+	if !ok {
+		return m.latestErrorAccountID, metric == "account_error_count" && active.MetricValue != nil && m.value > *active.MetricValue
+	}
+	seen := make(map[int64]struct{})
+	switch ids := previous.(type) {
+	case []int64:
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+	case []int:
+		for _, id := range ids {
+			seen[int64(id)] = struct{}{}
+		}
+	case []any:
+		for _, value := range ids {
+			id := opsAlertDimensionInt(value)
+			if id <= 0 {
+				return 0, false
+			}
+			seen[id] = struct{}{}
+		}
+	default:
+		return 0, false
+	}
+	for i := len(m.accountErrorIDs) - 1; i >= 0; i-- {
+		id := m.accountErrorIDs[i]
+		if _, matched := seen[id]; !matched {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 func opsAlertRequiresSystemMetrics(metric string) bool {
@@ -97,10 +149,31 @@ func computeScopedAccountStatusMetric(metric string, accounts map[int64]*Account
 		}
 		accounts = selected
 	}
+	if metric == "account_error_count" || metric == "account_error_ratio" {
+		result := opsAlertMetricResult{available: true, accountErrorIDs: []int64{}, accountErrorNames: make(map[int64]string)}
+		total := 0
+		for id, account := range accounts {
+			if account == nil {
+				continue
+			}
+			total++
+			if account.HasError && account.TempUnschedulableUntil == nil {
+				result.accountErrorIDs = append(result.accountErrorIDs, id)
+				result.accountErrorNames[id] = account.AccountName
+			}
+		}
+		slices.Sort(result.accountErrorIDs)
+		if n := len(result.accountErrorIDs); n > 0 {
+			result.latestErrorAccountID = result.accountErrorIDs[n-1]
+		}
+		result.value = float64(len(result.accountErrorIDs))
+		if metric == "account_error_ratio" && total > 0 {
+			result.value = result.value * 100 / float64(total)
+		}
+		return result
+	}
 	count := countAccountsByCondition(accounts, func(account *AccountAvailability) bool {
 		switch metric {
-		case "account_error_count", "account_error_ratio":
-			return account.HasError && account.TempUnschedulableUntil == nil
 		case "account_rate_limited_count":
 			return account.IsRateLimited
 		case "account_temp_unscheduled_count":
@@ -111,11 +184,5 @@ func computeScopedAccountStatusMetric(metric string, accounts map[int64]*Account
 			return false
 		}
 	})
-	value := float64(count)
-	if metric == "account_error_ratio" {
-		if total := countAccountsByCondition(accounts, func(*AccountAvailability) bool { return true }); total > 0 {
-			value = value * 100 / float64(total)
-		}
-	}
-	return opsAlertMetricResult{value: value, available: true}
+	return opsAlertMetricResult{value: float64(count), available: true}
 }

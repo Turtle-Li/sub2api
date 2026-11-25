@@ -7,10 +7,11 @@ is unaffected. See the [official migration notice](https://learn.chatgpt.com/doc
 Sub2API applies this distinction to the upstream account, not the key used by
 clients to authenticate to Sub2API:
 
-- OpenAI OAuth and SetupToken accounts, including credential shadows, cannot
+- OpenAI OAuth and SetupToken accounts, credential shadows, and OpenAI API-key
+  accounts explicitly marked `extra.openai_codex_oauth_relay: true` cannot
   serve GPT-5.5. Normal, sticky, and compact scheduling exclude these targets.
-- API-key accounts retain GPT-5.5 support. In mixed groups, only eligible API-key
-  upstreams can serve it. Their actual model availability remains authoritative.
+- Ordinary API-key accounts (without relay opt-in) retain GPT-5.5 support.
+  Their actual model availability remains authoritative.
 - Public model lists and Codex catalogs omit models whose targets are retired on
   the group's ChatGPT accounts and have no supporting API-key account. This also
   filters stale/pinned catalog entries before calculating the client ETag.
@@ -30,11 +31,13 @@ that select GPT-5.5. OpenAI recommends GPT-6.1 Sol for eligible paid plans or
 GPT-6 Luna for Free/Go in the desktop app, subject to model availability. Check
 availability on the upstream account before selecting a replacement.
 
-The global `gateway.openai_compact_model` setting remains compatible with API-key
-upstreams. If that fallback resolves to retired GPT-5.5 on a ChatGPT account, it
-is not applied; compact requests keep their selected model. A compact-only
-account mapping targeting retired GPT-5.5 is ineligible for scheduling: update
-that explicit mapping. No stored settings are automatically rewritten.
+The global `gateway.openai_compact_model` setting defaults to an empty string,
+so it does not override the selected model. Explicit fallbacks and account-level
+`compact_model_mapping` remain supported. An explicit fallback to retired GPT-5.5
+is ignored on ChatGPT-backed accounts, including opted-in Codex OAuth relays.
+A compact-only account mapping targeting retired GPT-5.5 is ineligible for
+scheduling on these accounts: update that mapping. No stored settings are
+automatically rewritten.
 
 Changing the public registry, deleting GPT-5.5 pricing/history, or globally
 mapping GPT-5.5 to a new model is unnecessary and would affect valid API usage.

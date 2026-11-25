@@ -767,6 +767,37 @@ func newGatewayRecordUsageServiceWithResolverForTest(usageRepo UsageLogRepositor
 	return svc, &APIKey{ID: 1, GroupID: &groupID, Group: &Group{ID: groupID, RateMultiplier: 1.0}}
 }
 
+func TestGatewayServiceRecordUsage_OpenAIChatGPTDefaultEchoRetainsPriority(t *testing.T) {
+	parentID := int64(2)
+	for _, tc := range []struct {
+		name     string
+		account  Account
+		wantTier string
+	}{
+		{name: "OAuth", account: Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, wantTier: "priority"},
+		{name: "OAuth shadow", account: Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, ParentAccountID: &parentID}, wantTier: "priority"},
+		{name: "OAuth relay", account: Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Extra: map[string]any{"openai_codex_oauth_relay": true}}, wantTier: "priority"},
+		{name: "ordinary OpenAI key", account: Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, wantTier: "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usageRepo := &openAIRecordUsageBestEffortLogRepoStub{}
+			svc, apiKey := newGatewayRecordUsageServiceWithResolverForTest(usageRepo)
+			svc.accountRepo = newStubCredRepo(&Account{ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth})
+			priority := "priority"
+			err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+				Result: &ForwardResult{RequestID: "gateway_codex_default_echo", Model: "gpt-5.4",
+					Usage: ClaudeUsage{InputTokens: 100, OutputTokens: 50}, ServiceTier: &priority, UpstreamResponseServiceTier: "default"},
+				APIKey: apiKey, User: &User{ID: 1}, Account: &tc.account,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, usageRepo.lastLog)
+			require.Equal(t, tc.account.ID, usageRepo.lastLog.AccountID)
+			require.Equal(t, tc.wantTier, optionalStringValue(usageRepo.lastLog.ServiceTier))
+		})
+	}
+}
+
 func TestGatewayServiceRecordUsage_FastSpeedDowngradedByUpstreamResponse(t *testing.T) {
 	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{}
 	svc, apiKey := newGatewayRecordUsageServiceWithResolverForTest(usageRepo)

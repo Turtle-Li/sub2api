@@ -288,8 +288,14 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		}
 
 		if breachedNow && consecutive >= required {
+			var supersedesEventID int64
 			if activeEvent != nil {
-				continue
+				accountID, escalate := metric.accountErrorEscalation(strings.TrimSpace(rule.MetricType), activeEvent)
+				if !escalate {
+					continue
+				}
+				metric.latestErrorAccountID = accountID
+				supersedesEventID = activeEvent.ID
 			}
 
 			// Scoped silencing: if a matching silence exists, skip creating a firing event.
@@ -329,6 +335,7 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 			}
 
 			firedEvent.DeliveryPlan = s.planOpsAlertDeliveries(ctx, runtimeCfg, rule, firedEvent)
+			firedEvent.SupersedesEventID = supersedesEventID
 			if !runtimegate.SharedWorkAllowed() {
 				continue
 			}
@@ -339,6 +346,9 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 			}
 
 			eventsCreated++
+			if supersedesEventID > 0 {
+				eventsResolved++
+			}
 			continue
 		}
 

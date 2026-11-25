@@ -820,8 +820,16 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	user := input.User
 	account := input.Account
 	subscription := input.Subscription
+	billingAccount := account
+	if account != nil && account.IsOpenAI() && account.IsShadow() {
+		var err error
+		billingAccount, err = resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return err
+		}
+	}
 	ApplyForwardImageBillingResolution(result)
-	logServiceTierBillingDecision("service.gateway", account, result.RequestID, ApplyForwardServiceTierBillingResolution(result))
+	logServiceTierBillingDecision("service.gateway", account, result.RequestID, ApplyForwardAccountServiceTierBillingResolution(billingAccount, result))
 
 	// 强制缓存计费：将 input_tokens 转为 cache_read_input_tokens
 	// 用于粘性会话切换时的特殊计费处理

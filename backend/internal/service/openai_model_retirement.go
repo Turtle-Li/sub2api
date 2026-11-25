@@ -10,7 +10,7 @@ import (
 // eligibility from the API key a client uses to authenticate to this gateway.
 // https://learn.chatgpt.com/docs/models#gpt-55-retirement
 func isRetiredOpenAISubscriptionModel(account *Account, upstreamModel string) bool {
-	if account == nil || !account.IsOpenAI() || (!account.IsOpenAIOAuthLike() && !account.IsShadow()) {
+	if account == nil || !account.IsOpenAI() || (!account.IsOpenAIOAuthLike() && !account.IsShadow() && !account.IsOpenAICodexOAuthRelay()) {
 		return false
 	}
 	model := canonicalizeOpenAIModelAliasSpelling(upstreamModel)
