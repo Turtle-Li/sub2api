@@ -7,8 +7,9 @@ import (
 	"errors"
 	"sort"
 	"strings"
-
-	"github.com/tidwall/gjson"
+	"unicode"
+	"unicode/utf8"
+	"unsafe"
 )
 
 var supportedImageMIMETypes = map[string]struct{}{
@@ -23,12 +24,15 @@ type dataURLImage struct {
 }
 
 type imageURLToken struct {
-	start int
-	end   int
+	start          int
+	end            int
+	inspectedBytes int
+	validated      bool
 }
 
 type imageURLRewrite struct {
 	value   string
+	webp    []byte
 	changed bool
 }
 
@@ -36,9 +40,19 @@ type jsonStringReplacement struct {
 	start int
 	end   int
 	value []byte
+	webp  []byte
 }
 
-const maxTokenPreallocation = 64
+const (
+	maxTokenPreallocation = 64
+	webpDataURLPrefix     = "data:image/webp;base64,"
+)
+
+// requestString aliases immutable request bytes only within request processing.
+// Do not retain a substring in a cache or mutate the source while it is in use.
+func requestString(body []byte) string {
+	return unsafe.String(unsafe.SliceData(body), len(body))
+}
 
 // collectImageDataURLTokens returns at most limit known Responses-style image
 // fields whose decoded value is a data:image URL. It stops after finding one
@@ -50,109 +64,12 @@ const maxTokenPreallocation = 64
 // unrelated number lexemes and formatting remain untouched for the later
 // splice. The returned tokens are safe to process concurrently before calling
 // rewriteImageURLTokens.
-func collectImageDataURLTokens(body []byte, limit int) (tokens []imageURLToken, truncated bool, err error) {
+func collectImageDataURLTokens(body []byte, limit int) ([]imageURLToken, bool, error) {
 	if limit <= 0 {
 		return nil, false, errors.New("attachment gateway: image URL token limit must be positive")
 	}
-	if !json.Valid(body) {
-		return nil, false, errors.New("attachment gateway: invalid JSON body")
-	}
-
-	root := gjson.ParseBytes(body)
-	initialCapacity := min(limit, maxTokenPreallocation)
-	tokens = make([]imageURLToken, 0, initialCapacity)
-	seen := make(map[[2]int]struct{}, initialCapacity)
-	var visitErr error
-
-	visitString := func(value gjson.Result) bool {
-		if value.Type != gjson.String {
-			return true
-		}
-		start := value.Index
-		end := start + len(value.Raw)
-		if start < 0 || end > len(body) || end <= start || !bytes.Equal(body[start:end], []byte(value.Raw)) {
-			visitErr = errors.New("attachment gateway: invalid JSON string location")
-			return false
-		}
-		key := [2]int{start, end}
-		if _, exists := seen[key]; exists {
-			return true
-		}
-		rawURL, valueErr := imageURLTokenValue(body, imageURLToken{start: start, end: end})
-		if valueErr != nil {
-			visitErr = valueErr
-			return false
-		}
-		if !isImageDataURL(rawURL) {
-			return true
-		}
-		if len(tokens) >= limit {
-			truncated = true
-			return false
-		}
-		seen[key] = struct{}{}
-		tokens = append(tokens, imageURLToken{start: start, end: end})
-		return true
-	}
-
-	var walk func(gjson.Result) bool
-	walk = func(value gjson.Result) bool {
-		if value.IsArray() {
-			continueWalk := true
-			value.ForEach(func(_, child gjson.Result) bool {
-				continueWalk = walk(child)
-				return continueWalk
-			})
-			return continueWalk
-		}
-		if !value.IsObject() {
-			return true
-		}
-
-		var partType string
-		var imageURL gjson.Result
-		value.ForEach(func(key, child gjson.Result) bool {
-			switch key.String() {
-			case "type":
-				if child.Type == gjson.String {
-					partType = strings.TrimSpace(child.String())
-				}
-			case "image_url":
-				imageURL = child
-			}
-			return true
-		})
-
-		switch partType {
-		case "input_image":
-			if !visitString(imageURL) {
-				return false
-			}
-		case "image_url":
-			if imageURL.Type == gjson.String {
-				if !visitString(imageURL) {
-					return false
-				}
-			} else if imageURL.IsObject() {
-				if !visitString(imageURL.Get("url")) {
-					return false
-				}
-			}
-		}
-		continueWalk := true
-		value.ForEach(func(_, child gjson.Result) bool {
-			if child.IsArray() || child.IsObject() {
-				continueWalk = walk(child)
-			}
-			return continueWalk
-		})
-		return continueWalk
-	}
-	walk(root)
-	if visitErr != nil {
-		return nil, false, visitErr
-	}
-	return tokens, truncated, nil
+	discovery, err := discoverAttachments(body, limit, false)
+	return discovery.tokens, discovery.truncated, err
 }
 
 // rewriteImageURLTokens applies replacements collected from
@@ -167,8 +84,17 @@ func rewriteImageURLTokens(body []byte, tokens []imageURLToken, rewritten []imag
 		if !rewritten[index].changed {
 			continue
 		}
-		if _, err := imageURLTokenValue(body, token); err != nil {
-			return body, false, err
+		if !imageURLTokenInBounds(body, token) {
+			return body, false, errors.New("attachment gateway: invalid JSON string location")
+		}
+		if !token.validated {
+			if _, err := imageURLTokenValue(body, token); err != nil {
+				return body, false, err
+			}
+		}
+		if rewritten[index].webp != nil {
+			replacements = append(replacements, jsonStringReplacement{start: token.start, end: token.end, webp: rewritten[index].webp})
+			continue
 		}
 		encoded, err := json.Marshal(rewritten[index].value)
 		if err != nil {
@@ -185,7 +111,11 @@ func rewriteImageURLTokens(body []byte, tokens []imageURLToken, rewritten []imag
 	})
 	outputSize := len(body)
 	for _, replacement := range replacements {
-		outputSize += len(replacement.value) - (replacement.end - replacement.start)
+		replacementSize := len(replacement.value)
+		if replacement.webp != nil {
+			replacementSize = webpJSONSize(len(replacement.webp))
+		}
+		outputSize += replacementSize - (replacement.end - replacement.start)
 	}
 	output := make([]byte, 0, outputSize)
 	cursor := 0
@@ -194,16 +124,47 @@ func rewriteImageURLTokens(body []byte, tokens []imageURLToken, rewritten []imag
 			return body, false, errors.New("attachment gateway: overlapping JSON replacements")
 		}
 		output = append(output, body[cursor:replacement.start]...)
-		output = append(output, replacement.value...)
+		if replacement.webp != nil {
+			output = append(output, '"')
+			output = append(output, webpDataURLPrefix...)
+			output = base64.StdEncoding.AppendEncode(output, replacement.webp)
+			output = append(output, '"')
+		} else {
+			output = append(output, replacement.value...)
+		}
 		cursor = replacement.end
 	}
 	output = append(output, body[cursor:]...)
 	return output, true, nil
 }
 
+func webpJSONSize(size int) int {
+	return 2 + len(webpDataURLPrefix) + base64.StdEncoding.EncodedLen(size)
+}
+
+func imageURLTokenInBounds(body []byte, token imageURLToken) bool {
+	return token.start >= 0 && token.end <= len(body) && token.end >= token.start && token.end-token.start >= 2 &&
+		body[token.start] == '"' && body[token.end-1] == '"'
+}
+
+const jsonStringSpecialBytes = "\\\"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f"
+
+// Discovered tokens already passed whole-document JSON validation. An
+// unescaped UTF-8 string needs neither unquoting nor a copy. Unmarshal still
+// handles escapes, invalid UTF-8, and unvalidated token syntax as before.
 func imageURLTokenValue(body []byte, token imageURLToken) (string, error) {
-	if token.start < 0 || token.end > len(body) || token.end <= token.start {
+	if !imageURLTokenInBounds(body, token) {
 		return "", errors.New("attachment gateway: invalid JSON string location")
+	}
+	inner := body[token.start+1 : token.end-1]
+	if ((token.validated && bytes.IndexByte(inner, '\\') < 0) ||
+		(!token.validated && !bytes.ContainsAny(inner, jsonStringSpecialBytes))) && utf8.Valid(inner) {
+		if token.validated {
+			return requestString(inner), nil
+		}
+		// Other callers (notably remote HTTP prefetch) may let the string
+		// escape request processing. Do not give them a view of the body.
+		return string(inner), nil
 	}
 	var value string
 	if err := json.Unmarshal(body[token.start:token.end], &value); err != nil {
@@ -221,17 +182,9 @@ func parseImageDataURL(raw string, maxImageBytes int) (dataURLImage, bool, error
 		return dataURLImage{}, true, errors.New("attachment gateway: malformed image data URL")
 	}
 
-	headerParts := strings.Split(header[len("data:"):], ";")
-	mimeType := strings.ToLower(strings.TrimSpace(headerParts[0]))
+	mimeType, hasBase64 := dataURLHeaderParts(header)
 	if _, ok := supportedImageMIMETypes[mimeType]; !ok {
 		return dataURLImage{MIMEType: mimeType}, true, errUnsupportedMediaType
-	}
-	hasBase64 := false
-	for _, parameter := range headerParts[1:] {
-		if strings.EqualFold(strings.TrimSpace(parameter), "base64") {
-			hasBase64 = true
-			break
-		}
 	}
 	if !hasBase64 {
 		return dataURLImage{MIMEType: mimeType}, true, errors.New("attachment gateway: image data URL is not base64 encoded")
@@ -249,11 +202,26 @@ func parseImageDataURL(raw string, maxImageBytes int) (dataURLImage, bool, error
 	if len(decoded) > maxImageBytes {
 		return dataURLImage{MIMEType: mimeType}, true, errImageTooLarge
 	}
-	return dataURLImage{MIMEType: mimeType, Bytes: decoded}, true, nil
+	// An admitted worker can outlive its request. Keep only the small MIME
+	// label, never a substring backed by the original request body.
+	return dataURLImage{MIMEType: strings.Clone(mimeType), Bytes: decoded}, true, nil
 }
 
 func isImageDataURL(raw string) bool {
-	return strings.HasPrefix(strings.ToLower(raw), "data:image/")
+	const prefix = "data:image/"
+	if len(raw) >= len(prefix) && strings.EqualFold(raw[:len(prefix)], prefix) {
+		return true
+	}
+	// Preserve the historical Unicode lowercasing of the prefix (e.g. İ)
+	// without lowercasing or scanning the payload.
+	for _, c := range prefix {
+		r, n := utf8.DecodeRuneInString(raw)
+		if unicode.ToLower(r) != c {
+			return false
+		}
+		raw = raw[n:]
+	}
+	return true
 }
 
 func removeASCIIWhitespace(value string) string {

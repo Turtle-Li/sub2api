@@ -2,6 +2,7 @@ package attachment_gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ type imageOptimizationResult struct {
 }
 
 type imageOptimizationJob struct {
+	warmKey warmCacheKey
 	index   int
 	image   dataURLImage
 	release func()
@@ -82,7 +84,11 @@ func (g *Gateway) Enabled() bool {
 
 // Optimize returns the exact input byte slice when disabled or when no image
 // can be safely and usefully optimized. Per-image failures are fail-open.
-func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
+func (g *Gateway) Optimize(ctx context.Context, body []byte) Result {
+	return g.optimize(ctx, body, nil)
+}
+
+func (g *Gateway) optimize(ctx context.Context, body []byte, plan *RewritePlan) (result Result) {
 	started := time.Now()
 	var coldEncodeCount atomic.Int64
 	var admittedColdEncodeCount atomic.Int64
@@ -104,6 +110,10 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	}()
 	defer func() {
 		if recover() != nil {
+			if plan != nil {
+				plan.images = nil
+				plan.inlineBytes = len(body)
+			}
 			result.Body = body
 			result.Metrics.OptimizedBodyBytes = len(body)
 			result.Metrics.OptimizedImageCount = 0
@@ -115,8 +125,22 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		return result
 	}
 
-	effectiveThreshold, inspectOK := g.prepareInlineAttachmentMetrics(body, &result.Metrics)
-	if !inspectOK {
+	inspect := g.config.RequestBudgetEnabled || g.config.AggregateSmallImageEnabled
+	var discovery attachmentDiscovery
+	var discoveryErr error
+	if plan == nil {
+		discovery, discoveryErr = discoverAttachments(body, g.config.MaxImagesPerRequest, inspect)
+	} else {
+		plan.discover()
+		discovery, discoveryErr = plan.discovery, plan.discoveryErr
+	}
+	inlineStats := InlineAttachmentStats{}
+	if inspect {
+		inlineStats = discovery.inline
+	}
+	effectiveThreshold := g.setInlineAttachmentMetrics(inlineStats, &result.Metrics)
+	if discoveryErr != nil {
+		result.Metrics.Errors++
 		return result
 	}
 
@@ -144,11 +168,8 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		}
 		result.Metrics.Errors++
 	}
-	tokens, truncated, rewriteErr := collectImageDataURLTokens(body, g.config.MaxImagesPerRequest)
-	if rewriteErr != nil {
-		result.Metrics.Errors++
-		return result
-	}
+	tokens := discovery.tokens[:min(len(discovery.tokens), g.config.MaxImagesPerRequest)]
+	truncated := discovery.truncated || len(tokens) < len(discovery.tokens)
 	if len(tokens) == 0 {
 		return result
 	}
@@ -170,6 +191,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 					optimization, optimizeErr := g.optimizeImageSafely(
 						ctx,
 						job.image,
+						job.warmKey,
 						reserveColdEncode,
 						func() { coldEncodeCount.Add(1) },
 						func() { cacheLookupCount.Add(1) },
@@ -190,6 +212,29 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		if err := ctx.Err(); err != nil {
 			recordContextFailure(err)
 			break
+		}
+		var warmKey warmCacheKey
+		if plan != nil {
+			warmKey = warmCacheKey{digest: sha256.Sum256(body[token.start:token.end]), enabled: true}
+			// A URL miss still takes the legacy decode and verified disk
+			// path before it may enter the object-storage publication flow.
+			if warm, hit := g.cache.warmImage(warmKey.digest); hit &&
+				plan.externalizer.hasCachedCurrentURL(warm.image.Metadata.OptimizedHash) {
+				result.Metrics.ImageCount++
+				result.Metrics.OriginalImageBytes += warm.sourceSize
+				if warm.sourceSize > g.config.MaxTotalImageBytes-totalImageBytes {
+					result.Metrics.SkippedTotalImageBytes++
+					continue
+				}
+				totalImageBytes += warm.sourceSize
+				if warm.sourceSize < effectiveThreshold {
+					result.Metrics.SkippedBelowThreshold++
+					continue
+				}
+				cacheLookupCount.Add(1)
+				outcomes <- imageOptimizationOutcome{index: index, optimization: imageOptimizationResult{Image: warm.image, CacheHit: true}}
+				continue
+			}
 		}
 		rawURL, tokenErr := imageURLTokenValue(body, token)
 		if tokenErr != nil {
@@ -225,7 +270,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		}
 
 		select {
-		case jobs <- imageOptimizationJob{index: index, image: parsed, release: release}:
+		case jobs <- imageOptimizationJob{index: index, image: parsed, release: release, warmKey: warmKey}:
 		case <-ctx.Done():
 			recordContextFailure(ctx.Err())
 			release()
@@ -239,7 +284,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	workers.Wait()
 	close(outcomes)
 
-	rewritten := make([]imageURLRewrite, len(tokens))
+	images := make([]optimizedImage, len(tokens))
 	for outcome := range outcomes {
 		optimization := outcome.optimization
 		if optimization.NegativeCacheHit {
@@ -273,10 +318,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		}
 		result.Metrics.OptimizedImageCount++
 		result.Metrics.OptimizedImageBytes += len(optimization.Image.Bytes)
-		rewritten[outcome.index] = imageURLRewrite{
-			value:   "data:image/webp;base64," + base64.StdEncoding.EncodeToString(optimization.Image.Bytes),
-			changed: true,
-		}
+		images[outcome.index] = optimization.Image
 	}
 	if truncated {
 		// The bounded collector observed at least one more eligible image, but
@@ -293,7 +335,28 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		return result
 	}
 
-	optimizedBody, changed, rewriteErr := rewriteImageURLTokens(body, tokens, rewritten)
+	if plan != nil {
+		if result.Metrics.OptimizedImageCount != 0 {
+			for i, image := range images {
+				if image.Bytes == nil {
+					continue
+				}
+				token := tokens[i]
+				size := webpJSONSize(len(image.Bytes))
+				plan.inlineBytes += size - (token.end - token.start)
+				if inspect && token.inspectedBytes > 0 {
+					result.Metrics.CandidateInlineAttachmentBytes += size - 2 - token.inspectedBytes
+				}
+			}
+			plan.images = images
+		}
+		result.Metrics.OptimizedBodyBytes = plan.inlineBytes
+		return result
+	}
+	if result.Metrics.OptimizedImageCount == 0 {
+		return result
+	}
+	optimizedBody, changed, rewriteErr := spliceImagePlan(body, tokens, images, nil)
 	if rewriteErr != nil {
 		result.Metrics.Errors++
 		result.Metrics.OptimizedImageCount = 0
@@ -496,6 +559,12 @@ func (g *Gateway) prepareInlineAttachmentMetrics(body []byte, metrics *Metrics) 
 		metrics.Errors++
 		return effectiveThreshold, false
 	}
+	return g.setInlineAttachmentMetrics(inlineStats, metrics), true
+}
+
+func (g *Gateway) setInlineAttachmentMetrics(inlineStats InlineAttachmentStats, metrics *Metrics) int {
+	effectiveThreshold := g.config.ThresholdBytes
+	metrics.EffectiveThresholdBytes = effectiveThreshold
 	metrics.OriginalInlineAttachmentCount = inlineStats.Count
 	metrics.OriginalInlineAttachmentBytes = inlineStats.Bytes
 	metrics.OriginalUnsupportedAttachmentCount = inlineStats.UnsupportedCount
@@ -509,7 +578,7 @@ func (g *Gateway) prepareInlineAttachmentMetrics(body []byte, metrics *Metrics) 
 		effectiveThreshold = g.config.AggregateSmallImageThresholdBytes
 		metrics.EffectiveThresholdBytes = effectiveThreshold
 	}
-	return effectiveThreshold, true
+	return effectiveThreshold
 }
 
 func recordRehydrateContextFailure(metrics *Metrics, err error) {
@@ -523,6 +592,7 @@ func recordRehydrateContextFailure(metrics *Metrics, err error) {
 func (g *Gateway) optimizeImageSafely(
 	ctx context.Context,
 	input dataURLImage,
+	warmKey warmCacheKey,
 	reserveColdEncode func() bool,
 	recordColdEncodeStarted func(),
 	recordCacheLookup func(),
@@ -533,7 +603,7 @@ func (g *Gateway) optimizeImageSafely(
 			err = errors.New("attachment gateway: image transform panicked")
 		}
 	}()
-	return g.optimizeImage(ctx, input, reserveColdEncode, recordColdEncodeStarted, recordCacheLookup)
+	return g.optimizeImage(ctx, input, warmKey, reserveColdEncode, recordColdEncodeStarted, recordCacheLookup)
 }
 
 // parseImageDataURLWithSlot keeps a transform slot from data URL decoding
@@ -564,6 +634,7 @@ func (g *Gateway) parseImageDataURLWithSlot(ctx context.Context, rawURL string) 
 func (g *Gateway) optimizeImage(
 	ctx context.Context,
 	input dataURLImage,
+	warmKey warmCacheKey,
 	reserveColdEncode func() bool,
 	recordColdEncodeStarted func(),
 	recordCacheLookup func(),
@@ -572,7 +643,7 @@ func (g *Gateway) optimizeImage(
 	if recordCacheLookup != nil {
 		recordCacheLookup()
 	}
-	lookup, shared, err := g.cache.getOrCreate(ctx, hash, func() (created cacheLookup, createErr error) {
+	lookup, shared, err := g.cache.getOrCreate(ctx, hash, warmKey.enabled, func() (created cacheLookup, createErr error) {
 		workCtx, cancelWork := detachedWorkContext(ctx)
 		defer cancelWork()
 		defer func() {
@@ -677,6 +748,9 @@ func (g *Gateway) optimizeImage(
 			NegativeCacheHit:    lookup.Hit,
 			NegativeCacheShared: shared,
 		}, errNotSmaller
+	}
+	if warmKey.enabled && lookup.Hit {
+		g.cache.rememberWarmImage(warmImageEntry{tokenHash: warmKey.digest, image: lookup.Image, sourceSize: len(input.Bytes), files: lookup.Files})
 	}
 	return imageOptimizationResult{
 		Image:       lookup.Image,

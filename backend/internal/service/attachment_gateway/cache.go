@@ -21,6 +21,7 @@ const (
 
 type cacheLookup struct {
 	Image    optimizedImage
+	Files    cacheFilePair
 	Negative *NegativeMetadata
 	Hit      bool
 }
@@ -49,6 +50,7 @@ type imageCache struct {
 	flightMu        sync.Mutex
 	flights         map[string]*imageCacheFlight
 	filesMu         sync.RWMutex
+	warm            warmImageCache
 	cleanupStateMu  sync.Mutex
 	cleanupRunning  bool
 	lastCleanup     time.Time
@@ -89,9 +91,14 @@ func newImageCache(
 func (c *imageCache) getOrCreate(
 	ctx context.Context,
 	hash string,
+	indexWarm bool,
 	create func() (cacheLookup, error),
 ) (cacheLookup, bool, error) {
-	if cached, ok := c.load(hash); ok {
+	if indexWarm {
+		if cached, files, ok := c.loadForWarmIndex(hash); ok {
+			return cacheLookup{Image: cached, Files: files, Hit: true}, false, nil
+		}
+	} else if cached, ok := c.load(hash); ok {
 		return cacheLookup{Image: cached, Hit: true}, false, nil
 	}
 	if negative, ok := c.loadNegative(hash); ok {

@@ -1,6 +1,7 @@
 package attachment_gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -146,9 +147,10 @@ type publishResult struct {
 }
 
 type imageURLPublishJob struct {
-	index   int
-	image   dataURLImage
-	release func()
+	verifiedHash string
+	index        int
+	image        dataURLImage
+	release      func()
 }
 
 type imageURLPublishOutcome struct {
@@ -263,20 +265,32 @@ func (e *URLExternalizer) externalize(
 	body []byte,
 	selected map[int]struct{},
 	canWrite func() bool,
+) URLResult {
+	return e.externalizePlan(ctx, body, selected, canWrite, nil)
+}
+
+func (e *URLExternalizer) externalizePlan(
+	ctx context.Context, body []byte, selected map[int]struct{}, canWrite func() bool, plan *RewritePlan,
 ) (result URLResult) {
 	started := time.Now()
-	result = URLResult{Body: body, Metrics: URLMetrics{
+	candidateBytes := len(body)
+	fallbackBody := body
+	if plan != nil {
+		candidateBytes = plan.inlineBytes
+		fallbackBody = nil
+	}
+	result = URLResult{Body: fallbackBody, Metrics: URLMetrics{
 		Enabled:            e.Enabled(),
-		OriginalBodyBytes:  len(body),
-		RewrittenBodyBytes: len(body),
+		OriginalBodyBytes:  candidateBytes,
+		RewrittenBodyBytes: candidateBytes,
 	}}
 	defer func() {
 		result.Metrics.DurationMS = float64(time.Since(started)) / float64(time.Millisecond)
 	}()
 	defer func() {
 		if recover() != nil {
-			result.Body = body
-			result.Metrics.RewrittenBodyBytes = len(body)
+			result.Body = fallbackBody
+			result.Metrics.RewrittenBodyBytes = candidateBytes
 			result.Metrics.ExternalizedCount = 0
 			result.Metrics.Errors++
 		}
@@ -290,12 +304,19 @@ func (e *URLExternalizer) externalize(
 	}
 	result.Metrics.StorageReady = true
 	storageVersion := e.syncStorageVersion()
-	if len(body) < e.config.MinBodyBytes {
+	if candidateBytes < e.config.MinBodyBytes {
 		result.Metrics.SkippedBelowTrigger = true
 		return result
 	}
 
-	tokens, _, err := collectImageDataURLTokens(body, e.config.MaxImagesPerRequest)
+	var tokens []imageURLToken
+	var err error
+	if plan == nil {
+		tokens, _, err = collectImageDataURLTokens(body, e.config.MaxImagesPerRequest)
+	} else {
+		tokens, err = plan.discovery.tokens, plan.discoveryErr
+		tokens = tokens[:min(len(tokens), e.config.MaxImagesPerRequest)]
+	}
 	if err != nil {
 		result.Metrics.Errors++
 		return result
@@ -334,8 +355,10 @@ func (e *URLExternalizer) externalize(
 			defer workers.Done()
 			for job := range jobs {
 				func() {
-					defer job.release()
-					url, cacheHit, shared, uploaded, publishErr := e.publishSafely(ctx, job.image, storageVersion, canWrite)
+					if job.release != nil {
+						defer job.release()
+					}
+					url, cacheHit, shared, uploaded, publishErr := e.publishSafely(ctx, job, storageVersion, canWrite)
 					outcomes <- imageURLPublishOutcome{
 						index:    job.index,
 						url:      url,
@@ -360,25 +383,40 @@ func (e *URLExternalizer) externalize(
 			result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 			break
 		}
-		rawURL, tokenErr := imageURLTokenValue(body, token)
-		if tokenErr != nil {
-			result.Metrics.Errors++
-			break
-		}
-		result.Metrics.ImageCount++
-		parsed, release, parseErr := e.parseImageDataURLWithSlot(ctx, rawURL)
-		if parseErr != nil {
-			if !errors.Is(parseErr, errUnsupportedMediaType) {
+		job := imageURLPublishJob{index: index}
+		if plan != nil && index < len(plan.images) && plan.images[index].Bytes != nil {
+			image := plan.images[index]
+			result.Metrics.ImageCount++
+			if len(image.Bytes) > e.config.MaxImageBytes {
 				result.Metrics.Errors++
+				continue
 			}
-			release()
-			continue
+			job.image = dataURLImage{MIMEType: "image/webp", Bytes: image.Bytes}
+			job.verifiedHash = image.Metadata.OptimizedHash
+		} else {
+			rawURL, tokenErr := imageURLTokenValue(body, token)
+			if tokenErr != nil {
+				result.Metrics.Errors++
+				break
+			}
+			result.Metrics.ImageCount++
+			parsed, release, parseErr := e.parseImageDataURLWithSlot(ctx, rawURL)
+			if parseErr != nil {
+				if !errors.Is(parseErr, errUnsupportedMediaType) {
+					result.Metrics.Errors++
+				}
+				release()
+				continue
+			}
+			job.image, job.release = parsed, release
 		}
 		select {
-		case jobs <- imageURLPublishJob{index: index, image: parsed, release: release}:
+		case jobs <- job:
 		case <-ctx.Done():
 			result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
-			release()
+			if job.release != nil {
+				job.release()
+			}
 			dispatchStopped = true
 		}
 		if dispatchStopped {
@@ -423,12 +461,25 @@ func (e *URLExternalizer) externalize(
 	if ctx.Err() != nil {
 		result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	}
-	rewrittenBody, changed, rewriteErr := rewriteImageURLTokens(body, tokens, rewritten)
+	var rewrittenBody []byte
+	var changed bool
+	var rewriteErr error
+	if plan != nil {
+		rewrittenBody, changed, rewriteErr = spliceImagePlan(body, plan.discovery.tokens, plan.images, rewritten)
+	} else {
+		rewrittenBody, changed, rewriteErr = rewriteImageURLTokens(body, tokens, rewritten)
+	}
 	if rewriteErr != nil {
 		result.Metrics.Errors++
 		return result
 	}
 	if changed {
+		// Encoding inline fallbacks can take time in a mixed batch. Do not
+		// return URLs if the generation changed while building this body.
+		if plan != nil && result.Metrics.ExternalizedCount > 0 && !e.storageVersionCurrent(storageVersion) {
+			result.Metrics.Errors++
+			return result
+		}
 		result.Body = rewrittenBody
 		result.Metrics.RewrittenBodyBytes = len(rewrittenBody)
 	}
@@ -458,7 +509,7 @@ func (e *URLExternalizer) parseImageDataURLWithSlot(ctx context.Context, rawURL 
 
 func (e *URLExternalizer) publishSafely(
 	ctx context.Context,
-	image dataURLImage,
+	job imageURLPublishJob,
 	storageVersion uint64,
 	canWrite func() bool,
 ) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
@@ -471,16 +522,19 @@ func (e *URLExternalizer) publishSafely(
 			err = errors.New("attachment gateway: image upload panicked")
 		}
 	}()
-	return e.publish(ctx, image, storageVersion, canWrite)
+	return e.publish(ctx, job, storageVersion, canWrite)
 }
 
 func (e *URLExternalizer) publish(
 	ctx context.Context,
-	image dataURLImage,
+	job imageURLPublishJob,
 	storageVersion uint64,
 	canWrite func() bool,
 ) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
-	hash := optimizedHash(image.Bytes)
+	image, hash := job.image, job.verifiedHash
+	if hash == "" {
+		hash = optimizedHash(image.Bytes)
+	}
 	if !e.storageVersionCurrent(storageVersion) {
 		return "", false, false, false, errObjectStorageConfigChanged
 	}
@@ -512,6 +566,18 @@ func (e *URLExternalizer) publish(
 			defer func() { <-e.slots }()
 		case <-ctx.Done():
 			return "", ctx.Err()
+		}
+		if job.verifiedHash != "" {
+			// Standalone publication owns a separately decoded upload buffer.
+			// Clone and re-verify the request-owned candidate bytes so storage
+			// callers cannot mutate the plan's inline fallback, and disk LRU
+			// eviction after optimization cannot break publication or poison
+			// concurrent waiters sharing this content-hash flight.
+			cloned := bytes.Clone(image.Bytes)
+			if optimizedHash(cloned) != hash {
+				return "", errors.New("attachment gateway: optimized candidate hash mismatch")
+			}
+			image.Bytes = cloned
 		}
 		// The handler has already checked its live rollout control before this
 		// background operation started. Check once more after any queueing for the
@@ -627,6 +693,17 @@ func presignedURLExpiry(raw string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return signedAt.Add(time.Duration(expiresSeconds) * time.Second), true
+}
+
+// hasCachedCurrentURL is a read-only hint for optimization admission. The
+// publication phase checks readiness and the exact generation again.
+func (e *URLExternalizer) hasCachedCurrentURL(hash string) bool {
+	var version uint64
+	if versioned, ok := e.store.(versionedObjectStorage); ok {
+		version = versioned.CacheVersion()
+	}
+	_, found := e.cached(hash, version)
+	return found
 }
 
 func (e *URLExternalizer) cached(hash string, storageVersion uint64) (string, bool) {

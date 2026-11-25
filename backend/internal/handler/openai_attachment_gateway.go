@@ -192,8 +192,23 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		remoteURLMetrics = prefetched.Metrics
 		workingBody = prefetched.Body
 	}
-	if experiment.RequestBudgetEnabled && experiment.RequestBudgetEnforce && rolloutMode == attachmentGatewayRolloutRewrite {
-		inlineStats, inspectErr := attachmentgateway.InspectInlineAttachments(body)
+	enforcePreflight := experiment.RequestBudgetEnabled && experiment.RequestBudgetEnforce && !dryRun
+	var plan *attachmentgateway.RewritePlan
+	if !dryRun && experiment.URLRewriteEnabled {
+		optimizer, localOptimizer := h.attachmentOptimizer.(*attachmentgateway.Gateway)
+		externalizer, localExternalizer := h.attachmentURLExternalizer.(*attachmentgateway.URLExternalizer)
+		if localOptimizer && localExternalizer && externalizer.Enabled() {
+			plan = optimizer.PlanRewrite(workingBody, externalizer, enforcePreflight)
+		}
+	}
+	if enforcePreflight {
+		var inlineStats attachmentgateway.InlineAttachmentStats
+		var inspectErr error
+		if plan != nil && bytes.Equal(workingBody, body) {
+			inlineStats, inspectErr = plan.OriginalInlineStats()
+		} else {
+			inlineStats, inspectErr = attachmentgateway.InspectInlineAttachments(body)
+		}
 		if inspectErr == nil {
 			if budgetViolation := evaluateResponsesAttachmentBudgetPreflight(experiment, len(body), inlineStats); budgetViolation != nil {
 				if reqLog == nil {
@@ -224,7 +239,13 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 
 	optimizeCtx, cancel := context.WithTimeout(ctx, time.Duration(experiment.OptimizeTimeoutMilliseconds)*time.Millisecond)
 	defer cancel()
-	result := h.attachmentOptimizer.Optimize(optimizeCtx, workingBody)
+	var result attachmentgateway.Result
+	if plan != nil {
+		result.Metrics = plan.Optimize(optimizeCtx)
+		result.Body = workingBody
+	} else {
+		result = h.attachmentOptimizer.Optimize(optimizeCtx, workingBody)
+	}
 	metrics := result.Metrics
 	contextErr := optimizeCtx.Err()
 	urlMetrics := attachmentgateway.URLMetrics{}
@@ -232,15 +253,20 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 	// phase; only work already admitted by the service may finish.
 	if !dryRun && contextErr == nil && ctx.Err() == nil && experiment.URLRewriteEnabled && h.attachmentURLExternalizer != nil && h.attachmentURLExternalizer.Enabled() {
 		uploadCtx, uploadCancel := context.WithTimeout(ctx, time.Duration(experiment.URLUploadTimeoutMilliseconds)*time.Millisecond)
-		externalized := h.attachmentURLExternalizer.ExternalizeWithWriteGuard(
-			uploadCtx,
-			result.Body,
-			func() bool {
-				return resolveAttachmentGatewayRolloutMode(experiment) == attachmentGatewayRolloutRewrite
-			},
-		)
+		canWrite := func() bool {
+			return resolveAttachmentGatewayRolloutMode(experiment) == attachmentGatewayRolloutRewrite
+		}
+		var externalized attachmentgateway.URLResult
+		if plan != nil {
+			externalized = plan.ExternalizeOnly(uploadCtx, canWrite)
+		} else {
+			externalized = h.attachmentURLExternalizer.ExternalizeWithWriteGuard(uploadCtx, result.Body, canWrite)
+		}
 		uploadContextErr := uploadCtx.Err()
 		uploadCancel()
+		if plan != nil {
+			plan.MaterializeFallback(&externalized, &metrics)
+		}
 		urlMetrics = externalized.Metrics
 		result.Body = externalized.Body
 		metrics.OptimizedBodyBytes = len(externalized.Body)
@@ -256,6 +282,8 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		if errors.Is(uploadContextErr, context.DeadlineExceeded) {
 			urlMetrics.TimedOut = true
 		}
+	} else if plan != nil && contextErr == nil {
+		result.Body = plan.InlineBody()
 	}
 	timedOut := metrics.TimedOut || errors.Is(contextErr, context.DeadlineExceeded) || urlMetrics.TimedOut
 	budgetViolation := evaluateResponsesAttachmentBudget(experiment, metrics)
