@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 
@@ -108,19 +107,44 @@ func (h *SettingHandler) SetStepUpDeps(totpService *service.TotpService, userSer
 // GetSettings 获取所有系统设置
 // GET /api/v1/admin/settings
 func (h *SettingHandler) GetSettings(c *gin.Context) {
-	settings, err := h.settingService.GetAllSettings(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	authSourceDefaults, err := h.settingService.GetAuthSourceDefaultSettings(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
+	ctx := c.Request.Context()
+	if parseBoolQueryWithDefault(c.Query("summary"), false) {
+		summaryKeys := []string{
+			service.SettingKeyOpsMonitoringEnabled,
+			service.SettingKeyOpsRealtimeMonitoringEnabled,
+			service.SettingKeyOpsQueryModeDefault,
+			service.SettingKeyCustomMenuItems,
+			service.SettingKeyAccountQuotaNotifyEnabled,
+			service.SettingPaymentEnabled,
+		}
+		vals, err := h.settingService.GetSettingsValues(ctx, summaryKeys)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		parsed := h.settingService.ParseAllSettingsFromMap(vals)
+		opsEnabled := h.opsService != nil && h.opsService.IsMonitoringEnabled(ctx)
+		response.Success(c, gin.H{
+			"ops_monitoring_enabled":          opsEnabled && parsed.OpsMonitoringEnabled,
+			"ops_realtime_monitoring_enabled": parsed.OpsRealtimeMonitoringEnabled,
+			"ops_query_mode_default":          parsed.OpsQueryModeDefault,
+			"custom_menu_items":               dto.ParseCustomMenuItems(parsed.CustomMenuItems),
+			"account_quota_notify_enabled":    parsed.AccountQuotaNotifyEnabled,
+			"payment_enabled":                 vals[service.SettingPaymentEnabled] == "true",
+		})
 		return
 	}
 
+	rawSettings, err := h.settingService.GetAllRawSettings(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	settings := h.settingService.ParseAllSettingsFromMap(rawSettings)
+	authSourceDefaults := h.settingService.ParseAuthSourceDefaultSettingsFromMap(rawSettings)
+
 	// Check if ops monitoring is enabled (respects config.ops.enabled)
-	opsEnabled := h.opsService != nil && h.opsService.IsMonitoringEnabled(c.Request.Context())
+	opsEnabled := h.opsService != nil && h.opsService.IsMonitoringEnabled(ctx)
 	defaultSubscriptions := make([]dto.DefaultSubscriptionSetting, 0, len(settings.DefaultSubscriptions))
 	for _, sub := range settings.DefaultSubscriptions {
 		defaultSubscriptions = append(defaultSubscriptions, dto.DefaultSubscriptionSetting{
@@ -129,10 +153,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		})
 	}
 
-	// Load payment config
+	// Load payment config reusing the already-loaded settings map (saves a 32-key DB round-trip).
 	var paymentCfg *service.PaymentConfig
 	if h.paymentConfigService != nil {
-		paymentCfg, _ = h.paymentConfigService.GetPaymentConfig(c.Request.Context())
+		paymentCfg = h.paymentConfigService.GetPaymentConfigFromMap(ctx, rawSettings)
 	}
 	if paymentCfg == nil {
 		paymentCfg = &service.PaymentConfig{}
@@ -417,19 +441,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AllowUserViewErrorRequests:  settings.AllowUserViewErrorRequests,
 	}
 
-	// OpenAI fast policy (stored under a dedicated setting key)
-	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
-		slog.Error("openai_fast_policy_settings_get_failed", "error", err)
-	} else if fastPolicy != nil {
-		payload.OpenAIFastPolicySettings = openaiFastPolicySettingsToDTO(fastPolicy)
-	}
-
-	// Default platform quotas（JSON map）
-	if platformQuotas, err := h.settingService.GetDefaultPlatformQuotas(c.Request.Context()); err != nil {
-		slog.Error("default_platform_quotas_get_failed", "error", err)
-	} else {
-		payload.DefaultPlatformQuotas = platformQuotas
-	}
+	// OpenAI fast policy & default platform quotas parsed from already-loaded settings map (0 extra DB queries)
+	payload.OpenAIFastPolicySettings = openaiFastPolicySettingsToDTO(h.settingService.ParseOpenAIFastPolicySettingsFromMap(rawSettings))
+	payload.DefaultPlatformQuotas = h.settingService.ParseDefaultPlatformQuotasFromMap(rawSettings)
 
 	response.Success(c, systemSettingsResponseData(payload, authSourceDefaults))
 }

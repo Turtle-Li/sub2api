@@ -124,11 +124,20 @@ func (s *SettingService) GetAdminComplianceStatus(ctx context.Context, adminUser
 }
 
 func (s *SettingService) IsAdminComplianceAcknowledged(ctx context.Context, adminUserID int64) (bool, error) {
+	if s != nil {
+		if _, ok := s.adminComplianceAckCache.Load(adminUserID); ok {
+			return true, nil
+		}
+	}
 	status, err := s.GetAdminComplianceStatus(ctx, adminUserID)
 	if err != nil {
 		return false, err
 	}
-	return status != nil && !status.Required, nil
+	acked := status != nil && !status.Required
+	if acked && s != nil {
+		s.adminComplianceAckCache.Store(adminUserID, struct{}{})
+	}
+	return acked, nil
 }
 
 func (s *SettingService) AcceptAdminCompliance(ctx context.Context, input AdminComplianceAcceptInput) (*AdminComplianceStatus, error) {

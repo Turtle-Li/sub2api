@@ -70,6 +70,18 @@ type AccountHandler struct {
 	opencodeGoUsage         *service.OpenCodeGoUsageService
 	clineUpstream           *service.ClineUpstreamService
 	cfg                     *config.Config
+
+	// Short-TTL caches (10s) for OpenAI scheduler score pools so paginating or
+	// refreshing the accounts list does not repeatedly scan all OpenAI accounts.
+	schedulerFilterPoolCache sync.Map // string -> cachedSchedulerAccountPool
+	schedulerGroupPoolCache  sync.Map // int64  -> cachedSchedulerAccountPool
+}
+
+const schedulerScorePoolCacheTTL = 10 * time.Second
+
+type cachedSchedulerAccountPool struct {
+	accounts  []service.Account
+	fetchedAt time.Time
 }
 
 // SetClineUpstreamService attaches the optional Cline Pass upstream pinning service.
@@ -541,15 +553,51 @@ func (h *AccountHandler) buildOpenAIAccountSchedulerScores(
 	sort.Slice(groupIDList, func(i, j int) bool { return groupIDList[i] < groupIDList[j] })
 
 	groupPools := make(map[int64][]service.Account, len(groupIDList))
-	if h.adminService != nil {
-		for _, groupID := range groupIDList {
-			gid := groupID
-			pool, err := h.adminService.ListOpenAISchedulableAccountsForSchedulerScore(ctx, &gid)
-			if err != nil {
-				slog.Warn("openai_scheduler_group_score_pool_failed", "group_id", gid, "error", err)
-				continue
+	if h.adminService != nil && len(groupIDList) > 0 {
+		now := time.Now()
+		missingGroupIDs := make([]int64, 0, len(groupIDList))
+		for _, gid := range groupIDList {
+			if raw, ok := h.schedulerGroupPoolCache.Load(gid); ok {
+				if cached, ok := raw.(cachedSchedulerAccountPool); ok && now.Sub(cached.fetchedAt) < schedulerScorePoolCacheTTL {
+					groupPools[gid] = cached.accounts
+					continue
+				}
 			}
-			groupPools[gid] = pool
+			missingGroupIDs = append(missingGroupIDs, gid)
+		}
+		if len(missingGroupIDs) > 0 {
+			if batchSvc, ok := h.adminService.(interface {
+				ListOpenAISchedulableAccountsForSchedulerScoreBatch(context.Context, []int64) (map[int64][]service.Account, error)
+			}); ok {
+				fetched, err := batchSvc.ListOpenAISchedulableAccountsForSchedulerScoreBatch(ctx, missingGroupIDs)
+				if err != nil {
+					slog.Warn("openai_scheduler_group_score_pool_batch_failed", "group_ids", missingGroupIDs, "error", err)
+				} else {
+					fetchedAt := time.Now()
+					for _, gid := range missingGroupIDs {
+						pool := fetched[gid]
+						groupPools[gid] = pool
+						h.schedulerGroupPoolCache.Store(gid, cachedSchedulerAccountPool{
+							accounts:  pool,
+							fetchedAt: fetchedAt,
+						})
+					}
+				}
+			} else {
+				for _, groupID := range missingGroupIDs {
+					gid := groupID
+					pool, err := h.adminService.ListOpenAISchedulableAccountsForSchedulerScore(ctx, &gid)
+					if err != nil {
+						slog.Warn("openai_scheduler_group_score_pool_failed", "group_id", gid, "error", err)
+						continue
+					}
+					groupPools[gid] = pool
+					h.schedulerGroupPoolCache.Store(gid, cachedSchedulerAccountPool{
+						accounts:  pool,
+						fetchedAt: time.Now(),
+					})
+				}
+			}
 		}
 	}
 
@@ -639,6 +687,12 @@ func (h *AccountHandler) listAccountSchedulerScoreFilterPool(
 	if h.adminService == nil || (platform != "" && platform != service.PlatformOpenAI) {
 		return nil
 	}
+	cacheKey := fmt.Sprintf("%s|%s|%s|%d|%s", accountType, status, search, groupID, privacyMode)
+	if raw, ok := h.schedulerFilterPoolCache.Load(cacheKey); ok {
+		if cached, ok := raw.(cachedSchedulerAccountPool); ok && time.Since(cached.fetchedAt) < schedulerScorePoolCacheTTL {
+			return cached.accounts
+		}
+	}
 	// 池只用于 OpenAI 分数计算（非 OpenAI 账号会在打分时被丢弃），
 	// 无论列表页平台过滤为何，查询一律限定 openai，避免无过滤时全表扫描。
 	accounts, err := h.adminService.ListAccountsForSchedulerScoreFilter(ctx, service.PlatformOpenAI, accountType, status, search, groupID, privacyMode)
@@ -646,6 +700,10 @@ func (h *AccountHandler) listAccountSchedulerScoreFilterPool(
 		slog.Warn("openai_scheduler_filter_score_pool_failed", "error", err)
 		return nil
 	}
+	h.schedulerFilterPoolCache.Store(cacheKey, cachedSchedulerAccountPool{
+		accounts:  accounts,
+		fetchedAt: time.Now(),
+	})
 	return accounts
 }
 
@@ -704,7 +762,10 @@ func (h *AccountHandler) List(c *gin.Context) {
 		PrivacyMode: privacyMode,
 		PoolID:      poolID,
 	}
-	useLiteRepo := lite && !includeSchedulerScore && !h.isSimpleMode()
+	// accountsToServiceLite already hydrates GroupIDs, which buildOpenAIAccountSchedulerScores
+	// reads directly, so lite=1 can stay on the lightweight repository path even when
+	// include_scheduler_score=1 is requested.
+	useLiteRepo := lite && !h.isSimpleMode()
 	if useLiteRepo {
 		if liteSvc, ok := h.adminService.(interface {
 			ListAccountsFilteredLite(context.Context, int, int, service.AccountListFilter, string, string) ([]service.Account, int64, error)

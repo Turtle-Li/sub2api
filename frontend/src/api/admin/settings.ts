@@ -1114,8 +1114,10 @@ export interface UpdateSettingsRequest {
  * Get all system settings
  * @returns System settings
  */
-export async function getSettings(): Promise<SystemSettings> {
-  const { data } = await apiClient.get<SystemSettings>("/admin/settings");
+export async function getSettings(options?: { summary?: boolean }): Promise<SystemSettings> {
+  const { data } = await apiClient.get<SystemSettings>("/admin/settings", {
+    params: options?.summary ? { summary: '1' } : undefined,
+  });
   return data;
 }
 

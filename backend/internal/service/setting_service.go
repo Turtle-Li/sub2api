@@ -147,6 +147,11 @@ type SettingService struct {
 	panelRateLimitCache atomic.Value
 	panelRateLimitSF    singleflight.Group
 
+	// adminComplianceAckCache caches confirmed admin user IDs (int64 -> struct{}).
+	// Compliance acknowledgement for the current AdminComplianceVersion is monotonic,
+	// avoiding a DB query on every single /api/v1/admin/* request.
+	adminComplianceAckCache sync.Map
+
 	// pricingCurrencySettingsCache holds the active settlement-currency
 	// configuration. Billing reads it on every request, so it is bounded and
 	// cached independently from the broad system-settings document.
@@ -397,10 +402,33 @@ func (s *SettingService) LoadForwardedClientIPSettings(ctx context.Context) erro
 }
 
 // GetAllSettings 获取所有系统设置
-func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, error) {
+func (s *SettingService) GetAllRawSettings(ctx context.Context) (map[string]string, error) {
 	settings, err := s.settingRepo.GetAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get all settings: %w", err)
+	}
+	return settings, nil
+}
+
+func (s *SettingService) GetSettingsValues(ctx context.Context, keys []string) (map[string]string, error) {
+	if s == nil || s.settingRepo == nil || len(keys) == 0 {
+		return map[string]string{}, nil
+	}
+	settings, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return nil, fmt.Errorf("get settings values: %w", err)
+	}
+	return settings, nil
+}
+
+func (s *SettingService) ParseAllSettingsFromMap(settings map[string]string) *SystemSettings {
+	return s.parseSettings(settings)
+}
+
+func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, error) {
+	settings, err := s.GetAllRawSettings(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	return s.parseSettings(settings), nil

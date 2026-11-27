@@ -404,4 +404,12 @@ func TestAccountHandlerListSchedulerScoreIgnoresPagination(t *testing.T) {
 	require.Equal(t, int64(301), payload.Data.Items[0].ID)
 	require.Less(t, payload.Data.Items[0].SchedulerScore.BaseScore, 3.75)
 	require.Empty(t, payload.Data.Items[0].SchedulerScores)
+
+	// Repeat request within cache TTL must reuse cached scheduler filter pool without extra DB scans.
+	callsAfterFirst := adminSvc.schedulerScoreFilterCalls
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?page=1&page_size=1&platform=openai&include_scheduler_score=1", nil)
+	router.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+	require.Equal(t, callsAfterFirst, adminSvc.schedulerScoreFilterCalls)
 }

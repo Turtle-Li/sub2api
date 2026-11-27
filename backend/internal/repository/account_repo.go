@@ -1609,6 +1609,165 @@ func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, ac
 	return r.accountsToService(ctx, accounts)
 }
 
+var schedulerScoreAccountColumns = []string{
+	dbaccount.FieldID,
+	dbaccount.FieldPlatform,
+	dbaccount.FieldType,
+	dbaccount.FieldStatus,
+	dbaccount.FieldSchedulable,
+	dbaccount.FieldPriority,
+	dbaccount.FieldConcurrency,
+	dbaccount.FieldLoadFactor,
+	dbaccount.FieldRateMultiplier,
+	dbaccount.FieldSessionWindowEnd,
+	dbaccount.FieldRateLimitResetAt,
+	dbaccount.FieldOverloadUntil,
+	dbaccount.FieldTempUnschedulableUntil,
+	dbaccount.FieldExpiresAt,
+	dbaccount.FieldAutoPauseOnExpired,
+	dbaccount.FieldExtra,
+}
+
+// ListAllWithFiltersForSchedulerScore loads only the minimal columns required by
+// OpenAI scheduler score calculation, skipping heavy credentials/notes columns and
+// proxy/group joins.
+func (r *accountRepository) ListAllWithFiltersForSchedulerScore(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, error) {
+	rows, err := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode).
+		Select(schedulerScoreAccountColumns...).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.Account, 0, len(rows))
+	for _, acc := range rows {
+		if svcAcc := accountEntityToService(acc); svcAcc != nil {
+			out = append(out, *svcAcc)
+		}
+	}
+	return out, nil
+}
+
+// ListOpenAISchedulableByGroupIDsForSchedulerScore fetches schedulable OpenAI
+// accounts for multiple groups in a fixed 3-query lightweight batch (account_groups,
+// group names, and minimal account columns), eliminating per-group N+1 full-row queries.
+func (r *accountRepository) ListOpenAISchedulableByGroupIDsForSchedulerScore(ctx context.Context, groupIDs []int64) (map[int64][]service.Account, error) {
+	groupIDs = uniquePositiveInt64s(groupIDs)
+	result := make(map[int64][]service.Account, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return result, nil
+	}
+
+	agRows := make([]*dbent.AccountGroup, 0)
+	for start := 0; start < len(groupIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(groupIDs) {
+			end = len(groupIDs)
+		}
+		batch, err := r.client.AccountGroup.Query().
+			Where(dbaccountgroup.GroupIDIn(groupIDs[start:end]...)).
+			Order(dbaccountgroup.ByGroupID(), dbaccountgroup.ByPriority()).
+			Select(dbaccountgroup.FieldAccountID, dbaccountgroup.FieldGroupID, dbaccountgroup.FieldPriority).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		agRows = append(agRows, batch...)
+	}
+	if len(agRows) == 0 {
+		for _, gid := range groupIDs {
+			result[gid] = []service.Account{}
+		}
+		return result, nil
+	}
+
+	groupNames := make(map[int64]string, len(groupIDs))
+	for start := 0; start < len(groupIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(groupIDs) {
+			end = len(groupIDs)
+		}
+		groups, err := r.client.Group.Query().
+			Where(dbgroup.IDIn(groupIDs[start:end]...)).
+			Select(dbgroup.FieldID, dbgroup.FieldName).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range groups {
+			groupNames[g.ID] = g.Name
+		}
+	}
+
+	accountIDs := make([]int64, 0, len(agRows))
+	for _, ag := range agRows {
+		accountIDs = append(accountIDs, ag.AccountID)
+	}
+	accountIDs = uniquePositiveInt64s(accountIDs)
+
+	now := time.Now()
+	accountByID := make(map[int64]*service.Account, len(accountIDs))
+	for start := 0; start < len(accountIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(accountIDs) {
+			end = len(accountIDs)
+		}
+		rows, err := r.client.Account.Query().
+			Where(
+				dbaccount.IDIn(accountIDs[start:end]...),
+				dbaccount.DeletedAtIsNil(),
+				dbaccount.PlatformEQ(service.PlatformOpenAI),
+				dbaccount.StatusEQ(service.StatusActive),
+				dbaccount.SchedulableEQ(true),
+				tempUnschedulablePredicate(),
+				notExpiredPredicate(now),
+				dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
+				dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			).
+			Select(schedulerScoreAccountColumns...).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, acc := range rows {
+			if svcAcc := accountEntityToService(acc); svcAcc != nil {
+				accountByID[acc.ID] = svcAcc
+			}
+		}
+	}
+
+	for _, gid := range groupIDs {
+		result[gid] = []service.Account{}
+	}
+	seenPerGroup := make(map[int64]map[int64]struct{}, len(groupIDs))
+	for _, ag := range agRows {
+		acc, ok := accountByID[ag.AccountID]
+		if !ok || acc == nil {
+			continue
+		}
+		seen, ok := seenPerGroup[ag.GroupID]
+		if !ok {
+			seen = make(map[int64]struct{})
+			seenPerGroup[ag.GroupID] = seen
+		}
+		if _, dup := seen[acc.ID]; dup {
+			continue
+		}
+		seen[acc.ID] = struct{}{}
+		copied := *acc
+		copied.AccountGroups = []service.AccountGroup{{
+			AccountID: acc.ID,
+			GroupID:   ag.GroupID,
+			Priority:  ag.Priority,
+			Group: &service.Group{
+				ID:   ag.GroupID,
+				Name: groupNames[ag.GroupID],
+			},
+		}}
+		result[ag.GroupID] = append(result[ag.GroupID], copied)
+	}
+	return result, nil
+}
+
 // ListModelTraceAccounts reads only explicitly added monitoring accounts.
 func (r *accountRepository) ListModelTraceAccounts(ctx context.Context) ([]service.Account, error) {
 	accounts, err := r.client.Account.Query().

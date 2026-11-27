@@ -82,6 +82,11 @@ func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Conte
 	if s == nil || s.accountRepo == nil {
 		return nil, nil
 	}
+	if reader, ok := s.accountRepo.(interface {
+		ListAllWithFiltersForSchedulerScore(context.Context, string, string, string, string, int64, string) ([]Account, error)
+	}); ok {
+		return reader.ListAllWithFiltersForSchedulerScore(ctx, platform, accountType, status, search, groupID, privacyMode)
+	}
 	return s.accountRepo.ListAllWithFilters(ctx, platform, accountType, status, search, groupID, privacyMode)
 }
 
@@ -90,9 +95,40 @@ func (s *adminServiceImpl) ListOpenAISchedulableAccountsForSchedulerScore(ctx co
 		return nil, nil
 	}
 	if groupID != nil {
+		if reader, ok := s.accountRepo.(interface {
+			ListOpenAISchedulableByGroupIDsForSchedulerScore(context.Context, []int64) (map[int64][]Account, error)
+		}); ok {
+			byGroup, err := reader.ListOpenAISchedulableByGroupIDsForSchedulerScore(ctx, []int64{*groupID})
+			if err != nil {
+				return nil, err
+			}
+			return byGroup[*groupID], nil
+		}
 		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, PlatformOpenAI)
 	}
 	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, PlatformOpenAI)
+}
+
+// ListOpenAISchedulableAccountsForSchedulerScoreBatch loads schedulable OpenAI accounts
+// for all requested group IDs in one lightweight batched repository call when supported.
+func (s *adminServiceImpl) ListOpenAISchedulableAccountsForSchedulerScoreBatch(ctx context.Context, groupIDs []int64) (map[int64][]Account, error) {
+	if s == nil || s.accountRepo == nil || len(groupIDs) == 0 {
+		return map[int64][]Account{}, nil
+	}
+	if reader, ok := s.accountRepo.(interface {
+		ListOpenAISchedulableByGroupIDsForSchedulerScore(context.Context, []int64) (map[int64][]Account, error)
+	}); ok {
+		return reader.ListOpenAISchedulableByGroupIDsForSchedulerScore(ctx, groupIDs)
+	}
+	out := make(map[int64][]Account, len(groupIDs))
+	for _, gid := range groupIDs {
+		pool, err := s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, gid, PlatformOpenAI)
+		if err != nil {
+			return nil, err
+		}
+		out[gid] = pool
+	}
+	return out, nil
 }
 
 func (s *adminServiceImpl) GetAccount(ctx context.Context, id int64) (*Account, error) {

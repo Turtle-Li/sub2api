@@ -65,6 +65,8 @@ const usageLogsEffectiveModelIndexesMigration = "226_add_usage_log_effective_mod
 const usageLogsEffectiveRequestedModelIndex = "idx_usage_logs_effective_requested_model_created"
 const accountsListDefaultIndexMigration = "292_accounts_list_default_index_notx.sql"
 const accountsListDefaultIndex = "idx_accounts_unpooled_name_id"
+const accountsListPlatformIndexMigration = "293_accounts_list_platform_index_notx.sql"
+const accountsListPlatformIndex = "idx_accounts_unpooled_platform_name_id"
 const usageLogsEffectiveUpstreamModelIndex = "idx_usage_logs_effective_upstream_model_created"
 const usageLogsUpstreamRequestIDIndexMigration = "233_add_usage_log_upstream_request_id_index_notx.sql"
 const usageLogsUpstreamRequestIDIndex = "idx_usage_logs_upstream_request_id"
@@ -321,6 +323,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationConnectio
 		return dropInvalidIndexIfPresent(ctx, db, usageLogsAPIKeyCostIndex)
 	case accountsListDefaultIndexMigration:
 		return dropInvalidIndexIfPresent(ctx, db, accountsListDefaultIndex)
+	case accountsListPlatformIndexMigration:
+		return dropInvalidIndexIfPresent(ctx, db, accountsListPlatformIndex)
 	default:
 		return nil
 	}

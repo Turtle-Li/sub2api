@@ -395,6 +395,10 @@ func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*Aut
 		return nil, fmt.Errorf("get auth source default settings: %w", err)
 	}
 
+	return s.ParseAuthSourceDefaultSettingsFromMap(settings), nil
+}
+
+func (s *SettingService) ParseAuthSourceDefaultSettingsFromMap(settings map[string]string) *AuthSourceDefaultSettings {
 	return &AuthSourceDefaultSettings{
 		Email:                        parseProviderDefaultGrantSettings(settings, emailAuthSourceDefaultKeys),
 		LinuxDo:                      parseProviderDefaultGrantSettings(settings, linuxDoAuthSourceDefaultKeys),
@@ -404,7 +408,7 @@ func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*Aut
 		Google:                       parseProviderDefaultGrantSettings(settings, googleAuthSourceDefaultKeys),
 		DingTalk:                     parseProviderDefaultGrantSettings(settings, dingTalkAuthSourceDefaultKeys),
 		ForceEmailOnThirdPartySignup: settings[SettingKeyForceEmailOnThirdPartySignup] == "true",
-	}, nil
+	}
 }
 
 func (s *SettingService) ResolveAuthSourceGrantSettings(ctx context.Context, signupSource string, firstBind bool) (ProviderDefaultGrantSettings, bool, error) {
@@ -988,6 +992,24 @@ func (s *SettingService) SetBetaPolicySettings(ctx context.Context, settings *Be
 }
 
 // GetOpenAIFastPolicySettings 获取 OpenAI fast 策略配置
+func (s *SettingService) ParseOpenAIFastPolicySettingsFromMap(rawSettings map[string]string) *OpenAIFastPolicySettings {
+	value := ""
+	if rawSettings != nil {
+		value = rawSettings[SettingKeyOpenAIFastPolicySettings]
+	}
+	if value == "" {
+		return DefaultOpenAIFastPolicySettings()
+	}
+	var settings OpenAIFastPolicySettings
+	if err := json.Unmarshal([]byte(value), &settings); err != nil {
+		slog.Warn("failed to unmarshal openai fast policy settings, falling back to defaults",
+			"error", err,
+			"key", SettingKeyOpenAIFastPolicySettings)
+		return DefaultOpenAIFastPolicySettings()
+	}
+	return &settings
+}
+
 func (s *SettingService) GetOpenAIFastPolicySettings(ctx context.Context) (*OpenAIFastPolicySettings, error) {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAIFastPolicySettings)
 	if err != nil {
@@ -1114,6 +1136,31 @@ func (s *SettingService) SetStreamTimeoutSettings(ctx context.Context, settings 
 //
 // 使用单个 JSON key（default_platform_quotas），一次 DB roundtrip，消除旧 12-KV 格式的 N+1 问题。
 // 容错语义：取值失败或 unmarshal 失败 → 返回补齐全部允许平台 key 的空 map（fail-open，注册不被阻断）。
+func (s *SettingService) ParseDefaultPlatformQuotasFromMap(rawSettings map[string]string) map[string]*DefaultPlatformQuotaSetting {
+	out := make(map[string]*DefaultPlatformQuotaSetting, len(AllowedQuotaPlatforms))
+	for _, platform := range AllowedQuotaPlatforms {
+		out[platform] = &DefaultPlatformQuotaSetting{}
+	}
+	raw := ""
+	if rawSettings != nil {
+		raw = rawSettings[SettingKeyDefaultPlatformQuotas]
+	}
+	if raw == "" {
+		return out
+	}
+	parsed := map[string]*DefaultPlatformQuotaSetting{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		slog.Warn("[Setting] unmarshal default_platform_quotas failed (fail-open)", "error", err)
+		return out
+	}
+	for _, platform := range AllowedQuotaPlatforms {
+		if v := parsed[platform]; v != nil {
+			out[platform] = v
+		}
+	}
+	return out
+}
+
 func (s *SettingService) GetDefaultPlatformQuotas(ctx context.Context) (map[string]*DefaultPlatformQuotaSetting, error) {
 	out := make(map[string]*DefaultPlatformQuotaSetting, len(AllowedQuotaPlatforms))
 	for _, platform := range AllowedQuotaPlatforms {

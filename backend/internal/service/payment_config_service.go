@@ -332,6 +332,12 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 	if err != nil {
 		return nil, fmt.Errorf("get payment config settings: %w", err)
 	}
+	return s.GetPaymentConfigFromMap(ctx, vals), nil
+}
+
+// GetPaymentConfigFromMap builds PaymentConfig from an already-fetched settings map,
+// avoiding an extra settings table round-trip when the caller has loaded GetAll.
+func (s *PaymentConfigService) GetPaymentConfigFromMap(ctx context.Context, vals map[string]string) *PaymentConfig {
 	cfg := s.parsePaymentConfig(vals)
 	if s.unifiedPayment != nil && s.unifiedPayment.Enabled() {
 		cfg.UnifiedPaymentEnabled = true
@@ -339,7 +345,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 	}
 	// Load Stripe publishable key from the first enabled Stripe provider instance
 	cfg.StripePublishableKey = s.getStripePublishableKey(ctx)
-	return cfg, nil
+	return cfg
 }
 
 func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *PaymentConfig {

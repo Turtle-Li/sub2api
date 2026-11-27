@@ -58,7 +58,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     loading.value = true
     try {
       const [settings, paymentConfigResp] = await Promise.all([
-        adminAPI.settings.getSettings(),
+        adminAPI.settings.getSettings({ summary: true }),
         adminAPI.payment.getConfig()
       ])
       opsMonitoringEnabled.value = settings.ops_monitoring_enabled ?? true

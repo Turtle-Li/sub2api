@@ -18,4 +18,15 @@ func TestAccountsListDefaultIndexMigration(t *testing.T) {
 		normalized,
 		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_unpooled_name_id ON accounts (name, id) WHERE deleted_at IS NULL AND pool_id IS NULL",
 	)
+
+	platformContent, err := FS.ReadFile("293_accounts_list_platform_index_notx.sql")
+	require.NoError(t, err)
+	platformRaw := string(platformContent)
+	require.Contains(t, platformRaw, "-- no-transaction")
+	platformNormalized := strings.Join(strings.Fields(platformRaw), " ")
+	require.Contains(
+		t,
+		platformNormalized,
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_unpooled_platform_name_id ON accounts (platform, name, id) WHERE deleted_at IS NULL AND pool_id IS NULL",
+	)
 }
