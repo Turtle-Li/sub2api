@@ -247,6 +247,21 @@ var (
 		Mode:                    "chat",
 		SupportsPromptCaching:   true,
 	}
+	// Gemini 3.8 TTS 内置标准价卡（按 Google 官方 2027-01-01 标准价 = 当前促销价 2 倍计费）：
+	//   - gemini-3.8-flash-tts:      $1.00/1M input text, $18.00/1M output audio (25 tok/s = $0.027/min)
+	//   - gemini-3.8-flash-lite-tts: $1.00/1M input text, $12.00/1M output audio (25 tok/s = $0.018/min)
+	gemini38FlashTTSFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:  1e-06,
+		OutputCostPerToken: 1.8e-05,
+		LiteLLMProvider:    "gemini",
+		Mode:               "audio_speech",
+	}
+	gemini38FlashLiteTTSFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:  1e-06,
+		OutputCostPerToken: 1.2e-05,
+		LiteLLMProvider:    "gemini",
+		Mode:               "audio_speech",
+	}
 )
 
 // tokenPriceOverrides tracks explicit nonnegative rates from pricing.override_file.
@@ -1511,6 +1526,19 @@ func (s *PricingService) extractBaseName(model string) string {
 // matchByModelFamily 基于模型系列匹配
 func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	model = normalizeAntigravityClaudeTierAlias(model)
+	// Gemini 3.8 TTS 模型优先匹配独立音频价卡，避免落入文本或未知模型回退。
+	if strings.Contains(model, "gemini-3.8-flash-lite-tts") || strings.Contains(model, "gemini-3-8-flash-lite-tts") {
+		if pricing, ok := s.pricingData["gemini-3.8-flash-lite-tts"]; ok {
+			return pricing
+		}
+		return gemini38FlashLiteTTSFallbackPricing
+	}
+	if strings.Contains(model, "gemini-3.8-flash-tts") || strings.Contains(model, "gemini-3-8-flash-tts") {
+		if pricing, ok := s.pricingData["gemini-3.8-flash-tts"]; ok {
+			return pricing
+		}
+		return gemini38FlashTTSFallbackPricing
+	}
 	var claude52Model string
 	switch {
 	case claude.IsFable52(model):

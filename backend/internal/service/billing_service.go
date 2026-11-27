@@ -548,6 +548,22 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown: false,
 	}
 
+	// Gemini 3.8 Flash TTS / Flash-Lite TTS:
+	// 直接采用 Google 官方 2027-01-01 标准价（等于 2026 年底前促销价的 2 倍），
+	// 防止跨年涨价时倒挂：
+	//   - gemini-3.8-flash-tts:      $1.00 input text / $18.00 output audio per MTok (25 tok/s = $0.027/min)
+	//   - gemini-3.8-flash-lite-tts: $1.00 input text / $12.00 output audio per MTok (25 tok/s = $0.018/min)
+	s.fallbackPrices["gemini-3.8-flash-tts"] = &ModelPricing{
+		InputPricePerToken:     1e-6,
+		OutputPricePerToken:    18e-6,
+		SupportsCacheBreakdown: false,
+	}
+	s.fallbackPrices["gemini-3.8-flash-lite-tts"] = &ModelPricing{
+		InputPricePerToken:     1e-6,
+		OutputPricePerToken:    12e-6,
+		SupportsCacheBreakdown: false,
+	}
+
 	// Gemini 3.8 Flash (Google AI pricing: $0.75 input / $3.75 output /
 	// $0.075 cached input per MTok, promotional through 2026-12-31; official
 	// rates double to $1.50/$7.50/$0.15 from 2027-01-01). Antigravity's
@@ -1269,6 +1285,14 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "gemini-3.7-flash") || strings.Contains(modelLower, "gemini-3-7-flash") {
 		return s.fallbackPrices["gemini-3.7-flash"]
+	}
+	// Gemini 3.8 TTS 变体含 "gemini-3.8-flash" 子串，必须在普通 gemini-3.8-flash 之前匹配，
+	// 否则音频输出会被误按文本输出低价计费。
+	if strings.Contains(modelLower, "gemini-3.8-flash-lite-tts") || strings.Contains(modelLower, "gemini-3-8-flash-lite-tts") {
+		return s.fallbackPrices["gemini-3.8-flash-lite-tts"]
+	}
+	if strings.Contains(modelLower, "gemini-3.8-flash-tts") || strings.Contains(modelLower, "gemini-3-8-flash-tts") {
+		return s.fallbackPrices["gemini-3.8-flash-tts"]
 	}
 	if strings.Contains(modelLower, "gemini-3.8-flash") || strings.Contains(modelLower, "gemini-3-8-flash") {
 		return s.fallbackPrices["gemini-3.8-flash"]

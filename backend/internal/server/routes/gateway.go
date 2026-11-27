@@ -434,6 +434,16 @@ func RegisterGatewayRoutes(
 			}
 			h.Gateway.XSearch(c)
 		})
+		// OpenAI 兼容语音合成接口（目前承载 Gemini TTS，后续可扩展其他平台）
+		audioSpeechHandler := func(c *gin.Context) {
+			if getGroupPlatform(c) != service.PlatformGemini {
+				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Audio Speech API is not supported for this platform"}})
+				return
+			}
+			h.Gateway.GeminiOpenAIAudioSpeech(c)
+		}
+		gateway.POST("/audio/speech", audioSpeechHandler)
 	}
 
 	// Gemini 原生 API 兼容层（Gemini SDK/CLI 直连）
@@ -452,6 +462,8 @@ func RegisterGatewayRoutes(
 		gemini.GET("/models/:model", h.Gateway.GeminiV1BetaGetModel)
 		// Gin treats ":" as a param marker, but Gemini uses "{model}:{action}" in the same segment.
 		gemini.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
+		// Gemini Interactions API（原生 TTS / 多模态交互透传与按 Token+WAV 兜底计费）
+		gemini.POST("/interactions", h.Gateway.GeminiV1BetaInteractions)
 		// 显式上下文缓存：网关自管资源 ID 与账号绑定，list/get 只读本地记录。
 		gemini.POST("/cachedContents", h.Gateway.GeminiCachedContentsCreate)
 		gemini.GET("/cachedContents", h.Gateway.GeminiCachedContentsList)
@@ -553,6 +565,14 @@ func RegisterGatewayRoutes(
 	}
 	rootRoute(http.MethodPost, "/tts", bodyLimit, rootVoiceHandler("tts"))
 	rootRoute(http.MethodPost, "/stt", bodyLimit, rootVoiceHandler("stt"))
+	rootRoute(http.MethodPost, "/audio/speech", bodyLimit, func(c *gin.Context) {
+		if getGroupPlatform(c) != service.PlatformGemini {
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Audio Speech API is not supported for this platform"}})
+			return
+		}
+		h.Gateway.GeminiOpenAIAudioSpeech(c)
+	})
 	rootRoute(http.MethodPost, "/custom-voices", bodyLimit, rootVoiceHandler("custom-voices"))
 	rootCustomVoicePathHandler := func(c *gin.Context) {
 		if getGroupPlatform(c) != service.PlatformGrok {
@@ -748,6 +768,18 @@ func compositeGeminiTargetPlatformMiddleware(resolver *service.CompositeRouteRes
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)
 		if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
 			model := compositeGeminiModelFromParams(c)
+			if model == "" && c.Request != nil && c.Request.Method == http.MethodPost {
+				body, readErr := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+				if readErr != nil {
+					if middleware.RejectRequestBodyReadError(c, "middleware.composite_gemini_route", readErr) {
+						return
+					}
+					middleware.AbortWithRequestBodyReadFailure(c, "middleware.composite_gemini_route", readErr)
+					return
+				}
+				model = requestmodel.FromBody(c.GetHeader("Content-Type"), body)
+				requestmodel.ResetRequestBody(c.Request, body)
+			}
 			if model != "" {
 				decision, err := resolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, service.CompositeRouteEndpointGemini)
 				if err != nil {

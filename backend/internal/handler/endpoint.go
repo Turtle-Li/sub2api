@@ -31,8 +31,10 @@ const (
 	EndpointVideosExtensions     = "/v1/videos/extensions"
 	EndpointVideos               = "/v1/videos"
 	EndpointSeedanceTasks        = "/api/v3/contents/generations/tasks"
+	EndpointAudioSpeech          = "/v1/audio/speech"
 	EndpointGeminiModels         = "/v1beta/models"
 	EndpointGeminiCachedContents = "/v1beta/cachedContents"
+	EndpointGeminiInteractions   = "/v1beta/interactions"
 )
 
 const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
@@ -117,10 +119,14 @@ func NormalizeInboundEndpoint(path string) string {
 		return EndpointResponsesCompact
 	case strings.Contains(path, EndpointResponses) || isResponsesRootAliasPath(path):
 		return EndpointResponses
+	case strings.Contains(path, EndpointAudioSpeech) || isBareOrSubpathOf(strings.TrimRight(path, "/"), "/audio/speech"):
+		return EndpointAudioSpeech
 	case strings.Contains(path, EndpointGeminiModels):
 		return EndpointGeminiModels
 	case strings.Contains(path, EndpointGeminiCachedContents):
 		return EndpointGeminiCachedContents
+	case strings.Contains(path, EndpointGeminiInteractions):
+		return EndpointGeminiInteractions
 	default:
 		return path
 	}
@@ -236,6 +242,9 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 	case service.PlatformGemini:
 		if inbound == EndpointGeminiCachedContents {
 			return EndpointGeminiCachedContents
+		}
+		if inbound == EndpointGeminiInteractions || inbound == EndpointAudioSpeech {
+			return EndpointGeminiInteractions
 		}
 		return EndpointGeminiModels
 
