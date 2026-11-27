@@ -555,6 +555,7 @@ func (h *GroupHandler) GetAll(c *gin.Context) {
 	}
 	platform := c.Query("platform")
 	includeInactive := c.Query("include_inactive") == "true"
+	includeCounts := parseBoolQueryWithDefault(c.Query("include_counts"), true)
 
 	var groups []service.Group
 	var err error
@@ -563,6 +564,14 @@ func (h *GroupHandler) GetAll(c *gin.Context) {
 		groups, err = h.adminService.GetAllGroupsIncludingInactive(c.Request.Context())
 	} else if platform != "" {
 		groups, err = h.adminService.GetAllGroupsByPlatform(c.Request.Context(), platform)
+	} else if !includeCounts {
+		if reader, ok := h.adminService.(interface {
+			GetAllGroupsWithoutCounts(context.Context) ([]service.Group, error)
+		}); ok {
+			groups, err = reader.GetAllGroupsWithoutCounts(c.Request.Context())
+		} else {
+			groups, err = h.adminService.GetAllGroups(c.Request.Context())
+		}
 	} else {
 		groups, err = h.adminService.GetAllGroups(c.Request.Context())
 	}

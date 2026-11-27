@@ -695,18 +695,30 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 	var accounts []service.Account
 	var total int64
-	if poolID == 0 {
+	listFilter := service.AccountListFilter{
+		Platform:    platform,
+		Type:        accountType,
+		Status:      status,
+		Search:      search,
+		GroupID:     groupID,
+		PrivacyMode: privacyMode,
+		PoolID:      poolID,
+	}
+	useLiteRepo := lite && !includeSchedulerScore && !h.isSimpleMode()
+	if useLiteRepo {
+		if liteSvc, ok := h.adminService.(interface {
+			ListAccountsFilteredLite(context.Context, int, int, service.AccountListFilter, string, string) ([]service.Account, int64, error)
+		}); ok {
+			accounts, total, err = liteSvc.ListAccountsFilteredLite(c.Request.Context(), page, pageSize, listFilter, sortBy, sortOrder)
+		} else if poolID == 0 {
+			accounts, total, err = h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+		} else {
+			accounts, total, err = h.adminService.ListAccountsFiltered(c.Request.Context(), page, pageSize, listFilter, sortBy, sortOrder)
+		}
+	} else if poolID == 0 {
 		accounts, total, err = h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
 	} else {
-		accounts, total, err = h.adminService.ListAccountsFiltered(c.Request.Context(), page, pageSize, service.AccountListFilter{
-			Platform:    platform,
-			Type:        accountType,
-			Status:      status,
-			Search:      search,
-			GroupID:     groupID,
-			PrivacyMode: privacyMode,
-			PoolID:      poolID,
-		}, sortBy, sortOrder)
+		accounts, total, err = h.adminService.ListAccountsFiltered(c.Request.Context(), page, pageSize, listFilter, sortBy, sortOrder)
 	}
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -800,32 +812,24 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	// 始终获取窗口费用（PostgreSQL 聚合查询）
-	if len(windowCostAccountIDs) > 0 {
-		windowCosts = make(map[int64]float64)
-		var mu sync.Mutex
-		g, gctx := errgroup.WithContext(c.Request.Context())
-		g.SetLimit(10) // 限制并发数
-
+	// 批量获取窗口费用（优先命中 60s 短缓存，未命中时单条多起点 SQL 聚合，避免 N+1 查 usage_logs）
+	if len(windowCostAccountIDs) > 0 && h.accountUsageService != nil {
+		startByAccount := make(map[int64]time.Time, len(windowCostAccountIDs))
 		for i := range accounts {
 			acc := &accounts[i]
 			if !acc.IsAnthropicOAuthOrSetupToken() || acc.GetWindowCostLimit() <= 0 {
 				continue
 			}
-			accCopy := acc // 闭包捕获
-			g.Go(func() error {
-				// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
-				startTime := accCopy.GetCurrentWindowStartTime()
-				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
-				if err == nil && stats != nil {
-					mu.Lock()
-					windowCosts[accCopy.ID] = stats.StandardCost // 使用标准费用
-					mu.Unlock()
-				}
-				return nil // 不返回错误，允许部分失败
-			})
+			startByAccount[acc.ID] = acc.GetCurrentWindowStartTime()
 		}
-		_ = g.Wait()
+		if statsByAccount, statsErr := h.accountUsageService.GetAccountWindowStatsBatchByStarts(c.Request.Context(), startByAccount); statsErr == nil && len(statsByAccount) > 0 {
+			windowCosts = make(map[int64]float64, len(statsByAccount))
+			for accountID, stats := range statsByAccount {
+				if stats != nil {
+					windowCosts[accountID] = stats.StandardCost // 使用标准费用
+				}
+			}
+		}
 	}
 
 	// Build response with concurrency info
@@ -941,12 +945,11 @@ func buildAccountsListETag[T any](
 		Lite:        lite,
 		Items:       items,
 	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
+	hasher := sha256.New()
+	if err := json.NewEncoder(hasher).Encode(payload); err != nil {
 		return ""
 	}
-	sum := sha256.Sum256(raw)
-	return "\"" + hex.EncodeToString(sum[:]) + "\""
+	return "\"" + hex.EncodeToString(hasher.Sum(nil)) + "\""
 }
 
 func ifNoneMatchMatched(ifNoneMatch, etag string) bool {
@@ -2728,8 +2731,9 @@ type BatchTodayStatsRequest struct {
 }
 
 type BatchUsageRequest struct {
-	AccountIDs []int64 `json:"account_ids" binding:"required"`
-	Force      bool    `json:"force"`
+	AccountIDs   []int64 `json:"account_ids" binding:"required"`
+	Force        bool    `json:"force"`
+	SnapshotOnly bool    `json:"snapshot_only"`
 }
 
 // GetBatchTodayStats 批量获取多个账号的今日统计。
@@ -2796,7 +2800,10 @@ func (h *AccountHandler) GetBatchUsage(c *gin.Context) {
 		return
 	}
 
-	usageByAccount, errorsByAccount, err := h.accountUsageService.GetUsageBatch(c.Request.Context(), accountIDs, req.Force)
+	usageByAccount, errorsByAccount, err := h.accountUsageService.GetUsageBatchWithOptions(c.Request.Context(), accountIDs, service.UsageBatchOptions{
+		Force:        req.Force,
+		SnapshotOnly: req.SnapshotOnly,
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

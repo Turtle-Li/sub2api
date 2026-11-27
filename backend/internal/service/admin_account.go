@@ -57,6 +57,27 @@ func (s *adminServiceImpl) ListAccountsFiltered(ctx context.Context, page, pageS
 	return accounts, result.Total, nil
 }
 
+// ListAccountsFilteredLite lists accounts using the repository's lite hydration path
+// (skipping full group entity fetches when only group_ids are required).
+func (s *adminServiceImpl) ListAccountsFilteredLite(ctx context.Context, page, pageSize int, filter AccountListFilter, sortBy, sortOrder string) ([]Account, int64, error) {
+	if filter.GroupID > 0 {
+		if err := s.ValidateAccountGroupBindings(ctx, []int64{filter.GroupID}); err != nil {
+			return nil, 0, err
+		}
+	}
+	if reader, ok := s.accountRepo.(interface {
+		ListWithAccountFilterLite(context.Context, pagination.PaginationParams, AccountListFilter) ([]Account, *pagination.PaginationResult, error)
+	}); ok {
+		params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
+		accounts, result, err := reader.ListWithAccountFilterLite(ctx, params, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+		return accounts, result.Total, nil
+	}
+	return s.ListAccountsFiltered(ctx, page, pageSize, filter, sortBy, sortOrder)
+}
+
 func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, nil

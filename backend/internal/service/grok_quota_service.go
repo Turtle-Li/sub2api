@@ -49,15 +49,61 @@ type GrokQuotaResetResult struct {
 	Message   string `json:"message"`
 }
 
+type grokBillingFlight struct {
+	done   chan struct{}
+	result *GrokQuotaProbeResult
+	err    error
+}
+
 type GrokQuotaService struct {
-	accountRepo    AccountRepository
-	proxyRepo      ProxyRepository
-	tokenProvider  *GrokTokenProvider
-	httpUpstream   HTTPUpstream
-	usageLogRepo   UsageLogRepository
-	settingService *SettingService
-	cfg            *config.Config
-	probeFlight    singleflight.Group
+	accountRepo        AccountRepository
+	proxyRepo          ProxyRepository
+	tokenProvider      *GrokTokenProvider
+	httpUpstream       HTTPUpstream
+	usageLogRepo       UsageLogRepository
+	settingService     *SettingService
+	cfg                *config.Config
+	probeFlight        singleflight.Group
+	billingFlightMu    sync.Mutex
+	billingFlights     map[int64]*grokBillingFlight
+	billingPersistedMu sync.RWMutex
+	onBillingOutcome   func(accountID int64, billing *xai.BillingSummary, persisted bool)
+}
+
+// SetBillingOutcomeHook registers a single authoritative callback invoked inside
+// probeBilling right after UpdateExtra completes (before the shared flight exits):
+// persisted=true publishes the committed billing snapshot (200 or 403) and clears errors;
+// persisted=false publishes a short-lived refresh-failed hint without caching uncommitted data.
+func (s *GrokQuotaService) SetBillingOutcomeHook(fn func(accountID int64, billing *xai.BillingSummary, persisted bool)) {
+	if s == nil {
+		return
+	}
+	s.billingPersistedMu.Lock()
+	s.onBillingOutcome = fn
+	s.billingPersistedMu.Unlock()
+}
+
+// IsBillingProbeInFlight reports whether a shared billing probe flight is currently running for accountID.
+func (s *GrokQuotaService) IsBillingProbeInFlight(accountID int64) bool {
+	if s == nil || accountID <= 0 {
+		return false
+	}
+	s.billingFlightMu.Lock()
+	_, loaded := s.billingFlights[accountID]
+	s.billingFlightMu.Unlock()
+	return loaded
+}
+
+func (s *GrokQuotaService) notifyBillingOutcome(accountID int64, billing *xai.BillingSummary, persisted bool) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	s.billingPersistedMu.RLock()
+	fn := s.onBillingOutcome
+	s.billingPersistedMu.RUnlock()
+	if fn != nil {
+		fn(accountID, billing, persisted)
+	}
 }
 
 func NewGrokQuotaService(
@@ -248,16 +294,81 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 
 // ProbeBilling only calls the xAI billing endpoints. Account usage refreshes
 // use this method so opening the account list never consumes model quota.
+// It shares the singleflight upstream probe with ProbeBillingSnapshotOnly and
+// attaches local usage_logs aggregations only on the active caller path.
 func (s *GrokQuotaService) ProbeBilling(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
+	result, err := s.ProbeBillingSnapshotOnly(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	copied := *result
+	if copied.Billing != nil {
+		now := time.Now().UTC()
+		copied.LocalUsage24h, copied.LocalUsage7d, copied.LocalUsageMonthly = grokLocalUsageForQuota(ctx, s.usageLogRepo, accountID, copied.Billing, now)
+	}
+	return &copied, nil
+}
+
+// ProbeBillingSnapshotOnly refreshes and persists xAI billing state without running
+// local usage_logs aggregations, sharing the same singleflight key as ProbeBilling
+// so concurrent background and manual probes never duplicate upstream calls or overwrite snapshots.
+func (s *GrokQuotaService) ProbeBillingSnapshotOnly(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
 	// 每个调用者在加入共享查询前独立验权，不能继承任务发起者的范围。
 	if s != nil {
 		if err := scopedAccountIDAccess(ctx, s.accountRepo, accountID, "accounts.usage.read", false); err != nil {
 			return nil, err
 		}
 	}
-	return s.runProbeFlight(ctx, "billing:"+strconv.FormatInt(accountID, 10), func(sharedCtx context.Context) (*GrokQuotaProbeResult, error) {
-		return s.probeBilling(sharedCtx, accountID)
-	})
+	return s.runBillingProbeFlight(ctx, accountID)
+}
+
+// runBillingProbeFlight synchronously registers the shared billing flight BEFORE spawning
+// the goroutine or checking ctx.Done(), eliminating any handoff gap when a background worker
+// times out before the goroutine starts, and guaranteeing notifyBillingPersisted happens-before
+// flight removal.
+func (s *GrokQuotaService) runBillingProbeFlight(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
+	if s == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "GROK_QUOTA_NOT_CONFIGURED", "grok quota service is not configured")
+	}
+	s.billingFlightMu.Lock()
+	if s.billingFlights == nil {
+		s.billingFlights = make(map[int64]*grokBillingFlight)
+	}
+	flight, existing := s.billingFlights[accountID]
+	if !existing {
+		flight = &grokBillingFlight{done: make(chan struct{})}
+		s.billingFlights[accountID] = flight
+		baseCtx := context.WithoutCancel(ctx)
+		go func() {
+			defer func() {
+				s.billingFlightMu.Lock()
+				delete(s.billingFlights, accountID)
+				s.billingFlightMu.Unlock()
+				close(flight.done)
+			}()
+			sharedCtx, cancel := context.WithTimeout(baseCtx, grokQuotaUpstreamTimeout+5*time.Second)
+			defer cancel()
+			flight.result, flight.err = s.probeBilling(sharedCtx, accountID, false)
+		}()
+	}
+	s.billingFlightMu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		if flight.result != nil {
+			copied := *flight.result
+			return &copied, flight.err
+		}
+		if flight.err != nil {
+			return nil, flight.err
+		}
+		return nil, infraerrors.New(http.StatusInternalServerError, "GROK_QUOTA_PROBE_RESULT_INVALID", "invalid Grok quota probe result")
+	}
 }
 
 // ProbeMediaEligibility refreshes billing state and evaluates the persisted
@@ -277,9 +388,10 @@ func (s *GrokQuotaService) ProbeMediaEligibility(ctx context.Context, accountID 
 	return eligible, reason, nil
 }
 
-func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
+func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64, includeLocalUsage bool) (*GrokQuotaProbeResult, error) {
 	account, token, proxyURL, err := s.prepareProbe(ctx, accountID)
 	if err != nil {
+		s.notifyBillingOutcome(accountID, nil, false)
 		return nil, err
 	}
 
@@ -315,10 +427,21 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 		billing.WeeklyStatusCode = weekly.status
 		billing.MonthlyStatusCode = monthly.status
 		billing = xai.StampBillingSummary(billing, preferBillingObservationStatus(weekly.status, monthly.status), "billing_probe")
-		if persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{grokBillingExtraKey: billing}); persistErr != nil {
+		persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{grokBillingExtraKey: billing})
+		if persistErr != nil {
 			slog.Warn("grok_billing_failure_persist_failed", "account_id", account.ID, "error", persistErr)
+			s.notifyBillingOutcome(account.ID, nil, false)
+			return nil, probeErr
 		}
-		return nil, probeErr
+		s.notifyBillingOutcome(account.ID, billing, true)
+		return &GrokQuotaProbeResult{
+			Source:     "billing_probe",
+			Billing:    billing,
+			StatusCode: billing.StatusCode,
+			FetchedAt:  time.Now().UTC().Unix(),
+			Persisted:  true,
+			ProbeError: probeErr.Error(),
+		}, probeErr
 	}
 	statusCode := preferSuccessfulBillingStatus(weekly.status, monthly.status, weeklyOK, monthlyOK)
 	billing := xai.MergeBillingProbeResult(previous, weekly.summary, monthly.summary, weeklyOK, monthlyOK)
@@ -330,9 +453,15 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 	})
 	if persistErr != nil {
 		slog.Warn("grok_billing_persist_failed", "account_id", account.ID, "error", persistErr)
+		s.notifyBillingOutcome(account.ID, nil, false)
+	} else {
+		s.notifyBillingOutcome(account.ID, billing, true)
 	}
 	now := time.Now().UTC()
-	localUsage24h, localUsage7d, localUsageMonthly := grokLocalUsageForQuota(ctx, s.usageLogRepo, account.ID, billing, now)
+	var localUsage24h, localUsage7d, localUsageMonthly *WindowStats
+	if includeLocalUsage {
+		localUsage24h, localUsage7d, localUsageMonthly = grokLocalUsageForQuota(ctx, s.usageLogRepo, account.ID, billing, now)
+	}
 	return &GrokQuotaProbeResult{
 		Source:            "billing_probe",
 		Billing:           billing,
@@ -373,6 +502,10 @@ func (s *GrokQuotaService) runProbeFlight(
 		return nil, ctx.Err()
 	case flightResult := <-resultCh:
 		if flightResult.Err != nil {
+			if result, ok := flightResult.Val.(*GrokQuotaProbeResult); ok && result != nil {
+				cloned := *result
+				return &cloned, flightResult.Err
+			}
 			return nil, flightResult.Err
 		}
 		result, ok := flightResult.Val.(*GrokQuotaProbeResult)

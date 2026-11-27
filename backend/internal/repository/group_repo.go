@@ -689,20 +689,9 @@ func groupListOrder(params pagination.PaginationParams) []func(*entsql.Selector)
 }
 
 func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, error) {
-	groups, err := r.client.Group.Query().
-		Where(group.StatusEQ(service.StatusActive)).
-		Order(dbent.Asc(group.FieldSortOrder), dbent.Asc(group.FieldID)).
-		All(ctx)
+	outGroups, groupIDs, err := r.listActiveBase(ctx)
 	if err != nil {
 		return nil, err
-	}
-
-	groupIDs := make([]int64, 0, len(groups))
-	outGroups := make([]service.Group, 0, len(groups))
-	for i := range groups {
-		g := groupEntityToService(groups[i])
-		outGroups = append(outGroups, *g)
-		groupIDs = append(groupIDs, g.ID)
 	}
 
 	counts, err := r.loadAccountCounts(ctx, groupIDs)
@@ -716,6 +705,32 @@ func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, erro
 	}
 
 	return outGroups, nil
+}
+
+// ListActiveWithoutCounts returns active groups without joining accounts to aggregate
+// per-group counts. Used by admin dropdowns/filter bars that only need group metadata.
+func (r *groupRepository) ListActiveWithoutCounts(ctx context.Context) ([]service.Group, error) {
+	outGroups, _, err := r.listActiveBase(ctx)
+	return outGroups, err
+}
+
+func (r *groupRepository) listActiveBase(ctx context.Context) ([]service.Group, []int64, error) {
+	groups, err := r.client.Group.Query().
+		Where(group.StatusEQ(service.StatusActive)).
+		Order(dbent.Asc(group.FieldSortOrder), dbent.Asc(group.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	groupIDs := make([]int64, 0, len(groups))
+	outGroups := make([]service.Group, 0, len(groups))
+	for i := range groups {
+		g := groupEntityToService(groups[i])
+		outGroups = append(outGroups, *g)
+		groupIDs = append(groupIDs, g.ID)
+	}
+	return outGroups, groupIDs, nil
 }
 
 func (r *groupRepository) ListActiveIDs(ctx context.Context) ([]int64, error) {

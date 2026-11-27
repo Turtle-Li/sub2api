@@ -387,6 +387,86 @@ func (r *usageLogRepository) GetAccountWindowStatsBatch(ctx context.Context, acc
 	return result, nil
 }
 
+// GetAccountWindowStatsByStartsBatch aggregates usage_logs for multiple accounts
+// that each have an independent window start time (e.g. Anthropic 5h rolling windows)
+// in a single query, leveraging idx_usage_logs_account_created_at without N+1 DB pressure.
+func (r *usageLogRepository) GetAccountWindowStatsByStartsBatch(ctx context.Context, startByAccount map[int64]time.Time) (map[int64]*usagestats.AccountStats, error) {
+	result := make(map[int64]*usagestats.AccountStats, len(startByAccount))
+	if len(startByAccount) == 0 {
+		return result, nil
+	}
+
+	accountIDs := make([]int64, 0, len(startByAccount))
+	startTimes := make([]time.Time, 0, len(startByAccount))
+	for accountID, startTime := range startByAccount {
+		if accountID <= 0 {
+			continue
+		}
+		accountIDs = append(accountIDs, accountID)
+		startTimes = append(startTimes, startTime)
+	}
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+
+	// Use CROSS JOIN LATERAL so PostgreSQL performs a targeted index range scan
+	// on idx_usage_logs_account_created_at per account instead of risking a full-table Hash Join.
+	query := `
+		WITH req(account_id, start_time) AS (
+			SELECT * FROM UNNEST($1::bigint[], $2::timestamptz[])
+		)
+		SELECT
+			req.account_id,
+			agg.requests,
+			agg.tokens,
+			agg.cost,
+			agg.standard_cost,
+			agg.user_cost
+		FROM req
+		CROSS JOIN LATERAL (
+			SELECT
+				COUNT(*) AS requests,
+				COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) AS tokens,
+				COALESCE(SUM(COALESCE(u.account_stats_cost, u.total_cost) * COALESCE(u.account_rate_multiplier, 1)), 0) AS cost,
+				COALESCE(SUM(u.total_cost), 0) AS standard_cost,
+				COALESCE(SUM(u.actual_cost), 0) AS user_cost
+			FROM usage_logs u
+			WHERE u.account_id = req.account_id
+				AND u.created_at >= req.start_time
+		) agg
+	`
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), pq.Array(startTimes))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var accountID int64
+		stats := &usagestats.AccountStats{}
+		if err := rows.Scan(
+			&accountID,
+			&stats.Requests,
+			&stats.Tokens,
+			&stats.Cost,
+			&stats.StandardCost,
+			&stats.UserCost,
+		); err != nil {
+			return nil, err
+		}
+		result[accountID] = stats
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, accountID := range accountIDs {
+		if _, ok := result[accountID]; !ok {
+			result[accountID] = &usagestats.AccountStats{}
+		}
+	}
+	return result, nil
+}
+
 // GetGeminiUsageTotalsBatch 批量聚合 Gemini 账号在窗口内的 Pro/Flash 请求与用量。
 // 模型分类规则与 service.geminiModelClassFromName 一致：model 包含 flash/lite 视为 flash，其余视为 pro。
 func (r *usageLogRepository) GetGeminiUsageTotalsBatch(ctx context.Context, accountIDs []int64, startTime, endTime time.Time) (map[int64]service.GeminiUsageTotals, error) {

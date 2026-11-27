@@ -823,6 +823,22 @@ describe('AccountUsageCell', () => {
       wrapper.unmount()
     })
 
+    it('renders explicit queue-timeout retry hint when batchedUsageError carries a specific message', async () => {
+      const hint = 'Quota refresh timed out in queue; click refresh to retry'
+      const wrapper = mount(AccountUsageCell, {
+        props: {
+          account: makeAccount({ id: 8104, platform: 'openai', type: 'oauth' }),
+          batchedUsage: snapshot(),
+          batchedUsageError: hint,
+          requestBatchedUsage: vi.fn()
+        },
+        global: { stubs }
+      })
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toContain(hint)
+      wrapper.unmount()
+    })
+
     it('shows local usage with an unknown percentage when no quota has been fetched', async () => {
       getUsage.mockResolvedValue({
         ...snapshot(), updated_at: null,

@@ -379,13 +379,6 @@ const form = reactive({
   enable_grease: false
 })
 
-// Load profiles when dialog opens
-watch(() => props.show, (newVal) => {
-  if (newVal) {
-    loadProfiles()
-  }
-})
-
 const loadProfiles = async () => {
   loading.value = true
   try {
@@ -397,6 +390,13 @@ const loadProfiles = async () => {
     loading.value = false
   }
 }
+
+// Load profiles when dialog opens (placed after loadProfiles to avoid TDZ on immediate lazy-mount)
+watch(() => props.show, (newVal) => {
+  if (newVal) {
+    loadProfiles()
+  }
+}, { immediate: true })
 
 const resetForm = () => {
   form.name = ''

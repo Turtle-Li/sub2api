@@ -1319,3 +1319,60 @@ func TestShouldAutoPauseGrokAccountByQuota(t *testing.T) {
 		})
 	}
 }
+
+func TestGrokQuotaServiceProbeBillingAndSnapshotOnlyShareSingleflight(t *testing.T) {
+	t.Parallel()
+
+	account := healthyGrokQuotaOAuthAccount(56)
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	usageRepo := &stubMultiStartWindowUsageRepo{
+		statsByID: map[int64]*usagestats.AccountStats{
+			account.ID: {Requests: 3, Tokens: 300, Cost: 0.3, StandardCost: 0.3, UserCost: 0.3},
+		},
+	}
+	billingStarted := make(chan struct{})
+	billingRelease := make(chan struct{})
+	upstream := &grokHybridUpstream{billingStarted: billingStarted, billingRelease: billingRelease}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil, usageRepo)
+
+	type probeOutcome struct {
+		result *GrokQuotaProbeResult
+		err    error
+	}
+	snapshotOutcome := make(chan probeOutcome, 1)
+	activeOutcome := make(chan probeOutcome, 1)
+
+	go func() {
+		result, err := svc.ProbeBillingSnapshotOnly(context.Background(), account.ID)
+		snapshotOutcome <- probeOutcome{result: result, err: err}
+	}()
+	<-billingStarted
+	go func() {
+		result, err := svc.ProbeBilling(context.Background(), account.ID)
+		activeOutcome <- probeOutcome{result: result, err: err}
+	}()
+	time.Sleep(25 * time.Millisecond)
+	close(billingRelease)
+
+	snapRes := <-snapshotOutcome
+	actRes := <-activeOutcome
+	require.NoError(t, snapRes.err)
+	require.NoError(t, actRes.err)
+	require.NotNil(t, snapRes.result.Billing)
+	require.NotNil(t, actRes.result.Billing)
+	// Snapshot-only background path never populates or queries local usage_logs aggregations.
+	require.Nil(t, snapRes.result.LocalUsage24h)
+	require.Nil(t, snapRes.result.LocalUsage7d)
+	require.Nil(t, snapRes.result.LocalUsageMonthly)
+
+	requests, _ := upstream.snapshot()
+	billingCalls := 0
+	for _, req := range requests {
+		if req.URL.Path == "/v1/billing" {
+			billingCalls++
+		}
+	}
+	require.Equal(t, 2, billingCalls, "concurrent ProbeBillingSnapshotOnly + ProbeBilling must share one weekly+monthly billing probe")
+}

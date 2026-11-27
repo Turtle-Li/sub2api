@@ -14,9 +14,25 @@
           <AccountTableActions
             :loading="loading"
             @refresh="handleManualRefresh"
-            @create="showCreate = true"
+            @create="openCreateModal"
           >
             <template #after>
+              <!-- Compact monitoring view toggle (Name / Concurrency / Status / Quota / Actions) -->
+              <button
+                type="button"
+                @click="toggleCompactView"
+                class="btn px-2 md:px-3"
+                :class="compactViewEnabled ? 'btn-primary' : 'btn-secondary'"
+                :title="t('admin.accounts.compactViewTip')"
+                :aria-pressed="compactViewEnabled"
+                data-testid="accounts-compact-view-toggle"
+              >
+                <Icon name="grid" size="sm" class="md:mr-1.5" />
+                <span class="hidden md:inline">
+                  {{ compactViewEnabled ? t('admin.accounts.compactView') : t('admin.accounts.fullView') }}
+                </span>
+              </button>
+
               <!-- Auto Refresh Dropdown -->
               <div class="relative" ref="autoRefreshDropdownRef">
                 <button
@@ -127,6 +143,12 @@
                           {{ t('admin.accounts.toolActions') }}
                         </div>
                       </div>
+                      <button class="account-tools-menu-item" @click="handleLiveRefreshPageUsage">
+                        <span class="account-tools-menu-icon bg-cyan-50 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-300">
+                          <Icon name="refresh" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.refreshPageUsageLive') }}</span>
+                      </button>
                       <button class="account-tools-menu-item" @click="openErrorPassthrough">
                         <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
                           <Icon name="shield" size="sm" />
@@ -148,13 +170,20 @@
                           </span>
                           <Icon name="grid" size="sm" class="text-gray-400" />
                         </div>
+                        <p
+                          v-if="compactViewEnabled"
+                          class="mt-1 text-xs text-amber-600 dark:text-amber-400"
+                        >
+                          {{ t('admin.accounts.compactViewColumnsDisabledHint') }}
+                        </p>
                       </div>
                       <div class="grid grid-cols-1 gap-1">
                         <button
                           v-for="col in toggleableColumns"
                           :key="col.key"
+                          :disabled="compactViewEnabled"
                           @click="toggleColumn(col.key)"
-                          class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700"
+                          class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent dark:text-gray-200 dark:hover:bg-dark-700 dark:disabled:hover:bg-transparent"
                         >
                           <span class="truncate">{{ col.label }}</span>
                           <Icon v-if="isColumnVisible(col.key)" name="check" size="sm" class="text-primary-500" />
@@ -490,9 +519,10 @@
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
     <!-- Pool modal is declared before the account modals so editing a member opens on top of it. -->
-    <!-- Keep the pool modal mounted up front: dialogs share one z-index, so the
-         pool form/edit-account dialogs declared below must teleport after it. -->
+    <!-- Lazy-loaded on first open via loadedModals; once mounted before child dialogs open,
+         teleport order stays identical so edit/form dialogs always render above the pool modal. -->
     <AccountPoolModal
+      v-if="loadedModals.poolModal"
       ref="poolModalRef"
       :show="showPoolModal"
       :pool-id="activePoolId"
@@ -510,6 +540,7 @@
       @account-menu="openMenu"
     />
     <AccountPoolFormDialog
+      v-if="loadedModals.poolForm"
       :show="showPoolForm"
       :pool="editingPool"
       :default-platform="params.platform || undefined"
@@ -517,14 +548,16 @@
       @saved="handlePoolSaved"
     />
     <AccountPoolAssignDialog
+      v-if="loadedModals.poolAssign"
       :show="showAssignToPool"
       :platform="assignPlatform"
       :account-ids="selIds"
       @close="showAssignToPool = false"
       @assigned="handleAssignedToPool"
     />
-    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
+    <CreateAccountModal v-if="loadedModals.create" :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
     <EditAccountModal
+      v-if="loadedModals.edit"
       :show="showEdit"
       :account="edAcc"
       :proxies="proxies"
@@ -534,14 +567,15 @@
       @updated="handleAccountUpdated"
       @pool-changed="handleAccountPoolChanged"
     />
-    <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
-    <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
-    <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
-    <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
+    <ReAuthAccountModal v-if="loadedModals.reAuth" :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
+    <AccountTestModal v-if="loadedModals.test" :show="showTest" :account="testingAcc" @close="closeTestModal" />
+    <AccountStatsModal v-if="loadedModals.stats" :show="showStats" :account="statsAcc" @close="closeStatsModal" />
+    <ScheduledTestsPanel v-if="loadedModals.schedule" :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @cline-upstream="handleClineUpstream" />
-    <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
-    <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
+    <SyncFromCrsModal v-if="loadedModals.sync" :show="showSync" @close="showSync = false" @synced="reload" />
+    <ImportDataModal v-if="loadedModals.importData" :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
+      v-if="loadedModals.bulkEdit"
       :show="showBulkEdit"
       :account-ids="selIds"
       :selected-platforms="selPlatforms"
@@ -552,7 +586,7 @@
       @close="showBulkEdit = false"
       @updated="handleBulkUpdated"
     />
-    <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
+    <TempUnschedStatusModal v-if="loadedModals.tempUnsched" :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
     <ConfirmDialog :show="showCreateShadowDialog" :title="t('admin.accounts.createSparkShadow')" :message="t('admin.accounts.createSparkShadowConfirm', { name: creatingShadowAcc?.name })" @confirm="confirmCreateSparkShadow" @cancel="showCreateShadowDialog = false" />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
@@ -561,15 +595,15 @@
         <span>{{ t('admin.accounts.dataExportIncludeProxies') }}</span>
       </label>
     </ConfirmDialog>
-    <ErrorPassthroughRulesModal :show="showErrorPassthrough" @close="showErrorPassthrough = false" />
-    <TLSFingerprintProfilesModal :show="showTLSFingerprintProfiles" @close="showTLSFingerprintProfiles = false" />
+    <ErrorPassthroughRulesModal v-if="loadedModals.errorPassthrough" :show="showErrorPassthrough" @close="showErrorPassthrough = false" />
+    <TLSFingerprintProfilesModal v-if="loadedModals.tlsProfiles" :show="showTLSFingerprintProfiles" @close="showTLSFingerprintProfiles = false" />
     <TotpStepUpDialog :controller="accountExportStepUp" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { isPaidFallback } from '@/utils/paidFallback'
-import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
+import { ref, reactive, computed, defineAsyncComponent, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -588,21 +622,12 @@ import DataTable from '@/components/common/DataTable.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal } from '@/components/account'
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountPoolStrip from '@/components/admin/account/AccountPoolStrip.vue'
-import AccountPoolModal from '@/components/admin/account/AccountPoolModal.vue'
-import AccountPoolFormDialog from '@/components/admin/account/AccountPoolFormDialog.vue'
-import AccountPoolAssignDialog from '@/components/admin/account/AccountPoolAssignDialog.vue'
 import type { AccountPool } from '@/api/admin/accountPools'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
-import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
-import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
-import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
-import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
-import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
@@ -614,10 +639,10 @@ import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
 import AccountFallbackCell from '@/components/account/AccountFallbackCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
-import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
-import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
 import { buildAccountUsageRefreshKey, buildGrokUsageRefreshKey, isOpenAICodexUsageAccount } from '@/utils/accountUsageRefresh'
+import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
+import { isMultiProtocolApiKeyPlatform } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -626,13 +651,116 @@ import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatMultiplier } from '@/utils/formatters'
 import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot } from '@/types'
 
+// Heavy modals are code-split and loaded only when first opened, keeping the
+// initial /admin/accounts route chunk small (excluding ~30k LOC + chart.js).
+const modalLoaders = {
+  create: () => import('@/components/account/CreateAccountModal.vue'),
+  edit: () => import('@/components/account/EditAccountModal.vue'),
+  bulkEdit: () => import('@/components/account/BulkEditAccountModal.vue'),
+  sync: () => import('@/components/account/SyncFromCrsModal.vue'),
+  tempUnsched: () => import('@/components/account/TempUnschedStatusModal.vue'),
+  importData: () => import('@/components/admin/account/ImportDataModal.vue'),
+  reAuth: () => import('@/components/admin/account/ReAuthAccountModal.vue'),
+  test: () => import('@/components/admin/account/AccountTestModal.vue'),
+  stats: () => import('@/components/admin/account/AccountStatsModal.vue'),
+  schedule: () => import('@/components/admin/account/ScheduledTestsPanel.vue'),
+  poolModal: () => import('@/components/admin/account/AccountPoolModal.vue'),
+  poolForm: () => import('@/components/admin/account/AccountPoolFormDialog.vue'),
+  poolAssign: () => import('@/components/admin/account/AccountPoolAssignDialog.vue'),
+  errorPassthrough: () => import('@/components/admin/ErrorPassthroughRulesModal.vue'),
+  tlsProfiles: () => import('@/components/admin/TLSFingerprintProfilesModal.vue')
+} as const
+type LazyModalKey = keyof typeof modalLoaders
+
+const CreateAccountModal = defineAsyncComponent(modalLoaders.create)
+const EditAccountModal = defineAsyncComponent(modalLoaders.edit)
+const BulkEditAccountModal = defineAsyncComponent(modalLoaders.bulkEdit)
+const SyncFromCrsModal = defineAsyncComponent(modalLoaders.sync)
+const TempUnschedStatusModal = defineAsyncComponent(modalLoaders.tempUnsched)
+const ImportDataModal = defineAsyncComponent(modalLoaders.importData)
+const ReAuthAccountModal = defineAsyncComponent(modalLoaders.reAuth)
+const AccountTestModal = defineAsyncComponent(modalLoaders.test)
+const AccountStatsModal = defineAsyncComponent(modalLoaders.stats)
+const ScheduledTestsPanel = defineAsyncComponent(modalLoaders.schedule)
+const AccountPoolModal = defineAsyncComponent(modalLoaders.poolModal)
+const AccountPoolFormDialog = defineAsyncComponent(modalLoaders.poolForm)
+const AccountPoolAssignDialog = defineAsyncComponent(modalLoaders.poolAssign)
+const ErrorPassthroughRulesModal = defineAsyncComponent(modalLoaders.errorPassthrough)
+const TLSFingerprintProfilesModal = defineAsyncComponent(modalLoaders.tlsProfiles)
+
+const loadedModals = reactive<Record<LazyModalKey, boolean>>({
+  create: false,
+  edit: false,
+  bulkEdit: false,
+  sync: false,
+  tempUnsched: false,
+  importData: false,
+  reAuth: false,
+  test: false,
+  stats: false,
+  schedule: false,
+  poolModal: false,
+  poolForm: false,
+  poolAssign: false,
+  errorPassthrough: false,
+  tlsProfiles: false
+})
+
+// Mark modal as mounted so defineAsyncComponent loads its chunk only on first open.
+// Individual modal show-watchers are placed after their handlers and use { immediate: true } to initialize on mount.
+const ensureModalReady = (key: LazyModalKey): void => {
+  if (!loadedModals[key]) {
+    loadedModals[key] = true
+  }
+}
+
 const { t } = useI18n()
 const appStore = useAppStore()
 const router = useRouter()
 const authStore = useAuthStore()
 
 const proxies = ref<AccountProxy[]>([])
+let proxiesLoaded = false
+let proxiesInFlight: Promise<void> | null = null
+const ensureProxiesLoaded = async () => {
+  if (proxiesLoaded) return
+  if (proxiesInFlight) return proxiesInFlight
+  if (!adminAPI.proxies?.getAll) return
+  proxiesInFlight = Promise.resolve()
+    .then(() => adminAPI.proxies.getAll())
+    .then((list) => {
+      proxies.value = list
+      proxiesLoaded = true
+    })
+    .catch((error) => {
+      console.error('Failed to load proxies:', error)
+    })
+    .finally(() => {
+      proxiesInFlight = null
+    })
+  return proxiesInFlight
+}
 const groups = ref<AdminGroup[]>([])
+let groupCountsLoaded = false
+let groupCountsInFlight: Promise<void> | null = null
+const ensureGroupCountsLoaded = async () => {
+  if (groupCountsLoaded) return
+  if (groupCountsInFlight) return groupCountsInFlight
+  if (!adminAPI.groups?.getAll) return
+  groupCountsInFlight = Promise.resolve()
+    .then(() => adminAPI.groups.getAll())
+    .then((list) => {
+      groups.value = list
+      groupCountsLoaded = true
+    })
+    .catch((error) => {
+      console.error('Failed to load group counts:', error)
+    })
+    .finally(() => {
+      groupCountsInFlight = null
+    })
+  return groupCountsInFlight
+}
 const groupsByID = computed(() => new Map(groups.value.map(group => [group.id, group])))
 const accountGroupsForRow = (account: Pick<AccountListItem, 'group_ids'>): AdminGroup[] => {
   const groupIDs = account.group_ids ?? []
@@ -742,6 +870,36 @@ const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
 // One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavy backend scoring.
 const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
 const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
+const COMPACT_VIEW_STORAGE_KEY = 'account-compact-view'
+const COMPACT_VIEW_COLUMNS = new Set(['select', 'name', 'capacity', 'status', 'usage', 'actions'])
+const loadInitialCompactView = (): boolean => {
+  try {
+    return localStorage.getItem(COMPACT_VIEW_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const compactViewEnabled = ref<boolean>(typeof window === 'undefined' ? false : loadInitialCompactView())
+const toggleCompactView = () => {
+  const prevIncludeSchedulerScore = shouldIncludeSchedulerScore()
+  const next = !compactViewEnabled.value
+  compactViewEnabled.value = next
+  try {
+    localStorage.setItem(COMPACT_VIEW_STORAGE_KEY, next ? '1' : '0')
+  } catch {
+    // Ignore storage failures.
+  }
+  syncAccountListDerivedParams()
+  if (!prevIncludeSchedulerScore && shouldIncludeSchedulerScore()) {
+    void load()
+  }
+  if (!next && isColumnVisible('upstream_billing_rate') && upstreamBillingProbeGloballyEnabled.value === undefined) {
+    void loadUpstreamBillingProbeGlobalState()
+  }
+  if (isColumnVisible('today_stats') || isColumnVisible('usage')) {
+    void refreshTodayStatsBatch()
+  }
+}
 
 // Account filter settings
 const ACCOUNT_FILTER_STORAGE_KEY = 'account-filter-values'
@@ -838,10 +996,125 @@ const usageBatchLoadingByAccountId = ref<Record<string, boolean>>({})
 const usageBatchRequestTokenByAccountId = ref<Record<string, number>>({})
 const usageBatchCache = new Map<number, { data: AccountUsageInfo; ts: number; refreshKey: string }>()
 const USAGE_BATCH_CACHE_TTL = 5 * 60 * 1000
-const pendingUsageBatchIds = new Set<number>()
+// Separate bounded retry budgets for waiting on a background slot ("deferred")
+// vs waiting on an enqueued upstream probe ("refreshing"), so a task admitted on
+// the final deferred check still gets a full refresh observation budget.
+// Shared contract with backend global bounded queue (size=100, conc=2, hard slot cap=30s):
+// Global worst-case drain for a full queue + 2 running slots is ((100 + 2) / 2) * 30s = 1530s.
+// Fast ramp [2.5, 5, 10, 15, 20, 25]s (77.5s) + 52 steady 30s polls (1560s) = 1637.5s > 1530s,
+// so any admitted account is observed even behind 80+ queued items from other pages/admins.
+const SNAPSHOT_REFRESHING_INITIAL_DELAYS_MS = [2500, 5000, 10000, 15000, 20000, 25000] as const
+const SNAPSHOT_REFRESHING_STEADY_DELAY_MS = 30_000
+const SNAPSHOT_REFRESHING_MAX_STEADY_POLLS = 52
+const SNAPSHOT_DEFERRED_RETRY_DELAYS_MS = [
+  2500, 5000, 10000, 15000, 30000, 30000, 30000, 30000, 30000, 30000
+] as const
+
+const getSnapshotRetrySchedule = (
+  retryKind: 'deferred' | 'refreshing',
+  attempt: number
+): { maxAttempts: number; delay: number } => {
+  if (retryKind === 'deferred') {
+    const maxAttempts = SNAPSHOT_DEFERRED_RETRY_DELAYS_MS.length
+    const delay = SNAPSHOT_DEFERRED_RETRY_DELAYS_MS[Math.min(attempt, maxAttempts - 1)]
+    return { maxAttempts, delay }
+  }
+  const maxAttempts = SNAPSHOT_REFRESHING_INITIAL_DELAYS_MS.length + SNAPSHOT_REFRESHING_MAX_STEADY_POLLS
+  const delay = attempt < SNAPSHOT_REFRESHING_INITIAL_DELAYS_MS.length
+    ? SNAPSHOT_REFRESHING_INITIAL_DELAYS_MS[attempt]
+    : SNAPSHOT_REFRESHING_STEADY_DELAY_MS
+  return { maxAttempts, delay }
+}
+const pendingSnapshotUsageIds = new Set<number>()
+const pendingForcedUsageIds = new Set<number>()
+const deferredSnapshotRetryCountByAccountId = new Map<number, number>()
+const refreshingSnapshotRetryCountByAccountId = new Map<number, number>()
+const coldSnapshotRetryTimers = new Map<number, ReturnType<typeof setTimeout>>()
 let usageBatchFlushTimer: ReturnType<typeof setTimeout> | null = null
-let queuedUsageBatchForce = false
 let usageBatchRequestToken = 0
+let isViewUnmounted = false
+
+const clearColdSnapshotRetry = (accountID: number) => {
+  const timer = coldSnapshotRetryTimers.get(accountID)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    coldSnapshotRetryTimers.delete(accountID)
+  }
+  deferredSnapshotRetryCountByAccountId.delete(accountID)
+  refreshingSnapshotRetryCountByAccountId.delete(accountID)
+}
+
+const clearAllColdSnapshotRetries = () => {
+  for (const timer of coldSnapshotRetryTimers.values()) {
+    clearTimeout(timer)
+  }
+  coldSnapshotRetryTimers.clear()
+  deferredSnapshotRetryCountByAccountId.clear()
+  refreshingSnapshotRetryCountByAccountId.clear()
+}
+
+const isPendingColdSnapshotUsage = (usage: AccountUsageInfo | null | undefined): boolean => {
+  if (!usage || usage.source !== 'snapshot') return false
+  const hasAntigravityQuota = Boolean(
+    (usage.antigravity_quota && Object.keys(usage.antigravity_quota).length > 0) ||
+    (usage.antigravity_quota_groups && usage.antigravity_quota_groups.length > 0)
+  )
+  const hasWindowQuota = Boolean(
+    usage.five_hour ||
+    usage.seven_day ||
+    usage.seven_day_sonnet ||
+    usage.seven_day_fable ||
+    usage.thirty_day ||
+    usage.gemini_shared_daily ||
+    usage.gemini_pro_daily ||
+    usage.gemini_flash_daily ||
+    usage.gemini_shared_minute ||
+    usage.gemini_pro_minute ||
+    usage.gemini_flash_minute ||
+    usage.grok_request_quota ||
+    usage.grok_token_quota ||
+    usage.grok_local_usage ||
+    usage.grok_billing
+  )
+  return !hasAntigravityQuota && !hasWindowQuota
+}
+
+const getSnapshotRefreshRetryKind = (usage: AccountUsageInfo | null | undefined): 'deferred' | 'refreshing' | null => {
+  if (!usage) return null
+  if (usage.snapshot_refresh_state === 'deferred') return 'deferred'
+  if (usage.snapshot_refresh_state === 'refreshing') return 'refreshing'
+  return isPendingColdSnapshotUsage(usage) ? 'refreshing' : null
+}
+
+const scheduleColdSnapshotReRead = (accountID: number, expectedToken: number, retryKind: 'deferred' | 'refreshing'): boolean => {
+  if (isViewUnmounted) return false
+  const budgetMap = retryKind === 'deferred'
+    ? deferredSnapshotRetryCountByAccountId
+    : refreshingSnapshotRetryCountByAccountId
+  const attempts = budgetMap.get(accountID) ?? 0
+  const { maxAttempts, delay } = getSnapshotRetrySchedule(retryKind, attempts)
+  if (attempts >= maxAttempts) return false
+  const existingTimer = coldSnapshotRetryTimers.get(accountID)
+  if (existingTimer !== undefined) {
+    clearTimeout(existingTimer)
+    coldSnapshotRetryTimers.delete(accountID)
+  }
+  const timer = setTimeout(() => {
+    coldSnapshotRetryTimers.delete(accountID)
+    if (isViewUnmounted) return
+    if ((usageBatchRequestTokenByAccountId.value[String(accountID)] ?? 0) !== expectedToken) return
+    const account = accounts.value.find((item) => item.id === accountID)
+    if (!account) {
+      clearColdSnapshotRetry(accountID)
+      return
+    }
+    // Consume budget only when a retry actually fires so superseded timers never burn retries.
+    budgetMap.set(accountID, (budgetMap.get(accountID) ?? 0) + 1)
+    queueBatchedUsage(account, { force: false, silent: true })
+  }, delay)
+  coldSnapshotRetryTimers.set(accountID, timer)
+  return true
+}
 
 const buildDefaultTodayStats = (): WindowStats => ({
   requests: 0,
@@ -851,11 +1124,23 @@ const buildDefaultTodayStats = (): WindowStats => ({
   user_cost: 0
 })
 
+const isGeminiThirdPartyApiKey = (account: Account) => {
+  if (account.platform !== 'gemini' || account.type !== 'apikey') return false
+  const creds = account.credentials as { base_url?: string } | undefined
+  return !isOfficialGeminiBaseUrl(creds?.base_url)
+}
+
+const isGeminiVertex = (account: Account) => {
+  return account.platform === 'gemini' && account.type === 'service_account'
+}
+
 const accountSupportsBatchUsage = (account: Account) => {
   if (account.platform === 'anthropic') {
     return account.type === 'oauth' || account.type === 'setup-token'
   }
-  if (account.platform === 'gemini') return true
+  if (account.platform === 'gemini') {
+    return !isGeminiThirdPartyApiKey(account) && !isGeminiVertex(account)
+  }
   if (account.platform === 'antigravity') return account.type === 'oauth'
   if (account.platform === 'openai') return isOpenAICodexUsageAccount(account)
   if (account.platform === 'grok') return account.type === 'oauth'
@@ -886,23 +1171,21 @@ const handleAccountUsageLoaded = (accountID: number, usage: AccountUsageInfo) =>
   setUsageBatchState(accountID, usage, null)
 }
 
-const flushQueuedUsageBatch = async () => {
-  usageBatchFlushTimer = null
-  const accountIDs = Array.from(pendingUsageBatchIds)
-  const force = queuedUsageBatchForce
+const executeUsageBatchRequest = async (accountIDs: number[], force: boolean) => {
+  if (isViewUnmounted || accountIDs.length === 0) return
   const refreshKeys = new Map(accounts.value.map(account => [account.id, buildAccountUsageRefreshKey(account)]))
-  pendingUsageBatchIds.clear()
-  queuedUsageBatchForce = false
-
-  if (accountIDs.length === 0) return
-
   const requestTokensByAccount = accountIDs.reduce<Record<string, number>>((acc, accountID) => {
     acc[String(accountID)] = usageBatchRequestTokenByAccountId.value[String(accountID)] ?? 0
     return acc
   }, {})
 
   try {
-    const result = await adminAPI.accounts.getBatchUsage(accountIDs, force)
+    const result = await adminAPI.accounts.getBatchUsage(
+      accountIDs,
+      force,
+      { snapshotOnly: !force }
+    )
+    if (isViewUnmounted) return
 
     const usageMap = result.usage ?? {}
     const errorMap = result.errors ?? {}
@@ -920,10 +1203,22 @@ const flushQueuedUsageBatch = async () => {
       nextUsage[key] = usage
       nextErrors[key] = errorMap[key] ?? null
       nextLoading[key] = false
-      if (usage) {
+      const retryKind = getSnapshotRefreshRetryKind(usage)
+      const isRefreshFailed = usage?.error_code === 'quota_refresh_failed'
+      if (usage && !retryKind && !isRefreshFailed) {
+        clearColdSnapshotRetry(accountID)
         usageBatchCache.set(accountID, { data: usage, ts: now, refreshKey: refreshKeys.get(accountID) ?? '' })
       } else {
         usageBatchCache.delete(accountID)
+        if (!force && retryKind) {
+          const scheduled = scheduleColdSnapshotReRead(accountID, requestTokensByAccount[key], retryKind)
+          if (!scheduled && !nextErrors[key]) {
+            // Surface explicit retry hint when retry budget is exhausted instead of silently leaving stale/blank UI.
+            nextErrors[key] = t('admin.accounts.usageSnapshotRetryHint')
+          }
+        } else {
+          clearColdSnapshotRetry(accountID)
+        }
       }
     }
 
@@ -931,6 +1226,7 @@ const flushQueuedUsageBatch = async () => {
     usageBatchErrorByAccountId.value = nextErrors
     usageBatchLoadingByAccountId.value = nextLoading
   } catch (error) {
+    if (isViewUnmounted) return
     const nextErrors = { ...usageBatchErrorByAccountId.value }
     const nextLoading = { ...usageBatchLoadingByAccountId.value }
     for (const accountID of accountIDs) {
@@ -947,15 +1243,36 @@ const flushQueuedUsageBatch = async () => {
   }
 }
 
-const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
+const flushQueuedUsageBatch = async () => {
+  usageBatchFlushTimer = null
+  if (isViewUnmounted) {
+    pendingForcedUsageIds.clear()
+    pendingSnapshotUsageIds.clear()
+    return
+  }
+  const forcedIDs = Array.from(pendingForcedUsageIds)
+  const snapshotIDs = Array.from(pendingSnapshotUsageIds).filter(id => !pendingForcedUsageIds.has(id))
+  pendingForcedUsageIds.clear()
+  pendingSnapshotUsageIds.clear()
+
+  await Promise.all([
+    executeUsageBatchRequest(snapshotIDs, false),
+    executeUsageBatchRequest(forcedIDs, true)
+  ])
+}
+
+const queueBatchedUsage = (account: Account, options?: { force?: boolean; silent?: boolean }) => {
+  if (isViewUnmounted) return
   if (!isDesktopViewport.value) return
   if (!accountSupportsBatchUsage(account)) return
 
   const force = options?.force === true
+  const silent = options?.silent === true
   const cacheKey = account.id
   const key = String(cacheKey)
 
   if (force) {
+    clearColdSnapshotRetry(cacheKey)
     usageBatchCache.delete(cacheKey)
   } else {
     const cached = usageBatchCache.get(cacheKey)
@@ -963,6 +1280,12 @@ const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
       setUsageBatchState(cacheKey, cached.data, null)
       setUsageBatchLoading(cacheKey, false)
       return
+    }
+    // Clear any superseded timer bound to an older request token while preserving retry budgets.
+    const existingTimer = coldSnapshotRetryTimers.get(cacheKey)
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer)
+      coldSnapshotRetryTimers.delete(cacheKey)
     }
   }
 
@@ -974,9 +1297,15 @@ const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
     ...usageBatchRequestTokenByAccountId.value,
     [key]: ++usageBatchRequestToken
   }
-  setUsageBatchLoading(cacheKey, true)
-  pendingUsageBatchIds.add(cacheKey)
-  queuedUsageBatchForce = queuedUsageBatchForce || force
+  if (!silent || usageBatchByAccountId.value[key] == null) {
+    setUsageBatchLoading(cacheKey, true)
+  }
+  if (force) {
+    pendingForcedUsageIds.add(cacheKey)
+    pendingSnapshotUsageIds.delete(cacheKey)
+  } else if (!pendingForcedUsageIds.has(cacheKey)) {
+    pendingSnapshotUsageIds.add(cacheKey)
+  }
 
   if (usageBatchFlushTimer !== null) return
   usageBatchFlushTimer = setTimeout(() => {
@@ -984,18 +1313,27 @@ const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
   }, 0)
 }
 
+const accountConsumesTodayStatsInUsageColumn = (account: Account) => {
+  // Usage column only renders todayStats for Key/Bedrock/Vertex/Gemini third-party accounts;
+  // multi-protocol CN providers render dedicated CNProviderQuotaCell / CNProviderBalanceCell.
+  if (isMultiProtocolApiKeyPlatform(account.platform)) return false
+  return !accountSupportsBatchUsage(account)
+}
+
 const refreshTodayStatsBatch = async () => {
-  // Why this checks both columns:
-  // - today_stats column shows dedicated today's metrics.
-  // - usage column also embeds today's stats for Key/Bedrock rows.
-  // So we only skip fetching when BOTH columns are hidden.
-  if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage')) {
+  const showTodayStatsCol = isColumnVisible('today_stats')
+  const showUsageCol = isColumnVisible('usage')
+  if (!showTodayStatsCol && !showUsageCol) {
+    todayStatsReqSeq.value += 1
     todayStatsLoading.value = false
     todayStatsError.value = null
     return
   }
 
-  const accountIDs = accounts.value.map(account => account.id)
+  const targetAccounts = showTodayStatsCol
+    ? accounts.value
+    : accounts.value.filter(account => accountConsumesTodayStatsInUsageColumn(account))
+  const accountIDs = targetAccounts.map(account => account.id)
   const reqSeq = ++todayStatsReqSeq.value
   if (accountIDs.length === 0) {
     todayStatsByAccountId.value = {}
@@ -1158,6 +1496,7 @@ const setAutoRefreshInterval = (seconds: (typeof autoRefreshIntervals)[number]) 
 }
 
 const toggleColumn = (key: string) => {
+  if (compactViewEnabled.value) return
   const wasHidden = hiddenColumns.has(key)
   if (hiddenColumns.has(key)) {
     hiddenColumns.delete(key)
@@ -1170,6 +1509,9 @@ const toggleColumn = (key: string) => {
       console.error('Failed to load account today stats after showing column:', error)
     })
   }
+  if (key === 'upstream_billing_rate' && wasHidden && upstreamBillingProbeGloballyEnabled.value === undefined) {
+    void loadUpstreamBillingProbeGlobalState()
+  }
   if (key === 'scheduler_score') {
     // The server only returns scheduler scores when this column is visible, so reload the current page immediately.
     syncAccountListDerivedParams()
@@ -1179,7 +1521,8 @@ const toggleColumn = (key: string) => {
   }
 }
 
-const isColumnVisible = (key: string) => !hiddenColumns.has(key)
+const isColumnVisible = (key: string) =>
+  compactViewEnabled.value ? COMPACT_VIEW_COLUMNS.has(key) : !hiddenColumns.has(key)
 const shouldIncludeSchedulerScore = () => isColumnVisible('scheduler_score')
 const ACCOUNT_POOL_NONE_QUERY_VALUE = 'none'
 const syncAccountListDerivedParams = () => {
@@ -1411,7 +1754,10 @@ const refreshUpstreamBillingSortedList = async (force = false) => {
   await refreshUpstreamBillingRates(force)
 }
 
-useIntervalFn(() => { void refreshUpstreamBillingRates() }, 5 * 60_000, { immediate: false })
+useIntervalFn(() => {
+  if (!isColumnVisible('upstream_billing_rate') && sortState.sort_by !== 'upstream_billing_rate') return
+  void refreshUpstreamBillingRates()
+}, 5 * 60_000, { immediate: false })
 
 const saveAccountFilterValues = () => {
   try {
@@ -1478,6 +1824,21 @@ watch(loading, (isLoading, wasLoading) => {
 
 watch(accounts, (rows) => {
   const visibleIDs = new Set(rows.map((row) => String(row.id)))
+  for (const accountID of Array.from(coldSnapshotRetryTimers.keys())) {
+    if (!visibleIDs.has(String(accountID))) {
+      clearColdSnapshotRetry(accountID)
+    }
+  }
+  for (const accountID of Array.from(deferredSnapshotRetryCountByAccountId.keys())) {
+    if (!visibleIDs.has(String(accountID))) {
+      deferredSnapshotRetryCountByAccountId.delete(accountID)
+    }
+  }
+  for (const accountID of Array.from(refreshingSnapshotRetryCountByAccountId.keys())) {
+    if (!visibleIDs.has(String(accountID))) {
+      refreshingSnapshotRetryCountByAccountId.delete(accountID)
+    }
+  }
   usageBatchByAccountId.value = Object.fromEntries(
     Object.entries(usageBatchByAccountId.value).filter(([key]) => visibleIDs.has(key))
   )
@@ -1618,9 +1979,23 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
-  await Promise.all([load(), loadUpstreamBillingProbeGlobalState(), loadPools()])
-  // Force usage cells to refetch /usage on explicit user refresh.
+  const tasks: Promise<unknown>[] = [load(), loadPools()]
+  if (isColumnVisible('upstream_billing_rate')) {
+    tasks.push(loadUpstreamBillingProbeGlobalState())
+  }
+  await Promise.all(tasks)
+}
+
+const handleLiveRefreshPageUsage = () => {
+  closeAccountToolsDropdown()
   usageManualRefreshToken.value += 1
+}
+
+const openCreateModal = async () => {
+  void ensureProxiesLoaded()
+  void ensureGroupCountsLoaded()
+  await ensureModalReady('create')
+  showCreate.value = true
 }
 
 const loadUpstreamBillingProbeGlobalState = async () => {
@@ -1655,13 +2030,15 @@ const toggleAccountToolsDropdown = () => {
   showAccountToolsDropdown.value = nextVisible
 }
 
-const openSyncFromCrs = () => {
+const openSyncFromCrs = async () => {
   closeAccountToolsDropdown()
+  await ensureModalReady('sync')
   showSync.value = true
 }
 
-const openImportData = () => {
+const openImportData = async () => {
   closeAccountToolsDropdown()
+  await ensureModalReady('importData')
   showImportData.value = true
 }
 
@@ -1670,13 +2047,15 @@ const openExportDataDialogFromMenu = () => {
   openExportDataDialog()
 }
 
-const openErrorPassthrough = () => {
+const openErrorPassthrough = async () => {
   closeAccountToolsDropdown()
+  await ensureModalReady('errorPassthrough')
   showErrorPassthrough.value = true
 }
 
-const openTLSFingerprintProfiles = () => {
+const openTLSFingerprintProfiles = async () => {
   closeAccountToolsDropdown()
+  await ensureModalReady('tlsProfiles')
   showTLSFingerprintProfiles.value = true
 }
 
@@ -1954,11 +2333,14 @@ const toggleableColumns = computed(() =>
   allColumns.value.filter(col => col.key !== 'select' && col.key !== 'name' && col.key !== 'actions')
 )
 
-// Filtered columns based on visibility
+// Filtered columns based on visibility (compact monitoring preset overrides custom hidden set without overwriting it)
 const cols = computed(() =>
-  allColumns.value.filter(col =>
-    col.key === 'select' || col.key === 'name' || col.key === 'actions' || !hiddenColumns.has(col.key)
-  )
+  allColumns.value.filter(col => {
+    if (compactViewEnabled.value) {
+      return COMPACT_VIEW_COLUMNS.has(col.key)
+    }
+    return col.key === 'select' || col.key === 'name' || col.key === 'actions' || !hiddenColumns.has(col.key)
+  })
 )
 
 const accountDetailLoading = new Set<number>()
@@ -1977,8 +2359,11 @@ const loadAccountDetails = async (account: Pick<AccountListItem, 'id'>): Promise
 }
 
 const handleEdit = async (a: AccountListItem) => {
+  void ensureProxiesLoaded()
+  void ensureGroupCountsLoaded()
   const account = await loadAccountDetails(a)
   if (!account) return
+  ensureModalReady('edit')
   edAcc.value = account
   showEdit.value = true
   // The editor offers pool membership, so make sure its choices are current.
@@ -2238,7 +2623,10 @@ const collectSelectionMetadata = (rows: Account[]) => {
   return { selectedPlatforms, selectedTypes }
 }
 
-const openBulkEditSelected = () => {
+const openBulkEditSelected = async () => {
+  void ensureProxiesLoaded()
+  void ensureGroupCountsLoaded()
+  await ensureModalReady('bulkEdit')
   bulkEditTarget.value = {
     mode: 'selected',
     accountIds: [...selIds.value],
@@ -2249,8 +2637,13 @@ const openBulkEditSelected = () => {
 }
 
 const openBulkEditFiltered = async () => {
+  void ensureProxiesLoaded()
+  void ensureGroupCountsLoaded()
   const filters = buildBulkEditFilterSnapshot()
-  const preview = await adminAPI.accounts.list(1, 100, filters)
+  const [preview] = await Promise.all([
+    adminAPI.accounts.list(1, 100, filters),
+    ensureModalReady('bulkEdit')
+  ])
   const { selectedPlatforms, selectedTypes } = collectSelectionMetadata(preview.items)
   bulkEditTarget.value = {
     mode: 'filtered',
@@ -2277,7 +2670,7 @@ const poolsByID = computed(() => new Map(pools.value.map(pool => [pool.id, pool]
 const visiblePools = computed(() =>
   params.platform ? pools.value.filter(pool => pool.platform === params.platform) : pools.value
 )
-const poolModalRef = ref<InstanceType<typeof AccountPoolModal> | null>(null)
+const poolModalRef = ref<{ refreshAll: () => void } | null>(null)
 const showPoolModal = ref(false)
 const activePoolId = ref<number | null>(null)
 const showPoolForm = ref(false)
@@ -2285,19 +2678,31 @@ const editingPool = ref<AccountPool | null>(null)
 const showAssignToPool = ref(false)
 const assignPlatform = ref('')
 let poolsLoadedAt = 0
+let poolsInFlight: Promise<void> | null = null
 
 const loadPools = async () => {
-  poolsLoadedAt = Date.now()
-  try {
-    pools.value = await adminAPI.accountPools.list()
-  } catch (error) {
-    console.error('Failed to load account pools:', error)
-  }
+  if (poolsInFlight) return poolsInFlight
+  if (!adminAPI.accountPools?.list) return
+  poolsInFlight = Promise.resolve()
+    .then(() => adminAPI.accountPools.list())
+    .then((result) => {
+      pools.value = result
+      poolsLoadedAt = Date.now()
+    })
+    .catch((error) => {
+      console.error('Failed to load account pools:', error)
+    })
+    .finally(() => {
+      poolsInFlight = null
+    })
+  return poolsInFlight
 }
 const loadPoolsIfStale = () => {
   if (Date.now() - poolsLoadedAt >= POOLS_AUTO_REFRESH_MIN_INTERVAL_MS) void loadPools()
 }
-const openPool = (pool: AccountPool) => {
+const openPool = async (pool: AccountPool) => {
+  void ensureProxiesLoaded()
+  await ensureModalReady('poolModal')
   activePoolId.value = pool.id
   showPoolModal.value = true
 }
@@ -2310,15 +2715,17 @@ const refreshPoolModal = () => {
   poolModalRef.value?.refreshAll()
   void loadPools()
 }
-const openCreatePool = () => {
+const openCreatePool = async () => {
+  await ensureModalReady('poolForm')
   editingPool.value = null
   showPoolForm.value = true
 }
 const openCreatePoolFromMenu = () => {
   closeAccountToolsDropdown()
-  openCreatePool()
+  void openCreatePool()
 }
-const openEditPool = (pool: AccountPool) => {
+const openEditPool = async (pool: AccountPool) => {
+  await ensureModalReady('poolForm')
   editingPool.value = pool
   showPoolForm.value = true
 }
@@ -2328,7 +2735,7 @@ const handlePoolSaved = async (pool: AccountPool) => {
   editingPool.value = null
   await loadPools()
   if (wasEditing) poolModalRef.value?.refreshAll()
-  else openPool(pool)
+  else void openPool(pool)
 }
 const handlePoolsChanged = () => {
   void loadPools()
@@ -2339,7 +2746,7 @@ const handlePoolDissolved = () => {
   activePoolId.value = null
   handlePoolsChanged()
 }
-const openAssignToPool = () => {
+const openAssignToPool = async () => {
   const platforms = new Set(accounts.value.filter(account => isSelected(account.id)).map(account => account.platform))
   // Off-page selections (select-all-results) share the list filter; fall back to it.
   if (platforms.size === 0 && params.platform) platforms.add(params.platform)
@@ -2347,6 +2754,7 @@ const openAssignToPool = () => {
     appStore.showError(t('admin.accounts.pools.assignMixedPlatform'))
     return
   }
+  await ensureModalReady('poolAssign')
   assignPlatform.value = [...platforms][0]
   showAssignToPool.value = true
 }
@@ -2577,16 +2985,19 @@ const closeReAuthModal = () => { showReAuth.value = false; reAuthAcc.value = nul
 const handleTest = async (a: AccountListItem) => {
   const account = await loadAccountDetails(a)
   if (!account) return
+  ensureModalReady('test')
   testingAcc.value = account
   showTest.value = true
 }
 const handleViewStats = async (a: AccountListItem) => {
   const account = await loadAccountDetails(a)
   if (!account) return
+  ensureModalReady('stats')
   statsAcc.value = account
   showStats.value = true
 }
 const handleSchedule = async (a: Account) => {
+  await ensureModalReady('schedule')
   scheduleAcc.value = a
   scheduleModelOptions.value = []
   showSchedulePanel.value = true
@@ -2598,7 +3009,11 @@ const handleSchedule = async (a: Account) => {
   }
 }
 const closeSchedulePanel = () => { showSchedulePanel.value = false; scheduleAcc.value = null; scheduleModelOptions.value = [] }
-const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
+const handleReAuth = async (a: Account) => {
+  await ensureModalReady('reAuth')
+  reAuthAcc.value = a
+  showReAuth.value = true
+}
 const duplicatingAccountIDs = new Set<number>()
 const handleDuplicateAccount = async (a: Account) => {
   if (duplicatingAccountIDs.has(a.id)) return
@@ -2743,7 +3158,11 @@ const handleToggleSchedulable = async (a: Account) => {
     togglingSchedulable.value = null
   }
 }
-const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
+const handleShowTempUnsched = async (a: Account) => {
+  await ensureModalReady('tempUnsched')
+  tempUnschedAcc.value = a
+  showTempUnsched.value = true
+}
 const handleTempUnschedReset = async (updated: Account) => {
   showTempUnsched.value = false
   tempUnschedAcc.value = null
@@ -2813,23 +3232,26 @@ onMounted(async () => {
     }
   }
 
-  load()
-  loadPools()
-  loadUpstreamBillingProbeGlobalState()
-  const [proxiesResult, groupsResult] = await Promise.allSettled([
-    adminAPI.proxies.getAll(),
-    adminAPI.groups.getAll()
-  ])
-  if (proxiesResult.status === 'fulfilled') {
-    proxies.value = proxiesResult.value
-  } else {
-    console.error('Failed to load proxies:', proxiesResult.reason)
+  // Prioritize main accounts table; defer proxies until a modal needs them and skip
+  // per-group account count aggregation on initial mount to minimize DB contention.
+  void load()
+  void loadPools()
+  if (isColumnVisible('upstream_billing_rate')) {
+    void loadUpstreamBillingProbeGlobalState()
   }
-  if (groupsResult.status === 'fulfilled') {
-    groups.value = groupsResult.value
-  } else {
-    console.error('Failed to load groups:', groupsResult.reason)
+  if (adminAPI.groups?.getAll) {
+    Promise.resolve()
+      .then(() => adminAPI.groups.getAll(undefined, { includeCounts: false }))
+      .then((result) => {
+        if (!groupCountsLoaded) {
+          groups.value = result
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load groups:', error)
+      })
   }
+
   window.addEventListener('scroll', handleScroll, true)
   window.addEventListener('resize', handleViewportResize)
   document.addEventListener('click', handleClickOutside)
@@ -2843,12 +3265,17 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  isViewUnmounted = true
+  usageBatchRequestToken += 1
+  usageBatchRequestTokenByAccountId.value = {}
   upstreamBillingRateAbortController?.abort()
+  clearAllColdSnapshotRetries()
   if (usageBatchFlushTimer !== null) {
     clearTimeout(usageBatchFlushTimer)
     usageBatchFlushTimer = null
   }
-  pendingUsageBatchIds.clear()
+  pendingSnapshotUsageIds.clear()
+  pendingForcedUsageIds.clear()
   window.removeEventListener('scroll', handleScroll, true)
   window.removeEventListener('resize', handleViewportResize)
   document.removeEventListener('click', handleClickOutside)

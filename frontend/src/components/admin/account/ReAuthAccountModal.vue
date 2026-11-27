@@ -323,7 +323,19 @@ const canExchangeCode = computed(() => {
   return authCode.trim() && sessionId && !loading
 })
 
-// Watchers
+// Methods
+const resetState = () => {
+  addMethod.value = 'oauth'
+  geminiOAuthType.value = 'code_assist'
+  claudeOAuth.resetState()
+  openaiOAuth.resetState()
+  geminiOAuth.resetState()
+  antigravityOAuth.resetState()
+  grokOAuth.resetState()
+  oauthFlowRef.value?.reset()
+}
+
+// Watchers (placed after resetState to avoid TDZ on immediate lazy-mount)
 watch(
   () => props.show,
   (newVal) => {
@@ -347,20 +359,9 @@ watch(
     } else {
       resetState()
     }
-  }
+  },
+  { immediate: true }
 )
-
-// Methods
-const resetState = () => {
-  addMethod.value = 'oauth'
-  geminiOAuthType.value = 'code_assist'
-  claudeOAuth.resetState()
-  openaiOAuth.resetState()
-  geminiOAuth.resetState()
-  antigravityOAuth.resetState()
-  grokOAuth.resetState()
-  oauthFlowRef.value?.reset()
-}
 
 const handleClose = () => {
   emit('close')

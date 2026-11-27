@@ -74,8 +74,8 @@ func opencodeGoUsageEligibleSQLFor(credentialsExpr string) string {
 var opencodeGoUsageEligibleSQL = opencodeGoUsageEligibleSQLFor("credentials")
 
 // ListOpenCodeGoUsageGroupAccounts resolves every sibling for all supplied
-// identities with one ID query and one batch hydration. API keys are query
-// parameters only; no derived shared key is persisted.
+// identities with one lightweight projection query (no proxy/group hydration).
+// API keys are query parameters only; no derived shared key is persisted.
 func (r *accountRepository) ListOpenCodeGoUsageGroupAccounts(ctx context.Context, accounts []*service.Account) ([]service.Account, error) {
 	if r == nil || r.sql == nil {
 		return nil, service.ErrOpenCodeGoUsageUnavailable
@@ -100,7 +100,7 @@ func (r *accountRepository) ListOpenCodeGoUsageGroupAccounts(ctx context.Context
 		return []service.Account{}, nil
 	}
 	rows, err := r.sql.QueryContext(ctx, `
-		SELECT id
+		SELECT id, platform, type, proxy_id, credentials, extra, updated_at, last_used_at
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND `+opencodeGoUsageEligibleSQL+`
@@ -111,28 +111,7 @@ func (r *accountRepository) ListOpenCodeGoUsageGroupAccounts(ctx context.Context
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	ids := make([]int64, 0, len(keys))
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	hydrated, err := r.GetByIDs(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]service.Account, 0, len(hydrated))
-	for _, account := range hydrated {
-		if account != nil {
-			result = append(result, *account)
-		}
-	}
-	return result, nil
+	return scanUsageGroupAccountRows(rows)
 }
 
 // SetOpenCodeGoUsageAutoRefresh persists the group-scoped auto-refresh switch.

@@ -60,6 +60,10 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		case 429:
 			usage.ErrorCode = "rate_limited"
 		}
+		if usage.ErrorCode == "" && grokBillingIsAllWindowTransientFailure(billing) {
+			usage.ErrorCode = errorCodeQuotaRefreshFailed
+			usage.Error = "Unable to refresh Grok quota; displayed values may be from an earlier observation"
+		}
 		// Official weekly/monthly progress clears the "unknown until headers" state.
 		if usage.ErrorCode == "quota_unknown" && (usage.SevenDay != nil || usage.ThirtyDay != nil) {
 			usage.ErrorCode = ""

@@ -223,7 +223,7 @@ describe('admin AccountsView lite account list', () => {
     await vi.advanceTimersByTimeAsync(1)
     await flushPromises()
     expect(getBatchUsage).toHaveBeenCalledTimes(1)
-    expect(getBatchUsage).toHaveBeenCalledWith([42], false)
+    expect(getBatchUsage).toHaveBeenCalledWith([42], false, { snapshotOnly: true })
 
     const next = { ...account, extra: { session_window_utilization: 0.44, passive_usage_7d_utilization: 0.54 }, last_used_at: platform === 'gemini' ? '2026-11-16T10:00:00Z' : null }
     getBatchUsage.mockResolvedValue({ usage: { '42': { five_hour: { utilization: 44 }, seven_day: { utilization: 54 } } }, errors: {} })
@@ -231,7 +231,7 @@ describe('admin AccountsView lite account list', () => {
     await vi.advanceTimersByTimeAsync(6000)
     await flushPromises()
     expect(getBatchUsage).toHaveBeenCalledTimes(2)
-    expect(getBatchUsage).toHaveBeenLastCalledWith([42], false)
+    expect(getBatchUsage).toHaveBeenLastCalledWith([42], false, { snapshotOnly: true })
     const cell = wrapper.findComponent({ name: 'AccountUsageCell' })
     expect(cell.props('account').last_used_at).toBe(next.last_used_at)
     expect(cell.props('batchedUsage').seven_day.utilization).toBe(54)
@@ -389,7 +389,7 @@ describe('admin AccountsView lite account list', () => {
     await flushPromises()
 
     expect(showError).toHaveBeenCalledWith('detail failed')
-    expect(wrapper.get('[data-test="edit-account"]').text()).toBe('')
+    expect(wrapper.find('[data-test="edit-account"]').exists()).toBe(false)
     consoleError.mockRestore()
     wrapper.unmount()
   })

@@ -3,6 +3,7 @@
     :show="show"
     :title="pool ? pool.name : t('admin.accounts.pools.title')"
     width="full"
+    :z-index="45"
     :close-on-escape="!childDialogOpen"
     :close-on-click-outside="!childDialogOpen"
     @close="$emit('close')"

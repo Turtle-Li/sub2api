@@ -642,18 +642,6 @@ const lineChartOptions = computed(() => ({
   }
 }))
 
-// Load stats when modal opens
-watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
-      await loadStats()
-    } else {
-      stats.value = null
-    }
-  }
-)
-
 const loadStats = async () => {
   if (!props.account) return
 
@@ -667,6 +655,19 @@ const loadStats = async () => {
     loading.value = false
   }
 }
+
+// Load stats when modal opens (placed after loadStats to avoid TDZ on immediate lazy-mount)
+watch(
+  () => props.show,
+  async (newVal) => {
+    if (newVal && props.account) {
+      await loadStats()
+    } else {
+      stats.value = null
+    }
+  },
+  { immediate: true }
+)
 
 const handleClose = () => {
   emit('close')

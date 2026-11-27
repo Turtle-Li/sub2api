@@ -614,7 +614,19 @@ const resetNewPlan = () => {
   newPlan.idle_hours = '48'
 }
 
-// Load plans when dialog opens
+const loadPlans = async () => {
+  if (!props.accountId) return
+  loading.value = true
+  try {
+    plans.value = await adminAPI.scheduledTests.listByAccount(props.accountId)
+  } catch (error: any) {
+    appStore.showError(error?.message || 'Failed to load plans')
+  } finally {
+    loading.value = false
+  }
+}
+
+// Load plans when dialog opens (placed after loadPlans/resetNewPlan to avoid TDZ on immediate lazy-mount)
 watch(
   () => props.show,
   async (visible) => {
@@ -630,20 +642,9 @@ watch(
       editingPlanId.value = null
       resetNewPlan()
     }
-  }
+  },
+  { immediate: true }
 )
-
-const loadPlans = async () => {
-  if (!props.accountId) return
-  loading.value = true
-  try {
-    plans.value = await adminAPI.scheduledTests.listByAccount(props.accountId)
-  } catch (error: any) {
-    appStore.showError(error?.message || 'Failed to load plans')
-  } finally {
-    loading.value = false
-  }
-}
 
 const handleCreate = async () => {
   if (!props.accountId || !newPlan.model_id || !newPlan.cron_expression) return

@@ -1554,7 +1554,8 @@ export interface GrokBillingSummary {
 }
 
 export interface AccountUsageInfo {
-  source?: 'passive' | 'active'
+  source?: 'passive' | 'active' | 'snapshot'
+  snapshot_refresh_state?: 'refreshing' | 'deferred'
   updated_at: string | null
   five_hour: UsageProgress | null
   seven_day: UsageProgress | null

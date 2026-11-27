@@ -189,7 +189,9 @@ func IsCPRQuotaSyncAccount(account *Account) bool {
 
 // cprQuotaSyncResult 是一次同步得到的 extra 更新与耗尽信息。
 type cprQuotaSyncResult struct {
-	updates map[string]any
+	updates          map[string]any
+	persisted        bool
+	persistedUpdates map[string]any
 	// exhaustedUntil：cpr 报告主额度（codex）已耗尽时，最晚恢复时间。
 	exhaustedUntil *time.Time
 }
@@ -523,6 +525,18 @@ func cprQuotaSnapshotStale(account *Account, now time.Time) bool {
 	return now.Sub(syncedAt) >= cprQuotaStaleAfter
 }
 
+func isCPRQuotaSyncDue(accountID int64, now time.Time) bool {
+	if accountID <= 0 {
+		return false
+	}
+	if last, ok := cprQuotaSyncThrottle.Load(accountID); ok {
+		if ts, ok := last.(time.Time); ok && now.Sub(ts) < cprQuotaSyncMinInterval {
+			return false
+		}
+	}
+	return true
+}
+
 func allowCPRQuotaSync(accountID int64, now time.Time, force bool) bool {
 	cprQuotaSyncThrottleMu.Lock()
 	defer cprQuotaSyncThrottleMu.Unlock()
@@ -548,24 +562,37 @@ func syncCPRQuotaSnapshot(ctx context.Context, repo AccountRepository, account *
 		return nil, nil
 	}
 	result, cprID, err := fetchCPRQuota(ctx, account, now)
-	updates := map[string]any{cprQuotaSyncedAtExtra: now.UTC().Format(time.RFC3339)}
+	hasQuotaWindow := err == nil && result != nil && hasOpenAIQuotaObservation(result.updates)
+	updates := map[string]any{}
 	if err != nil {
 		slog.Warn("cpr_quota_sync_failed", "account_id", account.ID, "error", err)
+		updates[cprQuotaSyncedAtExtra] = now.UTC().Format(time.RFC3339)
 		updates[cprQuotaLastErrorExtra] = truncateForLog([]byte(err.Error()), 300)
+	} else if !hasQuotaWindow {
+		slog.Warn("cpr_quota_sync_no_codex_window", "account_id", account.ID, "cpr_account_id", cprID)
+		updates[cprQuotaResolvedAccountIDExtra] = cprID
+		updates[cprQuotaLastErrorExtra] = "cpr quota response contained no valid codex window"
 	} else {
+		updates[cprQuotaSyncedAtExtra] = now.UTC().Format(time.RFC3339)
 		for k, v := range result.updates {
 			updates[k] = v
 		}
 		updates[cprQuotaLastErrorExtra] = ""
 		updates[cprQuotaResolvedAccountIDExtra] = cprID
 	}
-	mergeAccountExtra(account, updates)
 	if repo != nil {
 		if persistErr := repo.UpdateExtra(ctx, account.ID, updates); persistErr != nil {
 			slog.Warn("cpr_quota_sync_persist_failed", "account_id", account.ID, "error", persistErr)
-		} else if err == nil && len(result.updates) > 0 {
-			notifyOpenAIAutoReset(account.ID)
+		} else {
+			mergeAccountExtra(account, updates)
+			if hasQuotaWindow {
+				result.persisted = true
+				result.persistedUpdates = cloneExtraMap(updates)
+				notifyOpenAIAutoReset(account.ID)
+			}
 		}
+	} else {
+		mergeAccountExtra(account, updates)
 	}
 	return result, err
 }

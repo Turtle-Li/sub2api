@@ -488,13 +488,6 @@ const matchModeOptions = computed(() => [
 
 const platformOptions = CONCRETE_PLATFORM_OPTIONS
 
-// Load rules when dialog opens
-watch(() => props.show, (newVal) => {
-  if (newVal) {
-    loadRules()
-  }
-})
-
 const loadRules = async () => {
   loading.value = true
   try {
@@ -506,6 +499,13 @@ const loadRules = async () => {
     loading.value = false
   }
 }
+
+// Load rules when dialog opens (placed after loadRules to avoid TDZ on immediate lazy-mount)
+watch(() => props.show, (newVal) => {
+  if (newVal) {
+    loadRules()
+  }
+}, { immediate: true })
 
 const resetForm = () => {
   form.name = ''

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"time"
@@ -31,9 +32,64 @@ func ollamaCloudBaseURLMatchesSQL(expression string) string {
 	return ollamaCloudBaseURLMatchSQLPrefix + expression + ollamaCloudBaseURLMatchSQLSuffix
 }
 
+// scanUsageGroupAccountRows reads only the columns required for Ollama Cloud /
+// OpenCode Go sibling-group state resolution, avoiding a second GetByIDs round
+// trip and unnecessary proxy/group hydration during admin account listing.
+func scanUsageGroupAccountRows(rows *sql.Rows) ([]service.Account, error) {
+	result := make([]service.Account, 0)
+	for rows.Next() {
+		var (
+			acc            service.Account
+			proxyID        sql.NullInt64
+			credentialsRaw []byte
+			extraRaw       []byte
+			lastUsedAt     sql.NullTime
+		)
+		if err := rows.Scan(
+			&acc.ID,
+			&acc.Platform,
+			&acc.Type,
+			&proxyID,
+			&credentialsRaw,
+			&extraRaw,
+			&acc.UpdatedAt,
+			&lastUsedAt,
+		); err != nil {
+			return nil, err
+		}
+		if proxyID.Valid {
+			pid := proxyID.Int64
+			acc.ProxyID = &pid
+		}
+		if lastUsedAt.Valid {
+			ts := lastUsedAt.Time
+			acc.LastUsedAt = &ts
+		}
+		if len(credentialsRaw) > 0 && string(credentialsRaw) != "null" {
+			var creds map[string]any
+			if err := json.Unmarshal(credentialsRaw, &creds); err != nil {
+				return nil, err
+			}
+			acc.Credentials = creds
+		}
+		if len(extraRaw) > 0 && string(extraRaw) != "null" {
+			var extra map[string]any
+			if err := json.Unmarshal(extraRaw, &extra); err != nil {
+				return nil, err
+			}
+			acc.Extra = extra
+		}
+		result = append(result, acc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // ListOllamaCloudUsageGroupAccounts resolves every sibling for all supplied
-// identities with one ID query and one batch hydration. API keys are query
-// parameters only; no derived shared key is persisted.
+// identities with one lightweight projection query (no proxy/group hydration).
+// API keys are query parameters only; no derived shared key is persisted.
 func (r *accountRepository) ListOllamaCloudUsageGroupAccounts(ctx context.Context, accounts []*service.Account) ([]service.Account, error) {
 	if r == nil || r.sql == nil {
 		return nil, service.ErrOllamaCloudUsageUnavailable
@@ -58,7 +114,7 @@ func (r *accountRepository) ListOllamaCloudUsageGroupAccounts(ctx context.Contex
 		return []service.Account{}, nil
 	}
 	rows, err := r.sql.QueryContext(ctx, `
-		SELECT id
+		SELECT id, platform, type, proxy_id, credentials, extra, updated_at, last_used_at
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND `+ollamaCloudUsageEligibleSQL+`
@@ -69,28 +125,7 @@ func (r *accountRepository) ListOllamaCloudUsageGroupAccounts(ctx context.Contex
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	ids := make([]int64, 0, len(keys))
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	hydrated, err := r.GetByIDs(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]service.Account, 0, len(hydrated))
-	for _, account := range hydrated {
-		if account != nil {
-			result = append(result, *account)
-		}
-	}
-	return result, nil
+	return scanUsageGroupAccountRows(rows)
 }
 
 func (r *accountRepository) SaveOllamaCloudUsageSession(ctx context.Context, account *service.Account, ciphertext string, autoRefresh bool) error {

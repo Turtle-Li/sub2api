@@ -144,9 +144,13 @@
         role="alert"
         class="mb-1 text-[10px] text-amber-700 dark:text-amber-300"
       >
-        {{ t(hasOpenAIQuotaObservation
-          ? 'admin.accounts.usageWindow.quotaRefreshFailedCached'
-          : 'admin.accounts.usageWindow.quotaRefreshFailedUnknown') }}
+        {{
+          props.batchedUsageError && props.batchedUsageError !== 'Failed'
+            ? props.batchedUsageError
+            : t(hasOpenAIQuotaObservation
+              ? 'admin.accounts.usageWindow.quotaRefreshFailedCached'
+              : 'admin.accounts.usageWindow.quotaRefreshFailedUnknown')
+        }}
       </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
@@ -1904,7 +1908,8 @@ watch(usageRefreshKey, (nextKey, prevKey) => {
   if (!shouldFetchUsage.value) return
 
   if (isBatchManaged.value) {
-    requestParentBatchUsage(props.account.platform === 'openai' ? { force: true } : undefined)
+    // Passive snapshot refresh only — never implicitly force-probe upstream on row metadata changes.
+    requestParentBatchUsage()
     return
   }
 

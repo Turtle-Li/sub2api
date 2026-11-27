@@ -101,7 +101,10 @@ func (h *AccountHandler) scopedAdminStatistics(c *gin.Context) bool {
 			response.Success(c, gin.H{"stats": stats})
 			return true
 		}
-		usage, errs, err := h.accountUsageService.GetUsageBatch(c.Request.Context(), ids, req.Force)
+		usage, errs, err := h.accountUsageService.GetUsageBatchWithOptions(c.Request.Context(), ids, service.UsageBatchOptions{
+			Force:        req.Force,
+			SnapshotOnly: req.SnapshotOnly,
+		})
 		if err != nil {
 			response.Error(c, 502, "账户额度查询失败")
 			return true

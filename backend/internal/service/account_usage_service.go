@@ -85,6 +85,19 @@ type accountWindowStatsBatchReader interface {
 	GetAccountWindowStatsBatch(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]*usagestats.AccountStats, error)
 }
 
+type accountWindowStatsMultiStartBatchReader interface {
+	GetAccountWindowStatsByStartsBatch(ctx context.Context, startByAccount map[int64]time.Time) (map[int64]*usagestats.AccountStats, error)
+}
+
+// UsageBatchOptions controls how GetUsageBatchWithOptions fetches account usage.
+// When SnapshotOnly is true (and Force is false), persisted/cached snapshots are
+// returned immediately without blocking on external upstream probes, while stale
+// accounts are refreshed asynchronously with strict bounded concurrency.
+type UsageBatchOptions struct {
+	Force        bool
+	SnapshotOnly bool
+}
+
 // apiUsageCache 缓存从 Anthropic API 获取的使用率数据（utilization, resets_at）
 // 同时支持缓存错误响应（负缓存），防止 429 等错误导致的重试风暴
 type apiUsageCache struct {
@@ -112,31 +125,98 @@ type antigravityUsageCache struct {
 	timestamp time.Time
 }
 
+// geminiUsageInfoCacheEntry caches local Gemini quota window aggregates within
+// the same minute bucket so repeated admin account-list opens do not repeatedly
+// aggregate usage_logs, while RPM counts expire cleanly across minute boundaries.
+type geminiUsageInfoCacheEntry struct {
+	usageInfo    *UsageInfo
+	timestamp    time.Time
+	minuteBucket time.Time
+}
+
 const (
-	apiCacheTTL         = 3 * time.Minute
-	apiErrorCacheTTL    = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
-	antigravityErrorTTL = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
-	apiQueryMaxJitter   = 800 * time.Millisecond // 用量查询最大随机延迟
-	windowStatsCacheTTL = 1 * time.Minute
-	openAIProbeCacheTTL = 10 * time.Minute
-	grokProbeRetryTTL   = 1 * time.Minute
-	grokFreeQuotaWindow = 24 * time.Hour
+	apiCacheTTL             = 3 * time.Minute
+	apiErrorCacheTTL        = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
+	antigravityErrorTTL     = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
+	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
+	windowStatsCacheTTL     = 1 * time.Minute
+	openAIProbeCacheTTL     = 10 * time.Minute
+	grokProbeRetryTTL       = 1 * time.Minute
+	grokFreeQuotaWindow     = 24 * time.Hour
+	grokTodayCacheDuration  = -1 * time.Second
+	bgUsageRefreshMaxConc   = 2
+	// Queue size supports the largest supported page size (100) while keeping worker
+	// concurrency strictly capped at 2. Slot timeout (30s) matches Antigravity's
+	// 30s singleflight upstream deadline so backend worst-case drain and frontend
+	// observation windows share the same contract.
+	bgUsageRefreshQueueSize = 100
+	bgUsageRefreshTimeout   = 30 * time.Second
 )
+
+type openAISnapshotExtraCache struct {
+	updates  map[string]any
+	cachedAt time.Time
+}
+
+type openAIProbeErrorCache struct {
+	errorCode string
+	errorMsg  string
+	cachedAt  time.Time
+}
+
+type grokSnapshotExtraCache struct {
+	billing  *xai.BillingSummary
+	cachedAt time.Time
+}
 
 // UsageCache 封装账户使用量相关的缓存
 type UsageCache struct {
-	apiCache          sync.Map           // accountID -> *apiUsageCache
-	windowStatsCache  sync.Map           // windowStatsCacheKey -> *windowStatsCache
-	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
-	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
-	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
-	openAIProbeCache  sync.Map           // accountID -> time.Time
-	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
+	apiCache            sync.Map           // accountID -> *apiUsageCache
+	windowStatsCache    sync.Map           // windowStatsCacheKey -> *windowStatsCache
+	antigravityCache    sync.Map           // accountID -> *antigravityUsageCache
+	geminiCache         sync.Map           // accountID -> *geminiUsageInfoCacheEntry
+	apiFlight           singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
+	antigravityFlight   singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
+	openAIProbeCache    sync.Map           // accountID -> time.Time
+	openAISnapshotExtra sync.Map           // accountID -> *openAISnapshotExtraCache
+	openAIProbeError    sync.Map           // accountID -> *openAIProbeErrorCache
+	grokProbeCache      sync.Map           // accountID -> last billing probe attempt
+	grokSnapshotMu      sync.Mutex
+	grokSnapshotExtra   sync.Map           // accountID -> *grokSnapshotExtraCache
+	grokProbeError      sync.Map           // accountID -> *openAIProbeErrorCache
+	bgRefreshInFlight   sync.Map           // accountID -> struct{}
+	bgRefreshSemOnce    sync.Once
+	bgRefreshSem        chan struct{}
+	bgRefreshQueue      chan int64
 }
 
 // NewUsageCache 创建 UsageCache 实例
 func NewUsageCache() *UsageCache {
-	return &UsageCache{}
+	return &UsageCache{
+		bgRefreshSem:   make(chan struct{}, bgUsageRefreshMaxConc),
+		bgRefreshQueue: make(chan int64, bgUsageRefreshQueueSize),
+	}
+}
+
+func (c *UsageCache) initBackgroundRefreshChannels() {
+	c.bgRefreshSemOnce.Do(func() {
+		if c.bgRefreshSem == nil {
+			c.bgRefreshSem = make(chan struct{}, bgUsageRefreshMaxConc)
+		}
+		if c.bgRefreshQueue == nil {
+			c.bgRefreshQueue = make(chan int64, bgUsageRefreshQueueSize)
+		}
+	})
+}
+
+func (c *UsageCache) bgSem() chan struct{} {
+	c.initBackgroundRefreshChannels()
+	return c.bgRefreshSem
+}
+
+func (c *UsageCache) bgQueue() chan int64 {
+	c.initBackgroundRefreshChannels()
+	return c.bgRefreshQueue
 }
 
 // WindowStats 窗口期统计
@@ -205,8 +285,9 @@ type AICredit struct {
 
 // UsageInfo 账号使用量信息
 type UsageInfo struct {
-	Source             string         `json:"source,omitempty"`               // "passive" or "active"
-	UpdatedAt          *time.Time     `json:"updated_at,omitempty"`           // 更新时间
+	Source               string         `json:"source,omitempty"`                 // "passive", "active", or "snapshot"
+	SnapshotRefreshState string         `json:"snapshot_refresh_state,omitempty"` // "refreshing" or "deferred" during snapshot SWR
+	UpdatedAt            *time.Time     `json:"updated_at,omitempty"`             // 更新时间
 	FiveHour           *UsageProgress `json:"five_hour"`                      // 5小时窗口
 	SevenDay           *UsageProgress `json:"seven_day,omitempty"`            // 7天窗口
 	SevenDaySonnet     *UsageProgress `json:"seven_day_sonnet,omitempty"`     // 7天Sonnet窗口
@@ -340,8 +421,10 @@ type AccountUsageService struct {
 	cache                   *UsageCache
 	identityCache           IdentityCache
 	tlsFPProfileService     *TLSFingerprintProfileService
-	agentIdentityTaskMu     sync.Mutex
-	agentIdentityWS         agentIdentityWSConnectionInvalidator
+	agentIdentityTaskMu               sync.Mutex
+	agentIdentityWS                   agentIdentityWSConnectionInvalidator
+	testHookBeforeOpenAIProbeDueCheck func()
+	testHookBeforeGrokProbeDueCheck   func()
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -358,7 +441,7 @@ func NewAccountUsageService(
 	identityCache IdentityCache,
 	tlsFPProfileService *TLSFingerprintProfileService,
 ) *AccountUsageService {
-	return &AccountUsageService{
+	svc := &AccountUsageService{
 		accountRepo:             accountRepo,
 		usageLogRepo:            usageLogRepo,
 		usageFetcher:            usageFetcher,
@@ -371,6 +454,10 @@ func NewAccountUsageService(
 		identityCache:           identityCache,
 		tlsFPProfileService:     tlsFPProfileService,
 	}
+	if grokQuotaService != nil {
+		grokQuotaService.SetBillingOutcomeHook(svc.handleGrokBillingOutcome)
+	}
+	return svc
 }
 
 func supportsAnthropicPassiveUsage(account *Account) bool {
@@ -557,6 +644,13 @@ func (s *AccountUsageService) GetUsageForAccount(ctx context.Context, account *A
 // Anthropic OAuth/SetupToken 统一走 passive 链路，其他账号复用现有主动查询逻辑。
 // 单个账号失败不会中断整批请求，错误会按账号返回。
 func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []int64, force bool) (map[int64]*UsageInfo, map[int64]string, error) {
+	return s.GetUsageBatchWithOptions(ctx, accountIDs, UsageBatchOptions{Force: force})
+}
+
+// GetUsageBatchWithOptions 批量获取账号使用量，支持 snapshot_only（SWR）模式：
+// 列表首屏加载时先秒回本地快照/缓存，过期项仅以严格有界低并发在后台静默刷新，
+// 既不阻塞页面也不冲击数据库或上游。
+func (s *AccountUsageService) GetUsageBatchWithOptions(ctx context.Context, accountIDs []int64, opts UsageBatchOptions) (map[int64]*UsageInfo, map[int64]string, error) {
 	if adminaccess.RestrictedFromContext(ctx) != nil {
 		if len(accountIDs) > 100 {
 			return nil, nil, fmt.Errorf("账户数量超过限制")
@@ -606,6 +700,8 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 			}
 		}
 	}
+
+	snapshotOnly := opts.SnapshotOnly && !opts.Force
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(6)
@@ -623,8 +719,10 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 			var usageErr error
 			if supportsAnthropicPassiveUsage(account) {
 				usage, usageErr = s.getPassiveUsageForAccount(gctx, account)
+			} else if snapshotOnly {
+				usage, usageErr = s.getUsageSnapshotForAccount(gctx, account)
 			} else {
-				usage, usageErr = s.getUsageForAccount(gctx, account, force)
+				usage, usageErr = s.getUsageForAccount(gctx, account, opts.Force)
 			}
 
 			mu.Lock()
@@ -643,6 +741,721 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 	}
 
 	return usageByAccount, errorsByAccount, nil
+}
+
+// getUsageSnapshotForAccount returns locally persisted or cached usage immediately
+// without blocking on external upstream network calls. Stale external snapshots
+// are scheduled for bounded background refresh (non-blocking, deduplicated).
+func (s *AccountUsageService) getUsageSnapshotForAccount(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if err := scopedAccountAccess(ctx, s.accountRepo, account, "accounts.usage.read", true); err != nil {
+		return nil, err
+	}
+	if account == nil {
+		return nil, fmt.Errorf("account is required")
+	}
+
+	if account.IsSyntheticUITest() && account.IsAnthropicOAuthOrSetupToken() {
+		return s.getPassiveUsageForAccount(ctx, account)
+	}
+
+	if account.Platform == PlatformOpenAI && (account.Type == AccountTypeOAuth || IsCPRQuotaSyncAccount(account)) {
+		return s.getOpenAIUsageSnapshot(ctx, account)
+	}
+
+	if account.Platform == PlatformGemini {
+		return s.getGeminiUsageCached(ctx, account)
+	}
+
+	if account.Platform == PlatformAntigravity {
+		return s.getAntigravityUsageSnapshot(ctx, account)
+	}
+
+	if account.Platform == PlatformGrok {
+		return s.getGrokUsageSnapshot(ctx, account)
+	}
+
+	return s.getUsageForAccount(ctx, account, false)
+}
+
+const (
+	snapshotRefreshStateRefreshing = "refreshing"
+	snapshotRefreshStateDeferred   = "deferred"
+)
+
+func (s *AccountUsageService) isBackgroundRefreshInFlight(accountID int64) bool {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return false
+	}
+	_, loaded := s.cache.bgRefreshInFlight.Load(accountID)
+	return loaded
+}
+
+func cloneExtraMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func extractOpenAISnapshotTimestamp(extra map[string]any) (time.Time, bool) {
+	if len(extra) == 0 {
+		return time.Time{}, false
+	}
+	var latest time.Time
+	found := false
+	for _, key := range []string{"codex_usage_updated_at", "cpr_quota_synced_at"} {
+		if raw, ok := extra[key]; ok {
+			if ts, err := parseTime(fmt.Sprint(raw)); err == nil && (!found || ts.After(latest)) {
+				latest = ts
+				found = true
+			}
+		}
+	}
+	return latest, found
+}
+
+func (s *AccountUsageService) isGrokRefreshInFlight(accountID int64) bool {
+	if s.isBackgroundRefreshInFlight(accountID) {
+		return true
+	}
+	return s != nil && s.grokQuotaService != nil && s.grokQuotaService.IsBillingProbeInFlight(accountID)
+}
+
+func (s *AccountUsageService) cacheOpenAIProbeError(accountID int64, errorCode, errorMsg string) {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return
+	}
+	if errorCode == "" && errorMsg == "" {
+		s.cache.openAIProbeError.Delete(accountID)
+		return
+	}
+	s.cache.openAIProbeError.Store(accountID, &openAIProbeErrorCache{
+		errorCode: errorCode,
+		errorMsg:  errorMsg,
+		cachedAt:  time.Now(),
+	})
+}
+
+func (s *AccountUsageService) applyCachedOpenAIProbeError(accountID int64, usage *UsageInfo, now time.Time) {
+	if s == nil || s.cache == nil || usage == nil || accountID <= 0 || usage.ErrorCode != "" || usage.Error != "" {
+		return
+	}
+	raw, ok := s.cache.openAIProbeError.Load(accountID)
+	if !ok {
+		return
+	}
+	entry, ok := raw.(*openAIProbeErrorCache)
+	if !ok || entry == nil || now.Sub(entry.cachedAt) >= openAIProbeCacheTTL {
+		return
+	}
+	usage.ErrorCode = entry.errorCode
+	usage.Error = entry.errorMsg
+}
+
+func (s *AccountUsageService) cacheOpenAISnapshotExtra(accountID int64, updates map[string]any) {
+	if s == nil || s.cache == nil || accountID <= 0 || len(updates) == 0 {
+		return
+	}
+	s.cache.openAIProbeError.Delete(accountID)
+	s.cache.openAISnapshotExtra.Store(accountID, &openAISnapshotExtraCache{
+		updates:  cloneExtraMap(updates),
+		cachedAt: time.Now(),
+	})
+}
+
+func (s *AccountUsageService) mergeCachedOpenAISnapshotExtra(accountID int64, dbExtra map[string]any, now time.Time) map[string]any {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return dbExtra
+	}
+	raw, ok := s.cache.openAISnapshotExtra.Load(accountID)
+	if !ok {
+		return dbExtra
+	}
+	entry, ok := raw.(*openAISnapshotExtraCache)
+	if !ok || entry == nil || len(entry.updates) == 0 || now.Sub(entry.cachedAt) >= openAIProbeCacheTTL {
+		return dbExtra
+	}
+	cachedTS, hasCachedTS := extractOpenAISnapshotTimestamp(entry.updates)
+	dbTS, hasDBTS := extractOpenAISnapshotTimestamp(dbExtra)
+	if hasDBTS && (!hasCachedTS || !cachedTS.After(dbTS)) {
+		return dbExtra
+	}
+	merged := cloneExtraMap(dbExtra)
+	if merged == nil {
+		merged = make(map[string]any, len(entry.updates))
+	}
+	for k, v := range entry.updates {
+		merged[k] = v
+	}
+	return merged
+}
+
+func extractGrokBillingTimestamp(billing *xai.BillingSummary) (time.Time, bool) {
+	if billing == nil {
+		return time.Time{}, false
+	}
+	stamp := strings.TrimSpace(billing.UpdatedAt)
+	if stamp == "" {
+		stamp = strings.TrimSpace(billing.FetchedAt)
+	}
+	if stamp == "" {
+		return time.Time{}, false
+	}
+	ts, err := parseTime(stamp)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ts, true
+}
+
+func grokBillingIsAllWindowTransientFailure(billing *xai.BillingSummary) bool {
+	if billing == nil || !billing.Partial || len(billing.FailedWindows) < 2 {
+		return false
+	}
+	switch billing.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+		return false
+	default:
+		return true
+	}
+}
+
+// compareGrokBillingOrder returns >0 if a is strictly newer than b, <0 if a is older than b,
+// and 0 if their ordering cannot be distinguished. Timestamp takes precedence across processes/seconds;
+// ObservedVersion breaks ties deterministically for multiple commits within the same second.
+func compareGrokBillingOrder(a, b *xai.BillingSummary) int {
+	tsA, hasA := extractGrokBillingTimestamp(a)
+	tsB, hasB := extractGrokBillingTimestamp(b)
+	if hasA && hasB {
+		if tsA.After(tsB) {
+			return 1
+		}
+		if tsA.Before(tsB) {
+			return -1
+		}
+	} else if hasA != hasB {
+		if hasA {
+			return 1
+		}
+		return -1
+	}
+	var verA, verB int64
+	if a != nil {
+		verA = a.ObservedVersion
+	}
+	if b != nil {
+		verB = b.ObservedVersion
+	}
+	if verA > verB {
+		return 1
+	}
+	if verA < verB {
+		return -1
+	}
+	return 0
+}
+
+func (s *AccountUsageService) handleGrokBillingOutcome(accountID int64, billing *xai.BillingSummary, persisted bool) {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return
+	}
+	if persisted && billing != nil {
+		s.cacheGrokSnapshotBilling(accountID, billing)
+		if grokBillingIsAllWindowTransientFailure(billing) {
+			s.cache.grokProbeError.Store(accountID, &openAIProbeErrorCache{
+				errorCode: errorCodeQuotaRefreshFailed,
+				errorMsg:  "Unable to refresh Grok quota; displayed values may be from an earlier observation",
+				cachedAt:  time.Now(),
+			})
+		}
+		return
+	}
+	// Probe or persist failed (e.g. prepareProbe / UpdateExtra timeout): do not publish uncommitted
+	// billing data, and publish a short-lived refresh-failed hint so reads warn that the displayed value may be stale.
+	s.cache.grokProbeError.Store(accountID, &openAIProbeErrorCache{
+		errorCode: errorCodeQuotaRefreshFailed,
+		errorMsg:  "Unable to refresh Grok quota; displayed values may be from an earlier observation",
+		cachedAt:  time.Now(),
+	})
+}
+
+func canOverlayQuotaRefreshError(usage *UsageInfo) bool {
+	if usage == nil {
+		return false
+	}
+	if usage.ErrorCode == "" {
+		return usage.Error == ""
+	}
+	return usage.ErrorCode == "quota_unknown"
+}
+
+func (s *AccountUsageService) applyCachedGrokProbeError(accountID int64, usage *UsageInfo, now time.Time) {
+	if s == nil || s.cache == nil || accountID <= 0 || !canOverlayQuotaRefreshError(usage) {
+		return
+	}
+	raw, ok := s.cache.grokProbeError.Load(accountID)
+	if !ok {
+		return
+	}
+	entry, ok := raw.(*openAIProbeErrorCache)
+	if !ok || entry == nil || now.Sub(entry.cachedAt) >= grokProbeRetryTTL {
+		return
+	}
+	usage.ErrorCode = entry.errorCode
+	usage.Error = entry.errorMsg
+}
+
+func (s *AccountUsageService) cacheGrokSnapshotBilling(accountID int64, billing *xai.BillingSummary) {
+	if s == nil || s.cache == nil || accountID <= 0 || billing == nil {
+		return
+	}
+	s.cache.grokSnapshotMu.Lock()
+	defer s.cache.grokSnapshotMu.Unlock()
+	// Monotonic ordering guard: never allow an older billing observation to overwrite a newer persisted one.
+	if existingRaw, ok := s.cache.grokSnapshotExtra.Load(accountID); ok {
+		if existing, ok := existingRaw.(*grokSnapshotExtraCache); ok && existing != nil && existing.billing != nil {
+			if compareGrokBillingOrder(billing, existing.billing) < 0 {
+				return
+			}
+		}
+	}
+	copied := *billing
+	if !grokBillingIsAllWindowTransientFailure(&copied) {
+		s.cache.grokProbeError.Delete(accountID)
+	}
+	s.cache.grokSnapshotExtra.Store(accountID, &grokSnapshotExtraCache{
+		billing:  &copied,
+		cachedAt: time.Now(),
+	})
+}
+
+func (s *AccountUsageService) mergeCachedGrokSnapshotExtra(accountID int64, dbExtra map[string]any, now time.Time) map[string]any {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return dbExtra
+	}
+	raw, ok := s.cache.grokSnapshotExtra.Load(accountID)
+	if !ok {
+		return dbExtra
+	}
+	entry, ok := raw.(*grokSnapshotExtraCache)
+	if !ok || entry == nil || entry.billing == nil || now.Sub(entry.cachedAt) >= openAIProbeCacheTTL {
+		return dbExtra
+	}
+	dbBilling, _ := grokBillingSnapshotFromExtra(dbExtra)
+	if dbBilling != nil && compareGrokBillingOrder(entry.billing, dbBilling) <= 0 {
+		return dbExtra
+	}
+	merged := cloneExtraMap(dbExtra)
+	if merged == nil {
+		merged = make(map[string]any, 1)
+	}
+	copied := *entry.billing
+	merged[grokBillingExtraKey] = &copied
+	return merged
+}
+
+func (s *AccountUsageService) scheduleBackgroundUsageRefresh(accountID int64, restricted bool) string {
+	// Never enqueue detached background refreshes for restricted admin principals:
+	// detached context would lose the scoped principal and risk side effects.
+	if restricted || s == nil || s.accountRepo == nil || s.cache == nil || accountID <= 0 {
+		return ""
+	}
+	if _, loaded := s.cache.bgRefreshInFlight.LoadOrStore(accountID, struct{}{}); loaded {
+		return snapshotRefreshStateRefreshing
+	}
+	q := s.cache.bgQueue()
+	select {
+	case q <- accountID:
+	default:
+		// Bounded queue is saturated; drop silently to protect DB and upstream,
+		// and tell the caller it was deferred so a bounded passive re-read can retry later.
+		s.cache.bgRefreshInFlight.Delete(accountID)
+		return snapshotRefreshStateDeferred
+	}
+
+	s.maybeStartBackgroundRefreshWorker()
+	return snapshotRefreshStateRefreshing
+}
+
+func (s *AccountUsageService) maybeStartBackgroundRefreshWorker() {
+	if s == nil || s.cache == nil {
+		return
+	}
+	sem := s.cache.bgSem()
+	select {
+	case sem <- struct{}{}:
+	default:
+		return
+	}
+
+	go func() {
+		defer func() {
+			<-sem
+			// Double-check after releasing the worker slot so an account enqueued
+			// concurrently while the last worker exited is never stranded.
+			if len(s.cache.bgQueue()) > 0 {
+				s.maybeStartBackgroundRefreshWorker()
+			}
+		}()
+		q := s.cache.bgQueue()
+		for {
+			select {
+			case id := <-q:
+				s.runOneBackgroundUsageRefresh(id)
+			default:
+				return
+			}
+		}
+	}()
+}
+
+// runOneBackgroundUsageRefresh pre-warms quota snapshots in the background without
+// mutating account status (no ClearError side effects), avoiding ABA error races
+// and extra write contention on accounts / scheduler_outbox.
+func (s *AccountUsageService) runOneBackgroundUsageRefresh(accountID int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("background usage refresh panic for account %d: %v", accountID, r)
+		}
+		s.cache.bgRefreshInFlight.Delete(accountID)
+	}()
+	bgCtx, cancel := context.WithTimeout(context.Background(), bgUsageRefreshTimeout)
+	defer cancel()
+
+	freshAccount, err := s.accountRepo.GetByID(bgCtx, accountID)
+	if err != nil || freshAccount == nil {
+		return
+	}
+	if freshAccount.Platform == PlatformAntigravity {
+		_, _ = s.getAntigravityUsage(bgCtx, freshAccount, false)
+		return
+	}
+	if freshAccount.Platform == PlatformOpenAI && (freshAccount.Type == AccountTypeOAuth || IsCPRQuotaSyncAccount(freshAccount)) {
+		_, _ = s.refreshOpenAIUsageSnapshot(bgCtx, freshAccount, false, true)
+		return
+	}
+	if freshAccount.Platform == PlatformGrok && freshAccount.IsGrokOAuth() && s.grokQuotaService != nil {
+		if s.shouldProbeGrokBilling(freshAccount.ID, time.Now(), false) {
+			// Cache publishing is handled exclusively inside probeBilling's outcome hook
+			// so late-resuming callers can never overwrite a newer persisted observation.
+			_, _ = s.grokQuotaService.ProbeBillingSnapshotOnly(bgCtx, freshAccount.ID)
+		}
+	}
+}
+
+func (s *AccountUsageService) getCachedWindowStats(
+	ctx context.Context,
+	accountID int64,
+	duration time.Duration,
+	startTime time.Time,
+	normalizeToMinute bool,
+) (*WindowStats, error) {
+	if s.usageLogRepo == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	queryStart := startTime
+	if normalizeToMinute {
+		queryStart = startTime.Truncate(time.Minute)
+	}
+	key := windowStatsCacheKey{accountID: accountID, duration: duration}
+	if s.cache != nil {
+		if cached, ok := s.cache.windowStatsCache.Load(key); ok {
+			if entry, ok := cached.(*windowStatsCache); ok && entry.startTime.Equal(queryStart) && now.Sub(entry.timestamp) < windowStatsCacheTTL {
+				return entry.stats, nil
+			}
+		}
+	}
+	stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, accountID, queryStart)
+	if err != nil {
+		return nil, err
+	}
+	windowStats := windowStatsFromAccountStats(stats)
+	if s.cache != nil && windowStats != nil {
+		s.cache.windowStatsCache.Store(key, &windowStatsCache{
+			stats:     windowStats,
+			timestamp: now,
+			startTime: queryStart,
+		})
+	}
+	return windowStats, nil
+}
+
+func (s *AccountUsageService) getOpenAIUsageSnapshot(ctx context.Context, account *Account) (*UsageInfo, error) {
+	now := time.Now()
+	usage := &UsageInfo{Source: "passive"}
+	if account == nil {
+		return usage, nil
+	}
+
+	// Check in-flight BEFORE reading the in-memory extra cache so a background
+	// refresh that stores openAISnapshotExtra before deleting bgRefreshInFlight
+	// is linearized: callers either observe "refreshing" or observe the new extra.
+	inFlight := s.isBackgroundRefreshInFlight(account.ID)
+	effectiveExtra := s.mergeCachedOpenAISnapshotExtra(account.ID, account.Extra, now)
+	effectiveAccount := *account
+	effectiveAccount.Extra = effectiveExtra
+
+	applyExtraToUsage(usage, effectiveExtra, now)
+
+	if inFlight {
+		usage.SnapshotRefreshState = snapshotRefreshStateRefreshing
+	} else {
+		if s.testHookBeforeOpenAIProbeDueCheck != nil {
+			s.testHookBeforeOpenAIProbeDueCheck()
+		}
+		needsRefresh := false
+		probeDue := false
+		if IsCPRQuotaSyncAccount(&effectiveAccount) {
+			needsRefresh = cprQuotaSnapshotStale(&effectiveAccount, now)
+			probeDue = isCPRQuotaSyncDue(account.ID, now)
+		} else if shouldRefreshOpenAICodexSnapshot(&effectiveAccount, usage, now) {
+			needsRefresh = true
+			probeDue = s.isOpenAIProbeDue(account.ID, now)
+		}
+		if needsRefresh {
+			if probeDue {
+				usage.SnapshotRefreshState = s.scheduleBackgroundUsageRefresh(account.ID, adminaccess.RestrictedFromContext(ctx) != nil)
+			} else {
+				// Another request may have started or completed a refresh between our initial
+				// inFlight/cache read and the throttle check. Re-check both so we never return
+				// a stale snapshot without SnapshotRefreshState when a concurrent refresh is running
+				// or just finished persisting.
+				if s.isBackgroundRefreshInFlight(account.ID) {
+					usage.SnapshotRefreshState = snapshotRefreshStateRefreshing
+				} else {
+					recheckedExtra := s.mergeCachedOpenAISnapshotExtra(account.ID, account.Extra, now)
+					if len(recheckedExtra) > 0 {
+						usage = &UsageInfo{Source: "passive"}
+						applyExtraToUsage(usage, recheckedExtra, now)
+						effectiveAccount.Extra = recheckedExtra
+					}
+				}
+			}
+		}
+	}
+	if usage.SnapshotRefreshState == "" {
+		s.applyCachedOpenAIProbeError(account.ID, usage, now)
+		applyPersistedCPRSyncError(&effectiveAccount, usage)
+	}
+
+	if s.usageLogRepo == nil {
+		return usage, nil
+	}
+
+	fiveHourStart, fiveHourRolling := codexWindowStatsQueryStart(usage.FiveHour, 5*time.Hour, now)
+	if ws, err := s.getCachedWindowStats(ctx, account.ID, 5*time.Hour, fiveHourStart, fiveHourRolling); err == nil && ws != nil {
+		if usage.FiveHour == nil {
+			usage.FiveHour = &UsageProgress{UtilizationUnknown: true}
+		}
+		usage.FiveHour.WindowStats = ws
+	}
+	sevenDayStart, sevenDayRolling := codexWindowStatsQueryStart(usage.SevenDay, 7*24*time.Hour, now)
+	if ws, err := s.getCachedWindowStats(ctx, account.ID, 7*24*time.Hour, sevenDayStart, sevenDayRolling); err == nil && ws != nil {
+		if usage.SevenDay == nil {
+			usage.SevenDay = &UsageProgress{UtilizationUnknown: true}
+		}
+		usage.SevenDay.WindowStats = ws
+	}
+	return usage, nil
+}
+
+func (s *AccountUsageService) isOpenAIProbeDue(accountID int64, now time.Time) bool {
+	if s.cache == nil {
+		return false
+	}
+	if cached, ok := s.cache.openAIProbeCache.Load(accountID); ok {
+		if ts, ok := cached.(time.Time); ok && now.Sub(ts) < openAIProbeCacheTTL {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *AccountUsageService) isGrokProbeDue(accountID int64, now time.Time) bool {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return false
+	}
+	if cached, ok := s.cache.grokProbeCache.Load(accountID); ok {
+		if ts, ok := cached.(time.Time); ok && now.Sub(ts) < grokProbeRetryTTL {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *AccountUsageService) getGeminiUsageCached(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if account == nil {
+		now := time.Now()
+		return &UsageInfo{UpdatedAt: &now}, nil
+	}
+	now := time.Now()
+	minuteBucket := now.Truncate(time.Minute)
+	if s.cache != nil {
+		if cached, ok := s.cache.geminiCache.Load(account.ID); ok {
+			if entry, ok := cached.(*geminiUsageInfoCacheEntry); ok &&
+				entry.minuteBucket.Equal(minuteBucket) &&
+				now.Sub(entry.timestamp) < windowStatsCacheTTL &&
+				entry.usageInfo != nil {
+				return entry.usageInfo, nil
+			}
+		}
+	}
+	usage, err := s.getGeminiUsage(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if s.cache != nil && usage != nil {
+		s.cache.geminiCache.Store(account.ID, &geminiUsageInfoCacheEntry{
+			usageInfo:    usage,
+			timestamp:    now,
+			minuteBucket: minuteBucket,
+		})
+	}
+	return usage, nil
+}
+
+// cloneAntigravityUsageForRead clones the cached UsageInfo and its mutable FiveHour
+// window before recalculating RemainingSeconds so concurrent readers/serializers never race.
+func cloneAntigravityUsageForRead(src *UsageInfo, overrideSource string, refreshState string) *UsageInfo {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	if src.FiveHour != nil {
+		fiveHourCopy := *src.FiveHour
+		copied.FiveHour = &fiveHourCopy
+	}
+	if overrideSource != "" {
+		copied.Source = overrideSource
+	}
+	if refreshState != "" {
+		copied.SnapshotRefreshState = refreshState
+	}
+	recalcAntigravityRemainingSeconds(&copied)
+	return &copied
+}
+
+// staleAntigravityUsage returns a cloned last cached Antigravity usage even after TTL
+// expiration so snapshot_only reads can serve stale-while-revalidate instead of empty "-".
+func (s *AccountUsageService) staleAntigravityUsage(accountID int64, refreshState string) (*UsageInfo, bool) {
+	if s == nil || s.cache == nil {
+		return nil, false
+	}
+	cached, ok := s.cache.antigravityCache.Load(accountID)
+	if !ok {
+		return nil, false
+	}
+	entry, ok := cached.(*antigravityUsageCache)
+	if !ok || entry == nil || entry.usageInfo == nil {
+		return nil, false
+	}
+	return cloneAntigravityUsageForRead(entry.usageInfo, "snapshot", refreshState), true
+}
+
+func (s *AccountUsageService) getAntigravityUsageSnapshot(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if s.antigravityQuotaFetcher == nil || !s.antigravityQuotaFetcher.CanFetch(account) {
+		now := time.Now()
+		return &UsageInfo{UpdatedAt: &now}, nil
+	}
+	if usage, ok := s.cachedAntigravityUsage(account.ID, false); ok {
+		return usage, nil
+	}
+	// Stale or cold cache: schedule bounded background refresh without blocking the UI.
+	refreshState := s.scheduleBackgroundUsageRefresh(account.ID, adminaccess.RestrictedFromContext(ctx) != nil)
+	if stale, ok := s.staleAntigravityUsage(account.ID, refreshState); ok {
+		return stale, nil
+	}
+	now := time.Now()
+	usage := &UsageInfo{
+		Source:               "snapshot",
+		SnapshotRefreshState: refreshState,
+		UpdatedAt:            &now,
+	}
+	enrichUsageWithAccountError(usage, account)
+	return usage, nil
+}
+
+func (s *AccountUsageService) getGrokUsageSnapshot(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if s.grokQuotaFetcher == nil {
+		now := time.Now()
+		return &UsageInfo{UpdatedAt: &now}, nil
+	}
+	now := time.Now()
+	refreshState := ""
+	effectiveAccount := account
+	if account != nil {
+		// Check inFlight (both background worker AND shared Grok billing flight) BEFORE reading
+		// the in-memory persisted billing cache so even a flight that finishes after a worker timeout
+		// linearizes: callers either observe "refreshing" or observe the persisted snapshot.
+		inFlight := s.isGrokRefreshInFlight(account.ID)
+		effectiveExtra := s.mergeCachedGrokSnapshotExtra(account.ID, account.Extra, now)
+		accCopy := *account
+		accCopy.Extra = effectiveExtra
+		effectiveAccount = &accCopy
+
+		if inFlight {
+			refreshState = snapshotRefreshStateRefreshing
+		} else if effectiveAccount.IsGrokOAuth() && s.grokQuotaService != nil && grokBillingSnapshotNeedsRefresh(effectiveAccount, now) {
+			if s.testHookBeforeGrokProbeDueCheck != nil {
+				s.testHookBeforeGrokProbeDueCheck()
+			}
+			if s.isGrokProbeDue(account.ID, now) {
+				refreshState = s.scheduleBackgroundUsageRefresh(account.ID, adminaccess.RestrictedFromContext(ctx) != nil)
+			} else if s.isGrokRefreshInFlight(account.ID) {
+				refreshState = snapshotRefreshStateRefreshing
+			} else {
+				recheckedExtra := s.mergeCachedGrokSnapshotExtra(account.ID, account.Extra, now)
+				accCopy.Extra = recheckedExtra
+			}
+		}
+	}
+	usage := s.grokQuotaFetcher.BuildUsageInfo(effectiveAccount)
+	usage.SnapshotRefreshState = refreshState
+	if usage.GrokQuotaSnapshotState == "" {
+		if usage.ErrorCode == "quota_unknown" {
+			usage.GrokQuotaSnapshotState = "unknown_until_first_response"
+		} else {
+			usage.GrokQuotaSnapshotState = "observed"
+		}
+	}
+	if account != nil && refreshState == "" {
+		s.applyCachedGrokProbeError(account.ID, usage, now)
+	}
+	if account != nil && s.usageLogRepo != nil {
+		if ws, err := s.getCachedWindowStats(ctx, account.ID, grokTodayCacheDuration, timezone.Today(), false); err == nil && ws != nil {
+			usage.GrokLocalUsage = ws
+		}
+		utcNow := now.UTC()
+		if grokBillingHasAuthoritativeQuota(usage.GrokBilling) {
+			if start, ok := currentGrokBillingWindow(usage.GrokBilling, true, utcNow); ok {
+				if ws, err := s.getCachedWindowStats(ctx, account.ID, 7*24*time.Hour, start, false); err == nil && ws != nil {
+					usage.GrokLocalUsage7d = ws
+				}
+			}
+			if start, ok := currentGrokBillingWindow(usage.GrokBilling, false, utcNow); ok {
+				if ws, err := s.getCachedWindowStats(ctx, account.ID, 30*24*time.Hour, start, false); err == nil && ws != nil {
+					usage.GrokLocalUsageMonthly = ws
+				}
+			}
+		} else {
+			if ws, err := s.getCachedWindowStats(ctx, account.ID, grokFreeQuotaWindow, utcNow.Add(-grokFreeQuotaWindow), true); err == nil && ws != nil {
+				usage.GrokLocalUsage24h = ws
+			}
+		}
+		if usage.SevenDay != nil && usage.GrokLocalUsage7d != nil {
+			usage.SevenDay.WindowStats = usage.GrokLocalUsage7d
+		}
+		if usage.ThirtyDay != nil && usage.GrokLocalUsageMonthly != nil {
+			usage.ThirtyDay.WindowStats = usage.GrokLocalUsageMonthly
+		}
+	}
+	enrichUsageWithAccountError(usage, account)
+	return usage, nil
 }
 
 // GetPassiveUsage 从 Account.Extra 中的被动采样数据构建 UsageInfo，不调用外部 API。
@@ -783,77 +1596,23 @@ func (s *AccountUsageService) syncActiveToPassive(ctx context.Context, account *
 	}
 }
 
+func applyPersistedCPRSyncError(account *Account, usage *UsageInfo) {
+	if account == nil || usage == nil || usage.ErrorCode != "" || usage.Error != "" || !IsCPRQuotaSyncAccount(account) {
+		return
+	}
+	if strings.TrimSpace(account.GetExtraString(cprQuotaLastErrorExtra)) != "" {
+		usage.ErrorCode = errorCodeQuotaRefreshFailed
+		usage.Error = "Unable to refresh OpenAI quota; displayed values may be from an earlier observation"
+	}
+}
+
 func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
+	usage, err := s.refreshOpenAIUsageSnapshot(ctx, account, force, force)
+	if err != nil || account == nil || s.usageLogRepo == nil {
+		return usage, err
+	}
+
 	now := time.Now()
-	usage := &UsageInfo{Source: "passive"}
-
-	if account == nil {
-		return usage, nil
-	}
-
-	applyExtraToUsage(usage, account.Extra, now)
-
-	if IsCPRQuotaSyncAccount(account) {
-		// codex-proxy-rs 上游：额度来自 cpr 管理端快照，同步失败时沿用已存快照。
-		if force || cprQuotaSnapshotStale(account, now) {
-			if result, err := syncCPRQuotaSnapshot(ctx, s.accountRepo, account, force); err == nil && result != nil {
-				applyExtraToUsage(usage, account.Extra, now)
-			}
-		}
-	} else if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
-		if adminaccess.RestrictedFromContext(ctx) != nil {
-			// 受限额度读取只调用额度 API，不生成 /responses 合成请求或消费重置次数。
-			if s.openAIQuotaService != nil {
-				if quotaUsage, err := s.openAIQuotaService.QueryUsage(WithScopedAdminAccountOperation(ctx, "accounts.usage.read"), account.ID); err == nil {
-					updates := buildOpenAIAutoResetUsageUpdates(quotaUsage, now)
-					if account.IsShadow() {
-						updates = buildCodexSparkWindowExtraUpdates(quotaUsage, now)
-					}
-					if hasOpenAIQuotaObservation(updates) {
-						mergeAccountExtra(account, updates)
-						s.persistOpenAICodexProbeSnapshotContext(ctx, account.ID, updates)
-						applyExtraToUsage(usage, account.Extra, now)
-						usage.Source = "active"
-					}
-				}
-			}
-		} else if account.IsShadow() {
-			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
-			// via the shared OpenAIQuotaService, which resolves credentials from the
-			// parent account.  The result is written to the shadow row's own codex_*
-			// Extra keys and immediately reflected in the returned UsageInfo.
-			if s.openAIQuotaService != nil {
-				if quotaUsage, err := s.openAIQuotaService.QueryUsage(WithScopedAdminAccountOperation(ctx, "accounts.usage.read"), account.ID); err == nil {
-					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); hasOpenAIQuotaObservation(updates) {
-						mergeAccountExtra(account, updates)
-						s.persistOpenAICodexProbeSnapshotContext(ctx, account.ID, updates)
-						if account.ParentAccountID != nil && adminaccess.RestrictedFromContext(ctx) == nil {
-							notifyOpenAIAutoReset(*account.ParentAccountID)
-						}
-						applyExtraToUsage(usage, account.Extra, now)
-						usage.Source = "active"
-					}
-				}
-			}
-		} else {
-			if updates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && hasOpenAIQuotaObservation(updates) {
-				mergeAccountExtra(account, updates)
-				applyExtraToUsage(usage, account.Extra, now)
-				usage.Source = "active"
-			}
-		}
-		if usage.Source != "active" {
-			// Keep the last observation available, but never turn a failed probe
-			// (or a response without quota data) into a fresh successful read.
-			usage.ErrorCode = errorCodeQuotaRefreshFailed
-			usage.Error = "Unable to refresh OpenAI quota; displayed values may be from an earlier observation"
-		}
-	}
-
-	if s.usageLogRepo == nil {
-		return usage, nil
-	}
-
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.FiveHour, 5*time.Hour, now)); err == nil {
 		if usage.FiveHour == nil {
 			usage.FiveHour = &UsageProgress{UtilizationUnknown: true}
@@ -866,6 +1625,105 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 			usage.SevenDay = &UsageProgress{UtilizationUnknown: true}
 		}
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
+	}
+
+	return usage, nil
+}
+
+// refreshOpenAIUsageSnapshot refreshes and persists upstream OpenAI/CPR quota
+// snapshots without querying usage_logs, so detached background refreshes incur
+// zero database aggregation cost. When syncPersist is true (background refresh),
+// UpdateExtra completes synchronously before returning so subsequent snapshot
+// reads immediately observe the persisted quota once bgRefreshInFlight clears.
+func (s *AccountUsageService) refreshOpenAIUsageSnapshot(ctx context.Context, account *Account, force bool, syncPersist bool) (*UsageInfo, error) {
+	now := time.Now()
+	usage := &UsageInfo{Source: "passive"}
+
+	if account == nil {
+		return usage, nil
+	}
+
+	applyExtraToUsage(usage, account.Extra, now)
+
+	if IsCPRQuotaSyncAccount(account) {
+		// codex-proxy-rs 上游：额度来自 cpr 管理端快照，同步失败或无有效额度窗口时沿用已存快照并告警。
+		if force || cprQuotaSnapshotStale(account, now) {
+			result, err := syncCPRQuotaSnapshot(ctx, s.accountRepo, account, force)
+			if err != nil {
+				usage.ErrorCode = errorCodeQuotaRefreshFailed
+				usage.Error = "Unable to refresh OpenAI quota; displayed values may be from an earlier observation"
+				s.cacheOpenAIProbeError(account.ID, usage.ErrorCode, usage.Error)
+			} else if result != nil {
+				hasQuotaWindow := hasOpenAIQuotaObservation(result.updates)
+				if hasQuotaWindow && (s.accountRepo == nil || (result.persisted && len(result.persistedUpdates) > 0)) {
+					if len(result.persistedUpdates) > 0 {
+						s.cacheOpenAISnapshotExtra(account.ID, result.persistedUpdates)
+					}
+					s.cacheOpenAIProbeError(account.ID, "", "")
+					usage.Source = "active"
+				} else if !hasQuotaWindow || s.accountRepo != nil {
+					usage.ErrorCode = errorCodeQuotaRefreshFailed
+					usage.Error = "Unable to refresh OpenAI quota; displayed values may be from an earlier observation"
+					s.cacheOpenAIProbeError(account.ID, usage.ErrorCode, usage.Error)
+				}
+				applyExtraToUsage(usage, account.Extra, now)
+			}
+		} else {
+			applyPersistedCPRSyncError(account, usage)
+		}
+	} else if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
+		if adminaccess.RestrictedFromContext(ctx) != nil {
+			// 受限额度读取只调用额度 API，不生成 /responses 合成请求或消费重置次数。
+			if s.openAIQuotaService != nil {
+				if quotaUsage, err := s.openAIQuotaService.QueryUsage(WithScopedAdminAccountOperation(ctx, "accounts.usage.read"), account.ID); err == nil {
+					updates := buildOpenAIAutoResetUsageUpdates(quotaUsage, now)
+					if account.IsShadow() {
+						updates = buildCodexSparkWindowExtraUpdates(quotaUsage, now)
+					}
+					if hasOpenAIQuotaObservation(updates) {
+						if s.persistOpenAICodexProbeSnapshotWithMode(ctx, account.ID, updates, syncPersist) {
+							mergeAccountExtra(account, updates)
+							applyExtraToUsage(usage, account.Extra, now)
+							usage.Source = "active"
+						}
+					}
+				}
+			}
+		} else if account.IsShadow() {
+			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
+			// via the shared OpenAIQuotaService, which resolves credentials from the
+			// parent account.  The result is written to the shadow row's own codex_*
+			// Extra keys and immediately reflected in the returned UsageInfo.
+			if s.openAIQuotaService != nil {
+				if quotaUsage, err := s.openAIQuotaService.QueryUsage(WithScopedAdminAccountOperation(ctx, "accounts.usage.read"), account.ID); err == nil {
+					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); hasOpenAIQuotaObservation(updates) {
+						if s.persistOpenAICodexProbeSnapshotWithMode(ctx, account.ID, updates, syncPersist) {
+							mergeAccountExtra(account, updates)
+							if account.ParentAccountID != nil && adminaccess.RestrictedFromContext(ctx) == nil {
+								notifyOpenAIAutoReset(*account.ParentAccountID)
+							}
+							applyExtraToUsage(usage, account.Extra, now)
+							usage.Source = "active"
+						}
+					}
+				}
+			}
+		} else {
+			if updates, err := s.probeOpenAICodexSnapshot(ctx, account, syncPersist); err == nil && hasOpenAIQuotaObservation(updates) {
+				mergeAccountExtra(account, updates)
+				applyExtraToUsage(usage, account.Extra, now)
+				usage.Source = "active"
+			}
+		}
+		if usage.Source != "active" {
+			// Keep the last observation available, but never turn a failed probe
+			// (or a response without quota data) into a fresh successful read.
+			usage.ErrorCode = errorCodeQuotaRefreshFailed
+			usage.Error = "Unable to refresh OpenAI quota; displayed values may be from an earlier observation"
+			s.cacheOpenAIProbeError(account.ID, usage.ErrorCode, usage.Error)
+		} else {
+			s.cacheOpenAIProbeError(account.ID, "", "")
+		}
 	}
 
 	return usage, nil
@@ -928,7 +1786,7 @@ func (s *AccountUsageService) shouldProbeOpenAICodexSnapshot(accountID int64, no
 	return true
 }
 
-func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, error) {
+func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account, syncPersist bool) (map[string]any, error) {
 	if account == nil || !account.IsOAuth() {
 		return nil, nil
 	}
@@ -1007,7 +1865,9 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		return nil, err
 	}
 	if hasOpenAIQuotaObservation(updates) {
-		s.persistOpenAICodexProbeSnapshotContext(ctx, account.ID, updates)
+		if !s.persistOpenAICodexProbeSnapshotWithMode(ctx, account.ID, updates, syncPersist) {
+			return nil, fmt.Errorf("persist openai quota snapshot failed")
+		}
 		return updates, nil
 	}
 	return nil, nil
@@ -1015,6 +1875,35 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 
 func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, updates map[string]any) {
 	s.persistOpenAICodexProbeSnapshotContext(context.Background(), accountID, updates)
+}
+
+func (s *AccountUsageService) persistOpenAICodexProbeSnapshotWithMode(ctx context.Context, accountID int64, updates map[string]any, syncPersist bool) bool {
+	if syncPersist {
+		return s.persistOpenAICodexProbeSnapshotSync(ctx, accountID, updates)
+	}
+	s.persistOpenAICodexProbeSnapshotContext(ctx, accountID, updates)
+	return true
+}
+
+func (s *AccountUsageService) persistOpenAICodexProbeSnapshotSync(ctx context.Context, accountID int64, updates map[string]any) bool {
+	if s == nil || s.accountRepo == nil || accountID <= 0 || len(updates) == 0 {
+		return false
+	}
+	// Honor caller ctx deadline (so background workers never exceed bgUsageRefreshTimeout),
+	// capped at 5s per write.
+	updateCtx, updateCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer updateCancel()
+	if err := scopedAccountIDAccess(updateCtx, s.accountRepo, accountID, "accounts.usage.read", true); err != nil {
+		return false
+	}
+	if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil {
+		s.cacheOpenAISnapshotExtra(accountID, updates)
+		if adminaccess.RestrictedFromContext(ctx) == nil {
+			notifyOpenAIAutoReset(accountID)
+		}
+		return true
+	}
+	return false
 }
 
 func (s *AccountUsageService) persistOpenAICodexProbeSnapshotContext(ctx context.Context, accountID int64, updates map[string]any) {
@@ -1025,16 +1914,7 @@ func (s *AccountUsageService) persistOpenAICodexProbeSnapshotContext(ctx context
 		return
 	}
 
-	go func() {
-		updateCtx, updateCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer updateCancel()
-		if err := scopedAccountIDAccess(updateCtx, s.accountRepo, accountID, "accounts.usage.read", true); err != nil {
-			return
-		}
-		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil && adminaccess.RestrictedFromContext(ctx) == nil {
-			notifyOpenAIAutoReset(accountID)
-		}
-	}()
+	go s.persistOpenAICodexProbeSnapshotSync(context.WithoutCancel(ctx), accountID, updates)
 }
 
 func extractOpenAICodexProbeUpdates(resp *http.Response) (map[string]any, error) {
@@ -1167,10 +2047,7 @@ func (s *AccountUsageService) cachedAntigravityUsage(accountID int64, force bool
 	if !ok || time.Since(cache.timestamp) >= antigravityCacheTTL(cache.usageInfo) {
 		return nil, false
 	}
-	usage := cache.usageInfo
-	// 重新计算 RemainingSeconds，避免返回过时的剩余秒数
-	recalcAntigravityRemainingSeconds(usage)
-	return usage, true
+	return cloneAntigravityUsageForRead(cache.usageInfo, "", ""), true
 }
 
 // getAntigravityUsage 获取 Antigravity 账户额度；force 跳过缓存（仍经 singleflight 合并并发请求）。
@@ -1185,16 +2062,27 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 		return usage, nil
 	}
 
-	// 2. singleflight 防止并发击穿
+	// 2. singleflight 防止并发击穿；严格遵守调用方 ctx deadline，确保后台 worker 端到端占槽 <= bgUsageRefreshTimeout。
+	if err := ctx.Err(); err != nil {
+		degraded := buildAntigravityDegradedUsage(err)
+		enrichUsageWithAccountError(degraded, account)
+		return degraded, nil
+	}
 	flightKey := fmt.Sprintf("ag-usage:%d", account.ID)
-	result, flightErr, _ := s.cache.antigravityFlight.Do(flightKey, func() (any, error) {
+	resultCh := s.cache.antigravityFlight.DoChan(flightKey, func() (any, error) {
 		// 再次检查缓存（等待期间可能已被填充）
 		if usage, ok := s.cachedAntigravityUsage(account.ID, force); ok {
 			return usage, nil
 		}
 
-		// 使用独立 context，避免调用方 cancel 导致所有共享 flight 的请求失败
-		fetchCtx, fetchCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		// 使用独立 context 避免单个调用方主动 cancel 误杀共享 flight，但受限于调用方剩余 deadline 与 30s 上限。
+		fetchTimeout := 30 * time.Second
+		if dl, ok := ctx.Deadline(); ok {
+			if rem := time.Until(dl); rem > 0 && rem < fetchTimeout {
+				fetchTimeout = rem
+			}
+		}
+		fetchCtx, fetchCancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer fetchCancel()
 
 		proxyURL := s.antigravityQuotaFetcher.GetProxyURL(fetchCtx, account)
@@ -1217,6 +2105,18 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 		return fetchResult.UsageInfo, nil
 	})
 
+	var result any
+	var flightErr error
+	select {
+	case <-ctx.Done():
+		degraded := buildAntigravityDegradedUsage(ctx.Err())
+		enrichUsageWithAccountError(degraded, account)
+		return degraded, nil
+	case res := <-resultCh:
+		result = res.Val
+		flightErr = res.Err
+	}
+
 	if flightErr != nil {
 		return nil, flightErr
 	}
@@ -1234,12 +2134,22 @@ func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account
 		return &UsageInfo{UpdatedAt: &now}, nil
 	}
 	var billingProbeResult *GrokQuotaProbeResult
+	probePersistFailed := false
 	if account != nil && account.IsGrokOAuth() && s.grokQuotaService != nil && (force || grokBillingSnapshotNeedsRefresh(account, time.Now())) && s.shouldProbeGrokBilling(account.ID, time.Now(), force) {
-		result, err := s.grokQuotaService.ProbeBilling(ctx, account.ID)
-		if err == nil && result != nil && result.Billing != nil {
-			billingProbeResult = result
-			mergeAccountExtra(account, map[string]any{grokBillingExtraKey: result.Billing})
-		} else if err != nil && force {
+		snapResult, err := s.grokQuotaService.ProbeBillingSnapshotOnly(ctx, account.ID)
+		// Shared cache publishing is owned exclusively by GrokQuotaService's outcome hook;
+		// this active caller only merges a persisted response into its own local account copy.
+		if snapResult != nil && snapResult.Persisted && snapResult.Billing != nil {
+			mergeAccountExtra(account, map[string]any{grokBillingExtraKey: snapResult.Billing})
+			if err == nil {
+				copied := *snapResult
+				copied.LocalUsage24h, copied.LocalUsage7d, copied.LocalUsageMonthly = grokLocalUsageForQuota(ctx, s.usageLogRepo, account.ID, copied.Billing, time.Now().UTC())
+				billingProbeResult = &copied
+			}
+		} else if err == nil && snapResult != nil && !snapResult.Persisted {
+			probePersistFailed = true
+		}
+		if err != nil && force {
 			return nil, err
 		}
 	}
@@ -1249,6 +2159,14 @@ func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account
 			usage.GrokQuotaSnapshotState = "unknown_until_first_response"
 		} else {
 			usage.GrokQuotaSnapshotState = "observed"
+		}
+	}
+	if account != nil {
+		if probePersistFailed && canOverlayQuotaRefreshError(usage) {
+			usage.ErrorCode = errorCodeQuotaRefreshFailed
+			usage.Error = "Unable to refresh Grok quota; displayed values may be from an earlier observation"
+		} else {
+			s.applyCachedGrokProbeError(account.ID, usage, time.Now())
 		}
 	}
 
@@ -1697,11 +2615,16 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 	return progress
 }
 
-func codexWindowStatsStart(progress *UsageProgress, fallbackWindow time.Duration, now time.Time) time.Time {
+func codexWindowStatsQueryStart(progress *UsageProgress, fallbackWindow time.Duration, now time.Time) (time.Time, bool) {
 	if progress != nil && progress.ResetsAt != nil && now.Before(*progress.ResetsAt) {
-		return progress.ResetsAt.Add(-fallbackWindow)
+		return progress.ResetsAt.Add(-fallbackWindow), false
 	}
-	return now.Add(-fallbackWindow)
+	return now.Add(-fallbackWindow), true
+}
+
+func codexWindowStatsStart(progress *UsageProgress, fallbackWindow time.Duration, now time.Time) time.Time {
+	start, _ := codexWindowStatsQueryStart(progress, fallbackWindow, now)
+	return start
 }
 
 func (s *AccountUsageService) GetAccountUsageStats(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.AccountUsageStatsResponse, error) {
@@ -1973,4 +2896,89 @@ func buildGeminiUsageProgress(used, limit int64, resetAt time.Time, tokens int64
 // 用于账号列表页面显示当前窗口费用
 func (s *AccountUsageService) GetAccountWindowStats(ctx context.Context, accountID int64, startTime time.Time) (*usagestats.AccountStats, error) {
 	return s.usageLogRepo.GetAccountWindowStats(ctx, accountID, startTime)
+}
+
+// GetAccountWindowStatsBatchByStarts 批量获取多个账号各自独立窗口起点的使用统计。
+// 优先命中进程内 60s 短缓存，仅将缓存未命中的账号合并为单条多起点 SQL 聚合，
+// 避免账号管理页刷新时并发 N+1 扫描 usage_logs 抢占用户请求数据库资源。
+func (s *AccountUsageService) GetAccountWindowStatsBatchByStarts(ctx context.Context, startByAccount map[int64]time.Time) (map[int64]*usagestats.AccountStats, error) {
+	result := make(map[int64]*usagestats.AccountStats, len(startByAccount))
+	if len(startByAccount) == 0 || s.usageLogRepo == nil {
+		return result, nil
+	}
+
+	now := time.Now()
+	missing := make(map[int64]time.Time)
+	for accountID, startTime := range startByAccount {
+		if accountID <= 0 {
+			continue
+		}
+		key := windowStatsCacheKey{accountID: accountID, duration: 0}
+		if s.cache != nil {
+			if cached, ok := s.cache.windowStatsCache.Load(key); ok {
+				if entry, ok := cached.(*windowStatsCache); ok && entry.startTime.Equal(startTime) && now.Sub(entry.timestamp) < windowStatsCacheTTL && entry.stats != nil {
+					result[accountID] = &usagestats.AccountStats{
+						Requests:     entry.stats.Requests,
+						Tokens:       entry.stats.Tokens,
+						Cost:         entry.stats.Cost,
+						StandardCost: entry.stats.StandardCost,
+						UserCost:     entry.stats.UserCost,
+					}
+					continue
+				}
+			}
+		}
+		missing[accountID] = startTime
+	}
+
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	var fetched map[int64]*usagestats.AccountStats
+	if batchReader, ok := s.usageLogRepo.(accountWindowStatsMultiStartBatchReader); ok {
+		var err error
+		fetched, err = batchReader.GetAccountWindowStatsByStartsBatch(ctx, missing)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		fetched = make(map[int64]*usagestats.AccountStats, len(missing))
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(6)
+		for accountID, startTime := range missing {
+			id, st := accountID, startTime
+			g.Go(func() error {
+				stats, err := s.usageLogRepo.GetAccountWindowStats(gctx, id, st)
+				if err == nil && stats != nil {
+					mu.Lock()
+					fetched[id] = stats
+					mu.Unlock()
+				}
+				return nil
+			})
+		}
+		_ = g.Wait()
+	}
+
+	for accountID, stats := range fetched {
+		if stats == nil {
+			continue
+		}
+		result[accountID] = stats
+		if s.cache != nil {
+			if startTime, ok := missing[accountID]; ok {
+				s.cache.windowStatsCache.Store(
+					windowStatsCacheKey{accountID: accountID, duration: 0},
+					&windowStatsCache{
+						stats:     windowStatsFromAccountStats(stats),
+						timestamp: now,
+						startTime: startTime,
+					},
+				)
+			}
+		}
+	}
+	return result, nil
 }

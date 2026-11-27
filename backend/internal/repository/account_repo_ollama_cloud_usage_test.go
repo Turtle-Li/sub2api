@@ -182,7 +182,36 @@ func TestListOllamaCloudUsageGroupAccountsUsesOneStrictBatchQuery(t *testing.T) 
 	require.Contains(t, query, "platform IN ('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax')")
 	require.Contains(t, query, "jsonb_typeof(credentials -> 'api_key') = 'string'")
 	require.Contains(t, query, ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'"))
+	require.Contains(t, query, "last_used_at")
 	require.NotContains(t, query, "~*")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListOllamaCloudUsageGroupAccountsScansLastUsedAtForAutoRefresh(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	updatedAt := time.Date(2026, time.November, 27, 10, 0, 0, 0, time.UTC)
+	siblingLastUsed := time.Date(2026, time.November, 27, 11, 30, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT id, platform, type, proxy_id, credentials, extra, updated_at, last_used_at").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"id", "platform", "type", "proxy_id", "credentials", "extra", "updated_at", "last_used_at"}).
+				AddRow(int64(17), service.PlatformOpenAI, service.AccountTypeAPIKey, nil, `{"api_key":"key","base_url":"https://ollama.com/v1"}`, `{}`, updatedAt, nil).
+				AddRow(int64(18), service.PlatformAnthropic, service.AccountTypeAPIKey, int64(9), `{"api_key":"key","base_url":"https://www.ollama.com/v1"}`, `{}`, updatedAt, siblingLastUsed),
+		)
+
+	repo := newAccountRepositoryWithSQL(nil, db, nil)
+	anchor := ollamaCloudUsageRepositoryAccount()
+	accounts, err := repo.ListOllamaCloudUsageGroupAccounts(context.Background(), []*service.Account{anchor})
+	require.NoError(t, err)
+	require.Len(t, accounts, 2)
+	require.Nil(t, accounts[0].LastUsedAt)
+	require.NotNil(t, accounts[1].LastUsedAt)
+	require.True(t, accounts[1].LastUsedAt.Equal(siblingLastUsed))
+	require.NotNil(t, accounts[1].ProxyID)
+	require.Equal(t, int64(9), *accounts[1].ProxyID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -53,6 +53,15 @@ func (s *adminServiceImpl) GetAllGroups(ctx context.Context) ([]Group, error) {
 	return s.groupRepo.ListActive(ctx)
 }
 
+func (s *adminServiceImpl) GetAllGroupsWithoutCounts(ctx context.Context) ([]Group, error) {
+	if reader, ok := s.groupRepo.(interface {
+		ListActiveWithoutCounts(context.Context) ([]Group, error)
+	}); ok {
+		return reader.ListActiveWithoutCounts(ctx)
+	}
+	return s.groupRepo.ListActive(ctx)
+}
+
 func (s *adminServiceImpl) GetAllGroupsByPlatform(ctx context.Context, platform string) ([]Group, error) {
 	return s.groupRepo.ListActiveByPlatform(ctx, platform)
 }

@@ -7,8 +7,28 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+var billingObservedVersionSeq atomic.Int64
+
+func nextBillingObservedVersion(now time.Time, prevVersion int64) int64 {
+	candidate := now.UnixNano()
+	for {
+		cur := billingObservedVersionSeq.Load()
+		next := candidate
+		if cur >= next {
+			next = cur + 1
+		}
+		if prevVersion >= next {
+			next = prevVersion + 1
+		}
+		if billingObservedVersionSeq.CompareAndSwap(cur, next) {
+			return next
+		}
+	}
+}
 
 const (
 	// CLI client identity required by cli-chat-proxy billing endpoints.
@@ -106,6 +126,7 @@ type BillingSummary struct {
 	MonthlyUpdatedAt     string   `json:"monthly_updated_at,omitempty"`
 	Partial              bool     `json:"partial,omitempty"`
 	FailedWindows        []string `json:"failed_windows,omitempty"`
+	ObservedVersion      int64    `json:"observed_version,string,omitempty"`
 }
 
 // BuildBillingURL builds weekly or monthly billing URL against the CLI chat proxy.
@@ -356,11 +377,13 @@ func StampBillingSummary(summary *BillingSummary, statusCode int, source string)
 	if summary == nil {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339)
 	summary.StatusCode = statusCode
 	summary.Source = source
 	summary.FetchedAt = now
 	summary.UpdatedAt = now
+	summary.ObservedVersion = nextBillingObservedVersion(nowTime, summary.ObservedVersion)
 	return summary
 }
 

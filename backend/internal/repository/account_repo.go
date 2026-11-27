@@ -1540,12 +1540,18 @@ func buildAccountListFilteredQuery(client *dbent.Client, filter service.AccountL
 }
 
 func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.listWithFilteredQuery(ctx, params, r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode))
+	return r.listWithFilteredQuery(ctx, params, r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode), false)
 }
 
 // ListWithAccountFilter is ListWithFilters plus account-pool scoping.
 func (r *accountRepository) ListWithAccountFilter(ctx context.Context, params pagination.PaginationParams, filter service.AccountListFilter) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.listWithFilteredQuery(ctx, params, r.accountListQueryFromFilter(filter))
+	return r.listWithFilteredQuery(ctx, params, r.accountListQueryFromFilter(filter), false)
+}
+
+// ListWithAccountFilterLite is a lightweight variant for admin list views (lite=1)
+// that hydrates proxy metadata and group_ids without loading full group records.
+func (r *accountRepository) ListWithAccountFilterLite(ctx context.Context, params pagination.PaginationParams, filter service.AccountListFilter) ([]service.Account, *pagination.PaginationResult, error) {
+	return r.listWithFilteredQuery(ctx, params, r.accountListQueryFromFilter(filter), true)
 }
 
 // ListAllWithAccountFilter is ListAllWithFilters plus account-pool scoping.
@@ -1561,7 +1567,7 @@ func (r *accountRepository) accountListQueryFromFilter(filter service.AccountLis
 	return buildAccountListFilteredQuery(r.client, filter)
 }
 
-func (r *accountRepository) listWithFilteredQuery(ctx context.Context, params pagination.PaginationParams, q *dbent.AccountQuery) ([]service.Account, *pagination.PaginationResult, error) {
+func (r *accountRepository) listWithFilteredQuery(ctx context.Context, params pagination.PaginationParams, q *dbent.AccountQuery, lite bool) ([]service.Account, *pagination.PaginationResult, error) {
 	// Clone before Count so interceptor-appended predicates (SoftDeleteMixin's
 	// deleted_at IS NULL) don't accumulate on the shared builder and pollute the
 	// subsequent list query. Same pattern used in group_repo/promo_code_repo/user_repo
@@ -1583,7 +1589,12 @@ func (r *accountRepository) listWithFilteredQuery(ctx context.Context, params pa
 		return nil, nil, err
 	}
 
-	outAccounts, err := r.accountsToService(ctx, accounts)
+	var outAccounts []service.Account
+	if lite {
+		outAccounts, err = r.accountsToServiceLite(ctx, accounts)
+	} else {
+		outAccounts, err = r.accountsToService(ctx, accounts)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -4406,6 +4417,90 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	}
 
 	return outAccounts, nil
+}
+
+// accountsToServiceLite hydrates only proxies and account group_ids (skipping full
+// group entity lookups) for lite admin account list responses that do not return
+// nested groups/account_groups objects.
+func (r *accountRepository) accountsToServiceLite(ctx context.Context, accounts []*dbent.Account) ([]service.Account, error) {
+	if len(accounts) == 0 {
+		return []service.Account{}, nil
+	}
+
+	accountIDs := make([]int64, 0, len(accounts))
+	proxyIDs := make([]int64, 0, len(accounts))
+	for _, acc := range accounts {
+		accountIDs = append(accountIDs, acc.ID)
+		if acc.ProxyID != nil {
+			proxyIDs = append(proxyIDs, *acc.ProxyID)
+		}
+		if acc.ProxyFallbackOriginID != nil {
+			proxyIDs = append(proxyIDs, *acc.ProxyFallbackOriginID)
+		}
+	}
+
+	proxyMap, err := r.loadProxies(ctx, proxyIDs)
+	if err != nil {
+		return nil, err
+	}
+	groupIDsByAccount, err := r.loadAccountGroupIDsOnly(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	outAccounts := make([]service.Account, 0, len(accounts))
+	for _, acc := range accounts {
+		out := accountEntityToService(acc)
+		if out == nil {
+			continue
+		}
+		if acc.ProxyID != nil {
+			if proxy, ok := proxyMap[*acc.ProxyID]; ok {
+				out.Proxy = proxy
+			}
+		}
+		out.ProxyFallbackOriginID = acc.ProxyFallbackOriginID
+		if acc.ProxyFallbackOriginID != nil {
+			if op, ok := proxyMap[*acc.ProxyFallbackOriginID]; ok && op != nil {
+				n := op.Name
+				out.ProxyFallbackOriginName = &n
+			}
+		}
+		if groupIDs, ok := groupIDsByAccount[acc.ID]; ok {
+			out.GroupIDs = groupIDs
+		}
+		outAccounts = append(outAccounts, *out)
+	}
+
+	return outAccounts, nil
+}
+
+func (r *accountRepository) loadAccountGroupIDsOnly(ctx context.Context, accountIDs []int64) (map[int64][]int64, error) {
+	groupIDsByAccount := make(map[int64][]int64)
+	accountIDs = uniquePositiveInt64s(accountIDs)
+	if len(accountIDs) == 0 {
+		return groupIDsByAccount, nil
+	}
+
+	for start := 0; start < len(accountIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(accountIDs) {
+			end = len(accountIDs)
+		}
+		entries, err := r.client.AccountGroup.Query().
+			Where(dbaccountgroup.AccountIDIn(accountIDs[start:end]...)).
+			Order(dbaccountgroup.ByAccountID(), dbaccountgroup.ByPriority()).
+			Select(dbaccountgroup.FieldAccountID, dbaccountgroup.FieldGroupID).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, ag := range entries {
+			groupIDsByAccount[ag.AccountID] = append(groupIDsByAccount[ag.AccountID], ag.GroupID)
+		}
+	}
+
+	return groupIDsByAccount, nil
 }
 
 func tempUnschedulablePredicate() dbpredicate.Account {
