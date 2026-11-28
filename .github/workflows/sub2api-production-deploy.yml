@@ -13,10 +13,10 @@ on:
         type: boolean
         default: false
       deploy_caddy:
-        description: 'Also publish the reviewed Caddy template after the application slot switch'
+        description: 'Opt in only for a reviewed Caddy change, after the application slot switch'
         required: false
         type: boolean
-        default: true
+        default: false
       deployment_target:
         description: 'AWS production environment that owns the target host SSH secrets'
         required: true
@@ -269,6 +269,7 @@ jobs:
           PY_METADATA
 
       - name: Upload verified candidate image artifact
+        id: image_artifact
         if: ${{ inputs.build_only }}
         uses: actions/upload-artifact@v7
         with:
@@ -281,6 +282,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload image and start verified blue-green release
+        id: deploy_image
         if: ${{ !inputs.build_only }}
         timeout-minutes: 35
         env:
@@ -307,6 +309,7 @@ jobs:
             < "$ARCHIVE_PATH"
 
       - name: Upload and activate verified AWS Caddy configuration
+        id: deploy_caddy
         if: ${{ !inputs.build_only && inputs.deploy_caddy && inputs.deployment_target == 'aws-candidate' }}
         timeout-minutes: 10
         env:
@@ -332,9 +335,13 @@ jobs:
             < "$CADDY_CONFIG"
 
       - name: Record release summary
+        if: ${{ !cancelled() && steps.archive.outcome == 'success' }}
         env:
           BUILD_ONLY: ${{ inputs.build_only }}
           DEPLOY_CADDY: ${{ inputs.deploy_caddy }}
+          IMAGE_ARTIFACT_OUTCOME: ${{ steps.image_artifact.outcome }}
+          IMAGE_DEPLOY_OUTCOME: ${{ steps.deploy_image.outcome }}
+          CADDY_DEPLOY_OUTCOME: ${{ steps.deploy_caddy.outcome }}
           ARCHIVE_BYTES: ${{ steps.archive.outputs.bytes }}
           ARCHIVE_CONFIG_ID: ${{ steps.archive.outputs.config_id }}
           ARCHIVE_DIGEST: ${{ steps.archive.outputs.digest }}
@@ -355,13 +362,19 @@ jobs:
             echo "- Build: GitHub-hosted linux/amd64 runner"
             if [ "$BUILD_ONLY" = "true" ]; then
               echo "- Mode: build only; no host deployment or SSH credential setup"
-              echo "- Artifact: sub2api-image-${SOURCE_COMMIT} (retained for one day)"
+              echo "- Artifact upload: ${IMAGE_ARTIFACT_OUTCOME}"
+              if [ "$IMAGE_ARTIFACT_OUTCOME" = "success" ]; then
+                echo "- Artifact: sub2api-image-${SOURCE_COMMIT} (retained for one day)"
+              fi
             else
-              echo "- Production: verified image load and blue-green switch"
+              echo "- Production image and blue-green switch: ${IMAGE_DEPLOY_OUTCOME}"
               if [ "$DEPLOY_CADDY" = "true" ]; then
-                echo "- Caddy: reviewed template published after application switch"
+                echo "- Caddy template publication: ${CADDY_DEPLOY_OUTCOME}"
+                if [ "$IMAGE_DEPLOY_OUTCOME" = "success" ] && [ "$CADDY_DEPLOY_OUTCOME" = "failure" ]; then
+                  echo "- The application switch succeeded before the Caddy step failed. Verify live state before retrying."
+                fi
               else
-                echo "- Caddy: existing routes retained through application switch"
+                echo "- Caddy template publication: not requested"
               fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"

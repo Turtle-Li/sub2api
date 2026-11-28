@@ -35,8 +35,8 @@ Ordinary pushes and tags do not start GitHub Actions. CI, security scans,
 artifact releases, and production deployment are all manually dispatched.
 The production workflow checks out the exact fork `main` commit on a
 GitHub-hosted runner, builds one `linux/amd64` Docker image, and streams a
-zstd-compressed Docker archive plus the reviewed AWS Caddy template through the
-restricted deploy SSH key.
+zstd-compressed Docker archive through the restricted deploy SSH key.
+Publishing the reviewed AWS Caddy template is a separate, opt-in step.
 The runner hashes the exact compressed archive before upload, and production
 verifies that digest before loading it. Docker/containerd may assign different
 local image and config IDs both during `docker save` and again during
@@ -247,7 +247,14 @@ maintenance lock, candidate/rollback gates and background ownership handoff
 remain required. Reattach monitors for any older retained generation to the
 new active slot, because its previous active-slot expectation is now obsolete.
 The digest-bound Caddy receiver supports blue, green and legacy `sub2api`;
-mixed/unknown upstream sets remain rejected and its input stays blue-only.
+mixed/unknown application upstreams remain rejected and its input stays
+blue-only. It retains host-managed exact-path proxy blocks from the verified
+live-file backup, not from the uploaded template. The supported shape is a
+leading `handle /literal-path` containing a single plain `reverse_proxy`
+to an independent upstream on the API site. The template must keep its
+`# sub2api: preserve host-managed exact-path proxies` insertion point.
+Mixed backend pools, unsupported routing layouts, or any change to those
+routes' adapted scope, order or target fail before writing or reloading.
 
 The Caddy receiver allows up to 118 seconds of strictly verified, loopback-pinned
 HTTPS readiness after configuration convergence, because first ACME issuance
@@ -290,12 +297,18 @@ inventory/fence/CAS gates in
 
 ### Release the application with the current Caddy routes
 
-When the Caddy template has no changes to publish and live ingress includes
-separately managed routes such as `api-proxy`, dispatch the production
-workflow with `deployment_target=aws-candidate` and `deploy_caddy=false`.
-The same verified image receiver and blue-green helper still switch the
-application upstream. Only the subsequent template upload is skipped.
-Review the live Caddy routes before and after this mode.
+For an ordinary app release, use `deployment_target=aws-candidate` with
+`deploy_caddy=false` (the default). The same verified image receiver and
+blue-green helper switch the application upstream; only the later template
+publish is skipped. Review the live Caddy routes before and after the switch.
+
+Set `deploy_caddy=true` only for an approved edge configuration change. The
+production receiver is installed separately from the app image: verify its
+trusted revision and route-retention support before using this option.
+The workflow reports the image switch and the Caddy publication separately.
+If the image switch succeeds and Caddy fails, the run still fails; verify live
+application and Caddy state before retrying either part. See the
+[host-managed proxy incident](CADDY_HOST_MANAGED_PROXY_20261129.md).
 
 ### Build an image without updating the old origin
 

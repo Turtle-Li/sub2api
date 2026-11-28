@@ -192,7 +192,9 @@ write_caddyfile() {
   reverse_proxy ${container}:8080
 }
 
-api.turtleligpt.com {
+api.turtleligpt.com, api-proxy.turtleligpt.com {
+  encode zstd gzip
+  # sub2api: preserve host-managed exact-path proxies
   @responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
   @too_large_responses_body {
     path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
@@ -276,6 +278,19 @@ reset_fixture() {
   "$FAKE_JSON" "$HOST_CADDY" "/tmp/sub2api-release-${container}.Caddyfile" >"$ACTIVE_JSON"
 }
 
+add_independent_proxy() {
+  local destination="$1" path="$2" dial="$3"
+  python3 - "$destination" "$path" "$dial" <<'PY'
+from pathlib import Path
+import sys
+
+file = Path(sys.argv[1])
+anchor = "  # sub2api: preserve host-managed exact-path proxies\n"
+block = "  handle {} {{\n    reverse_proxy {}\n  }}\n".format(*sys.argv[2:])
+file.write_text(file.read_text().replace(anchor, block, 1))
+PY
+}
+
 run_receiver() {
   local candidate="$1" digest output config_file
 
@@ -321,11 +336,8 @@ import sys
 
 text = open(sys.argv[1], "r", encoding="utf-8").read()
 caddy_source = sys.argv[2] if len(sys.argv) > 2 else "/dev/stdin"
-upstreams = sorted(set(re.findall(r"\bsub2api(?:-(?:blue|green))?:8080\b", text)))
-hosts = [
-    host for host in ("api.turtleligpt.com", "aws-test.turtleligpt.com")
-    if re.search(r"(?m)^" + re.escape(host) + r"\s+\{$", text)
-]
+upstreams = re.search(r"(?m)^  reverse_proxy (.+)$", text).group(1).split()
+hosts = re.findall(r"(?m)^(api\.turtleligpt\.com[^\n{]*|aws-test\.turtleligpt\.com) \{$", text)
 sizes = []
 for value in re.findall(r"(?m)^\s*max_size\s+([^\s#]+)", text):
     if value in {"128MiB", "134217728"}:
@@ -344,20 +356,39 @@ if len(hosts) != 2 or len(sizes) != 4 or len(thresholds) != 4:
     raise SystemExit(2)
 routes = []
 for index, host in enumerate(hosts):
+    group = "group" + str(index)
+    site_routes = []
+    if index == 0:
+        site_routes.append({"handle": [{"handler": "encode", "encodings": {"zstd": {}, "gzip": {}}}]})
+        for path, dials in re.findall(r"(?m)^  handle (/[^ \n]+) \{\n    reverse_proxy ([^\n]+)\n  \}$", text):
+            site_routes.append({
+                "match": [{"path": [path]}],
+                "group": group,
+                "handle": [{"handler": "subroute", "routes": [{"handle": [{
+                    "handler": "reverse_proxy", "upstreams": [{"dial": value} for value in dials.split()],
+                }]}]}],
+            })
     for guard_index in range(2):
         guard = index * 2 + guard_index
-        routes.append({
-            "match": [{"host": [host]}],
-            "handle": [{"handler": "subroute", "routes": [{
-                "match": [{"expression": "Content-Length > " + thresholds[guard]}],
-                "handle": [
-                    {"handler": "request_body", "max_size": sizes[guard]},
-                    {"handler": "reverse_proxy", "upstreams": [{"dial": value} for value in upstreams]},
-                    {"handler": "file_server", "hide": [caddy_source]},
-                ],
-            }]}],
-        })
-print(json.dumps({"apps": {"http": {"servers": {"srv0": {"routes": routes}}}}}, separators=(",", ":")))
+        site_routes.extend([{
+            "match": [{"expression": "Content-Length > " + thresholds[guard]}],
+            "group": group,
+            "handle": [{"handler": "static_response", "status_code": 413}],
+        }, {
+            **({"match": [{"path": ["/v1/responses"]}]} if guard_index == 0 else {}),
+            "group": group,
+            "handle": [{"handler": "subroute", "routes": [{"handle": [
+                {"handler": "request_body", "max_size": sizes[guard]},
+                {"handler": "reverse_proxy", "upstreams": [{"dial": value} for value in upstreams]},
+                {"handler": "file_server", "hide": [caddy_source]},
+            ]}]}],
+        }])
+    routes.append({
+        "match": [{"host": host.split(", ")}],
+        "handle": [{"handler": "subroute", "routes": site_routes}],
+        "terminal": True,
+    })
+print(json.dumps({"apps": {"http": {"servers": {"srv0": {"listen": [":443"], "routes": routes}}}}}, separators=(",", ":")))
 PY
 chmod +x "$FAKE_JSON"
 
@@ -714,6 +745,93 @@ fi
 assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'mixed legacy upstream rejection preserves host'
 [ ! -e "$TRANSACTION_PATH" ] || fail 'mixed legacy upstream rejection created a transaction'
 
+# The live API site may have an independent exact-path proxy ahead of the app
+# handlers on both API hostnames. It must survive publication of the baseline
+# template, including when it predates the preservation marker.
+reset_fixture green 100MB 100000000
+PRIVATE_PATH=/ops-synthetic-ws
+PRIVATE_DIAL=ops-internal:9100
+add_independent_proxy "$HOST_CADDY" "$PRIVATE_PATH" "$PRIVATE_DIAL"
+cp "$HOST_CADDY" "$STARTUP_CADDY"
+"$FAKE_JSON" "$HOST_CADDY" /tmp/sub2api-release-sub2api-green.Caddyfile >"$ACTIVE_JSON"
+if ! run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/retained-route.log"; then
+  tail -n 12 "${TEST_ROOT}/retained-route.log" >&2 || true
+  fail 'receiver did not retain independent API proxy while publishing the template'
+fi
+assert_contains "$HOST_CADDY" "handle ${PRIVATE_PATH} {"
+assert_contains "$HOST_CADDY" "reverse_proxy ${PRIVATE_DIAL}"
+assert_contains "$ACTIVE_JSON" 'sub2api-green:8080'
+assert_contains "$ACTIVE_JSON" "$PRIVATE_PATH"
+assert_contains "$ACTIVE_JSON" "$PRIVATE_DIAL"
+assert_not_contains "${TEST_ROOT}/retained-route.log" "$PRIVATE_PATH"
+assert_not_contains "${TEST_ROOT}/retained-route.log" "$PRIVATE_DIAL"
+cmp -s "$HOST_CADDY" "$STARTUP_CADDY" || fail 'independent route host/startup mismatch'
+assert_contains "${TEST_ROOT}/retained-route.log" 'CADDY_CONFIG_RELEASED'
+
+# A template cannot omit the private insertion point or change the route's
+# host scope. These failures must happen before a transaction or reload.
+reset_fixture blue 128MiB 134217728
+add_independent_proxy "$HOST_CADDY" "$PRIVATE_PATH" "$PRIVATE_DIAL"
+cp "$HOST_CADDY" "$STARTUP_CADDY"
+"$FAKE_JSON" "$HOST_CADDY" /tmp/sub2api-release-sub2api-blue.Caddyfile >"$ACTIVE_JSON"
+before_sha="$(file_sha "$HOST_CADDY")"
+cp "$ACTIVE_JSON" "${TEST_ROOT}/before-private.json"
+for variant in missing-anchor changed-host; do
+  invalid_template="${TEST_ROOT}/${variant}.Caddyfile"
+  case "$variant" in
+    missing-anchor)
+      sed '/# sub2api: preserve host-managed exact-path proxies/d' "$GOOD_TEMPLATE" >"$invalid_template"
+      error='retain host-managed proxy routes from the verified Caddy backup'
+      ;;
+    changed-host)
+      sed 's/api-proxy\.turtleligpt\.com/other.example.test/' "$GOOD_TEMPLATE" >"$invalid_template"
+      error='candidate Caddyfile changes host-managed proxy routes'
+      ;;
+  esac
+  failure_log="${TEST_ROOT}/${variant}.log"
+  if run_receiver "$invalid_template" "sha256:$(file_sha "$invalid_template")" "$failure_log"; then
+    fail "receiver accepted template with ${variant}"
+  fi
+  assert_contains "$failure_log" "$error"
+  assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" "${variant} host hash"
+  cmp -s "$HOST_CADDY" "$STARTUP_CADDY" || fail "${variant} changed startup Caddyfile"
+  cmp -s "$ACTIVE_JSON" "${TEST_ROOT}/before-private.json" || fail "${variant} changed active Caddy state"
+  [ ! -e "$TRANSACTION_PATH" ] || fail "${variant} published a transaction"
+  assert_not_contains "$DOCKER_LOG" 'caddy reload'
+done
+
+# A non-app upstream sharing a handler with the app is not independent, and
+# wildcard paths cannot be treated as a bounded exact-path exception.
+for variant in mixed-app-pool wildcard-path; do
+  reset_fixture blue 128MiB 134217728
+  case "$variant" in
+    mixed-app-pool) perl -0pi -e 's/reverse_proxy sub2api-blue:8080/reverse_proxy sub2api-blue:8080 ops-internal:9100/' "$HOST_CADDY" ;;
+    wildcard-path) add_independent_proxy "$HOST_CADDY" "${PRIVATE_PATH}*" "$PRIVATE_DIAL" ;;
+  esac
+  cp "$HOST_CADDY" "$STARTUP_CADDY"
+  "$FAKE_JSON" "$HOST_CADDY" /tmp/sub2api-release-sub2api-blue.Caddyfile >"$ACTIVE_JSON"
+  before_sha="$(file_sha "$HOST_CADDY")"
+  failure_log="${TEST_ROOT}/${variant}.log"
+  if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "$failure_log"; then
+    fail "receiver accepted ${variant} as an independent route"
+  fi
+  assert_contains "$failure_log" 'host Caddyfile does not uniquely select blue, green or legacy'
+  assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" "${variant} host hash"
+  [ ! -e "$TRANSACTION_PATH" ] || fail "${variant} published a transaction"
+  assert_not_contains "$DOCKER_LOG" 'caddy reload'
+done
+
+reset_fixture blue 128MiB 134217728
+injected_template="${TEST_ROOT}/new-private-route.Caddyfile"
+cp "$GOOD_TEMPLATE" "$injected_template"
+add_independent_proxy "$injected_template" "$PRIVATE_PATH" "$PRIVATE_DIAL"
+if run_receiver "$injected_template" "sha256:$(file_sha "$injected_template")" "${TEST_ROOT}/new-private-route.log"; then
+  fail 'receiver accepted a new private route from the uploaded template'
+fi
+assert_contains "${TEST_ROOT}/new-private-route.log" 'candidate Caddyfile changes host-managed proxy routes'
+[ ! -e "$TRANSACTION_PATH" ] || fail 'template-injected route published a transaction'
+assert_not_contains "$DOCKER_LOG" 'caddy reload'
+
 # The active green slot must be projected into the blue-only template, and a
 # successful release must preserve the host bind inode while all views converge.
 reset_fixture green 100MB 100000000
@@ -804,6 +922,9 @@ cmp -s "$ACTIVE_JSON" "${TEST_ROOT}/validate-before-active.json" || fail 'valida
 # A reload failure after both in-place writes is rolled back with a forced
 # reload; the retained transaction and backup make an interruption auditable.
 reset_fixture blue 100MB 100000000
+add_independent_proxy "$HOST_CADDY" "$PRIVATE_PATH" "$PRIVATE_DIAL"
+cp "$HOST_CADDY" "$STARTUP_CADDY"
+"$FAKE_JSON" "$HOST_CADDY" /tmp/sub2api-release-sub2api-blue.Caddyfile >"$ACTIVE_JSON"
 before_sha="$(file_sha "$HOST_CADDY")"
 cp "$ACTIVE_JSON" "${TEST_ROOT}/reload-before-active.json"
 touch "$FAIL_RELOAD"

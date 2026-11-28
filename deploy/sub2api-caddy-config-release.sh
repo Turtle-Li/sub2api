@@ -61,6 +61,7 @@ BEFORE_SHA=""
 AFTER_SHA=""
 BEFORE_SLOT=""
 BEFORE_CONFIG_SHA=""
+BEFORE_INDEPENDENT_PROXY_SHA=""
 AFTER_CONFIG_SHA=""
 COMPLETION_RECORD_CREATED=false
 
@@ -346,14 +347,15 @@ sync_caddy_startup_file() {
 }
 
 adapt_host_config() {
-  docker exec -i "$CADDY_CONTAINER" caddy adapt --config /dev/stdin --adapter caddyfile <"$CADDYFILE"
+  # Caddy can quote host-private directives in diagnostics; do not return them to CI.
+  docker exec -i "$CADDY_CONTAINER" caddy adapt --config /dev/stdin --adapter caddyfile <"$CADDYFILE" 2>/dev/null
 }
 
 adapt_startup_config() {
   docker exec \
     -e "SUB2API_CADDY_CONFIG_RELEASE_PATH=${CADDY_CONFIG_PATH}" \
     "$CADDY_CONTAINER" sh -ceu \
-    'caddy adapt --config "$SUB2API_CADDY_CONFIG_RELEASE_PATH" --adapter caddyfile'
+    'caddy adapt --config "$SUB2API_CADDY_CONFIG_RELEASE_PATH" --adapter caddyfile' 2>/dev/null
 }
 
 read_active_config() {
@@ -365,36 +367,103 @@ startup_file_sha() {
   docker exec "$CADDY_CONTAINER" sha256sum "$CADDY_CONFIG_PATH" | awk '{print $1}'
 }
 
-caddy_json_slot() {
+# Report the application slot and a private-route fingerprint, never route contents.
+caddy_json_proxy_facts() {
   printf '%s' "$1" | python3 -c '
+import hashlib
 import json
+import re
 import sys
 
 config = json.load(sys.stdin)
 if type(config) is not dict:
     raise SystemExit(1)
-dials = []
+api_host = sys.argv[1]
+slots = {"sub2api-blue:8080": "blue", "sub2api-green:8080": "green", "sub2api:8080": "legacy"}
+
 def walk(value):
     if type(value) is dict:
-        for key, child in value.items():
-            if key == "dial":
-                if type(child) is not str:
-                    raise SystemExit(1)
-                dials.append(child)
-            walk(child)
+        yield value
+        for child in value.values():
+            yield from walk(child)
     elif type(value) is list:
         for child in value:
-            walk(child)
-walk(config)
-if set(dials) == {"sub2api-blue:8080"}:
-    print("blue")
-elif set(dials) == {"sub2api-green:8080"}:
-    print("green")
-elif set(dials) == {"sub2api:8080"}:
-    print("legacy")
-else:
+            yield from walk(child)
+
+def subroutes(route):
+    handlers = route.get("handle", [])
+    if len(handlers) == 1 and set(handlers[0]) == {"handler", "routes"} and handlers[0]["handler"] == "subroute":
+        return handlers[0]["routes"]
+    return []
+
+def independent_proxies():
+    # The supported host-owned shape is a leading exact-path handle, in the
+    # same mutually exclusive group as the application catch-all, on the
+    # canonical API site. A foreign dial anywhere else remains an error.
+    sites = [(server, site)
+             for server in config.get("apps", {}).get("http", {}).get("servers", {}).values()
+             for site in server.get("routes", [])
+             if any(api_host in match.get("host", []) for match in site.get("match", []))]
+    if len(sites) != 1:
+        return
+    server, site = sites[0]
+    if site.get("terminal") is not True or len(site["match"]) != 1 or set(site["match"][0]) != {"host"}:
+        return
+    routes = subroutes(site)
+    first = next((index for index, route in enumerate(routes) if route.get("group")), len(routes))
+    if first == len(routes):
+        return
+    group = routes[first]["group"]
+    group_routes = [route for route in routes[first:] if route.get("group") == group]
+    fallback = group_routes[-1]
+    if "match" in fallback or not any(
+        node.get("handler") == "reverse_proxy" and any(up.get("dial") in slots for up in node.get("upstreams", []))
+        for node in walk(fallback)
+    ):
+        return
+
+    for route in routes[first:]:
+        if route.get("group") != group or set(route) != {"group", "handle", "match"}:
+            break
+        match = route["match"]
+        if len(match) != 1 or set(match[0]) != {"path"}:
+            break
+        paths = match[0]["path"]
+        if len(paths) != 1 or not re.fullmatch(r"/[A-Za-z0-9._/-]+", paths[0]):
+            break
+        nested = subroutes(route)
+        if len(nested) != 1 or set(nested[0]) != {"handle"} or len(nested[0]["handle"]) != 1:
+            break
+        proxy = nested[0]["handle"][0]
+        if proxy.get("handler") != "reverse_proxy" or set(proxy) != {"handler", "upstreams"}:
+            break
+        upstreams = proxy["upstreams"]
+        if len(upstreams) != 1 or set(upstreams[0]) != {"dial"}:
+            break
+        dial = upstreams[0]["dial"]
+        if type(dial) is not str or dial in slots or re.match(r"(?i)^sub2api(?:[-.:]|$)", dial):
+            break
+        # Bind the route to its listeners, host match, order and preceding
+        # handlers. Caddy-generated group names are not a routing identity.
+        scope = [server.get("listen"), sorted(site["match"][0]["host"]), routes[:first], paths, proxy]
+        yield upstreams[0], scope
+
+preserved = list(independent_proxies())
+independent_dials = {id(upstream) for upstream, _ in preserved}
+selected = set()
+for node in walk(config):
+    if node.get("handler") == "reverse_proxy" and ("dynamic_upstreams" in node or not node.get("upstreams")):
+        raise SystemExit(1)
+    if "dial" in node and id(node) not in independent_dials:
+        dial = node["dial"]
+        if type(dial) is not str or dial not in slots:
+            raise SystemExit(1)
+        selected.add(slots[dial])
+if len(selected) != 1:
     raise SystemExit(1)
-'
+encoded = json.dumps([scope for _, scope in preserved], sort_keys=True, separators=(",", ":")).encode()
+print(next(iter(selected)), hashlib.sha256(encoded).hexdigest() if preserved else "none")
+' "$CADDY_API_HOST"
 }
 
 verify_caddy_json_body_contract() {
@@ -549,17 +618,36 @@ PY
 }
 
 render_candidate() {
-  python3 - "$INPUT_PATH" "$CANDIDATE_PATH" "$BEFORE_SLOT" <<'PY'
+  python3 - "$INPUT_PATH" "$BACKUP_PATH" "$CANDIDATE_PATH" "$BEFORE_SLOT" "$BEFORE_INDEPENDENT_PROXY_SHA" <<'PY'
+import re
 import sys
 
-source_path, candidate_path, slot = sys.argv[1:]
+source_path, backup_path, candidate_path, slot, independent_proxy_sha = sys.argv[1:]
 source = open(source_path, "rb").read()
 expected = b"sub2api-blue:8080"
 replacement = ("sub2api:8080" if slot == "legacy" else "sub2api-{}:8080".format(slot)).encode("ascii")
 if expected not in source or b"sub2api-green" in source:
     raise SystemExit(1)
+source = source.replace(expected, replacement)
+
+if independent_proxy_sha != "none":
+    # Copy only plain exact-path blocks from the protected, verified backup.
+    # Adaptation and the before/after fingerprint enforce their effective scope.
+    block = re.compile(
+        rb"(?m)^[ \t]*handle[ \t]+/[A-Za-z0-9._/-]+[ \t]+\{[ \t]*\r?\n"
+        rb"[ \t]*reverse_proxy[ \t]+([^ \t\r\n{}#]+)[ \t]*\r?\n"
+        rb"[ \t]*\}[ \t]*\r?\n"
+    )
+    old = open(backup_path, "rb").read()
+    app_dials = {b"sub2api-blue:8080", b"sub2api-green:8080", b"sub2api:8080"}
+    blocks = [match[0] for match in block.finditer(old) if match[1] not in app_dials]
+    anchor = re.compile(rb"(?m)^[ \t]*# sub2api: preserve host-managed exact-path proxies[ \t]*\r?\n")
+    if not blocks or len(anchor.findall(source)) != 1:
+        raise SystemExit(1)
+    source = anchor.sub(lambda match: match[0] + b"".join(blocks), source, count=1)
+
 with open(candidate_path, "wb") as destination:
-    destination.write(source.replace(expected, replacement))
+    destination.write(source)
 PY
 }
 
@@ -592,15 +680,18 @@ if any(values != [expected[key]] for key, values in found.items()):
 }
 
 assert_current_views() {
-  local host_json startup_json active_json host_slot startup_slot active_slot host_config startup_config active_config
+  local host_json startup_json active_json host_facts startup_facts active_facts host_slot active_slot
+  local host_config startup_config active_config
 
   host_json="$(adapt_host_config)" || die 'could not adapt host Caddyfile'
   startup_json="$(adapt_startup_config)" || die 'could not adapt Caddy startup configuration'
   active_json="$(read_active_config)" || die 'could not read active Caddy Admin configuration'
-  host_slot="$(caddy_json_slot "$host_json")" || die 'host Caddyfile does not uniquely select blue, green or legacy'
-  startup_slot="$(caddy_json_slot "$startup_json")" || die 'startup Caddyfile does not uniquely select blue, green or legacy'
-  active_slot="$(caddy_json_slot "$active_json")" || die 'active Caddy configuration does not uniquely select blue, green or legacy'
-  [ "$host_slot" = "$startup_slot" ] && [ "$host_slot" = "$active_slot" ] \
+  host_facts="$(caddy_json_proxy_facts "$host_json")" || die 'host Caddyfile does not uniquely select blue, green or legacy'
+  startup_facts="$(caddy_json_proxy_facts "$startup_json")" || die 'startup Caddyfile does not uniquely select blue, green or legacy'
+  active_facts="$(caddy_json_proxy_facts "$active_json")" || die 'active Caddy configuration does not uniquely select blue, green or legacy'
+  host_slot="${host_facts%% *}"
+  active_slot="${active_facts%% *}"
+  [ "$host_slot" = "${startup_facts%% *}" ] && [ "$host_slot" = "$active_slot" ] \
     || die 'host, startup, and active Caddy views do not select the same slot'
   host_config="$(caddy_json_sha "$host_json" /dev/stdin)" || die 'host Caddy JSON is invalid'
   startup_config="$(caddy_json_sha "$startup_json" "$CADDY_CONFIG_PATH")" || die 'startup Caddy JSON is invalid'
@@ -608,21 +699,26 @@ assert_current_views() {
   [ "$host_config" = "$startup_config" ] && [ "$host_config" = "$active_config" ] \
     || die 'host, startup, and active Caddy configuration SHA-256 values diverge'
   BEFORE_SLOT="$host_slot"
+  BEFORE_INDEPENDENT_PROXY_SHA="${host_facts#* }"
   BEFORE_CONFIG_SHA="$host_config"
 }
 
 verify_converged_views() {
   local expected_sha="$1" expected_slot="$2" expected_config="$3" require_body_contract="$4"
   local host_json startup_json active_json host_config startup_config active_config
+  local host_facts startup_facts active_facts
 
   [ "$(file_sha "$CADDYFILE")" = "$expected_sha" ] || return 1
   [ "$(startup_file_sha)" = "$expected_sha" ] || return 1
   host_json="$(adapt_host_config)" || return 1
   startup_json="$(adapt_startup_config)" || return 1
   active_json="$(read_active_config)" || return 1
-  [ "$(caddy_json_slot "$host_json")" = "$expected_slot" ] || return 1
-  [ "$(caddy_json_slot "$startup_json")" = "$expected_slot" ] || return 1
-  [ "$(caddy_json_slot "$active_json")" = "$expected_slot" ] || return 1
+  host_facts="$(caddy_json_proxy_facts "$host_json")" || return 1
+  startup_facts="$(caddy_json_proxy_facts "$startup_json")" || return 1
+  active_facts="$(caddy_json_proxy_facts "$active_json")" || return 1
+  [ "${host_facts%% *}" = "$expected_slot" ] \
+    && [ "${startup_facts%% *}" = "$expected_slot" ] \
+    && [ "${active_facts%% *}" = "$expected_slot" ] || return 1
   if [ "$require_body_contract" = true ]; then
     verify_caddy_json_body_contract "$host_json" \
       && verify_caddy_json_body_contract "$startup_json" \
@@ -789,9 +885,9 @@ rollback_previous_configuration() {
     result=1
   fi
   docker cp "$BACKUP_PATH" "${CADDY_CONTAINER}:${CONTAINER_ROLLBACK_PATH}" >/dev/null || result=1
-  docker exec "$CADDY_CONTAINER" caddy validate --config "$CONTAINER_ROLLBACK_PATH" --adapter caddyfile >/dev/null \
+  docker exec "$CADDY_CONTAINER" caddy validate --config "$CONTAINER_ROLLBACK_PATH" --adapter caddyfile >/dev/null 2>&1 \
     || result=1
-  docker exec "$CADDY_CONTAINER" caddy reload --force --config "$CONTAINER_ROLLBACK_PATH" --adapter caddyfile >/dev/null \
+  docker exec "$CADDY_CONTAINER" caddy reload --force --config "$CONTAINER_ROLLBACK_PATH" --adapter caddyfile >/dev/null 2>&1 \
     || result=1
   verify_converged_views "$BEFORE_SHA" "$BEFORE_SLOT" "$BEFORE_CONFIG_SHA" false \
     || result=1
@@ -938,7 +1034,7 @@ cp "$CADDYFILE" "$BACKUP_PATH" || die 'could not capture the Caddy rollback back
 chmod 0600 "$BACKUP_PATH" "$CANDIDATE_PATH" || die 'could not protect Caddy release artifacts'
 [ "$(file_sha "$BACKUP_PATH")" = "$BEFORE_SHA" ] \
   || die 'host Caddyfile changed while its backup was captured'
-render_candidate || die 'could not project the Caddy template onto the active slot'
+render_candidate || die 'could not project the active slot and retain host-managed proxy routes from the verified Caddy backup'
 verify_source_contract "$CANDIDATE_PATH" "$BEFORE_SLOT" projected \
   || die 'projected Caddyfile does not have the required 128 MiB Caddy contract'
 AFTER_SHA="$(file_sha "$CANDIDATE_PATH")" || die 'could not calculate projected Caddyfile digest'
@@ -949,12 +1045,16 @@ CONTAINER_CANDIDATE_PATH="/tmp/sub2api-caddy-config-release-${COMMIT}-${$}.Caddy
 CONTAINER_ROLLBACK_PATH="/tmp/sub2api-caddy-config-rollback-${COMMIT}-${$}.Caddyfile"
 docker cp "$CANDIDATE_PATH" "${CADDY_CONTAINER}:${CONTAINER_CANDIDATE_PATH}" >/dev/null \
   || die 'could not copy candidate Caddyfile into the Caddy container'
-docker exec "$CADDY_CONTAINER" caddy validate --config "$CONTAINER_CANDIDATE_PATH" --adapter caddyfile >/dev/null \
+docker exec "$CADDY_CONTAINER" caddy validate --config "$CONTAINER_CANDIDATE_PATH" --adapter caddyfile >/dev/null 2>&1 \
   || die 'Caddy candidate validation failed before any live mutation'
-candidate_json="$(docker exec "$CADDY_CONTAINER" caddy adapt --config "$CONTAINER_CANDIDATE_PATH" --adapter caddyfile)" \
+candidate_json="$(docker exec "$CADDY_CONTAINER" caddy adapt --config "$CONTAINER_CANDIDATE_PATH" --adapter caddyfile 2>/dev/null)" \
   || die 'could not adapt candidate Caddyfile'
-[ "$(caddy_json_slot "$candidate_json")" = "$BEFORE_SLOT" ] \
+candidate_facts="$(caddy_json_proxy_facts "$candidate_json")" \
   || die 'candidate Caddyfile does not uniquely select the active slot'
+[ "${candidate_facts%% *}" = "$BEFORE_SLOT" ] \
+  || die 'candidate Caddyfile does not uniquely select the active slot'
+[ "${candidate_facts#* }" = "$BEFORE_INDEPENDENT_PROXY_SHA" ] \
+  || die 'candidate Caddyfile changes host-managed proxy routes'
 verify_caddy_json_body_contract "$candidate_json" \
   || die 'candidate Caddy JSON does not enforce the exact 128 MiB body contract'
 AFTER_CONFIG_SHA="$(caddy_json_sha "$candidate_json" "$CONTAINER_CANDIDATE_PATH")" \
@@ -968,7 +1068,7 @@ write_file_preserving_inode "$CANDIDATE_PATH" "$CADDYFILE" \
 sync_caddy_startup_file \
   || die 'could not synchronize the Caddy startup bind'
 write_transaction reload-attempted || die 'could not record the Caddy reload attempt'
-docker exec "$CADDY_CONTAINER" caddy reload --force --config "$CADDY_CONFIG_PATH" --adapter caddyfile >/dev/null \
+docker exec "$CADDY_CONTAINER" caddy reload --force --config "$CADDY_CONFIG_PATH" --adapter caddyfile >/dev/null 2>&1 \
   || die 'Caddy reload failed'
 verify_converged_views "$AFTER_SHA" "$BEFORE_SLOT" "$AFTER_CONFIG_SHA" true \
   || die 'host, startup, and active Caddy views did not converge after reload'
