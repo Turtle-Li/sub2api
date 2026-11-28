@@ -181,7 +181,7 @@ describe('automatic day-pass surfaces', () => {
     api.order.mockResolvedValueOnce({ data: { ...order(), product: daypass, fulfillment_status: 'COMPLETED', payment_status: 'COMPLETED', can_submit: false, delivery_content: 'API Key: sk-fictional-daypass' } })
     await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')
     await flushPromises()
-    expect(wrapper.get('#usage-guide').text()).toContain('https://ds.turtleligpt.com/v1')
+    expect(wrapper.get('#usage-guide').text()).toContain('https://ds.turtleligpt.com:24443/v1')
     expect(wrapper.find('a[to^="/shop/help/"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('sk-fictional-daypass')
     expect(wrapper.text()).toContain('API Key 已交付')
@@ -199,7 +199,7 @@ describe('automatic day-pass surfaces', () => {
   it('renders working API guide anchors and the formal endpoint without account login steps', () => {
     const wrapper = mount(ShopGuideContent, { props: { guideKey: 'deepseek-daypass' } })
     const article = wrapper.get('article')
-    expect(article.text()).toContain('https://ds.turtleligpt.com/v1')
+    expect(article.text()).toContain('https://ds.turtleligpt.com:24443/v1')
     expect(article.text()).toContain('deepseek-v4.1-flash')
     expect(article.text()).toContain('deepseek-v4-pro')
     expect(article.text()).toContain('北京时间（UTC+8）')

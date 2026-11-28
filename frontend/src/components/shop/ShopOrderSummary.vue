@@ -2,6 +2,7 @@
 import { shopStatusLabels, shopDuration, shopNotificationLabels, shopAutomationLabels, type ShopOrderDetail } from '@/types/shop'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import { skuLabel } from '@/utils/shopSku'
+import { shopBeijingDateTime } from '@/components/shop/shopDateTime'
 withDefaults(defineProps<{ order: ShopOrderDetail; showNotification?: boolean }>(), { showNotification: true })
 </script>
 <template>
@@ -27,10 +28,10 @@ withDefaults(defineProps<{ order: ShopOrderDetail; showNotification?: boolean }>
       <summary class="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-md text-xs font-medium text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400"><span>订单信息 · #{{ order.order_id }}</span><span aria-hidden="true">＋</span></summary>
       <dl class="grid grid-cols-2 gap-x-5 gap-y-4 pb-2 text-xs leading-5">
         <div class="col-span-2 min-w-0"><dt class="text-gray-500 dark:text-gray-400">交易号</dt><dd class="mt-1 break-all font-mono text-gray-700 dark:text-gray-300">{{ order.out_trade_no }}</dd></div>
-        <div><dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ new Date(order.created_at).toLocaleString() }}</dd></div>
-        <div v-if="order.paid_at"><dt class="text-gray-500 dark:text-gray-400">付款时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ new Date(order.paid_at).toLocaleString() }}</dd></div>
-        <div v-if="order.input_submitted_at"><dt class="text-gray-500 dark:text-gray-400">资料提交时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ new Date(order.input_submitted_at).toLocaleString() }}</dd></div>
-        <div v-if="order.completed_at"><dt class="text-gray-500 dark:text-gray-400">完成时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ new Date(order.completed_at).toLocaleString() }}</dd></div>
+        <div><dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ shopBeijingDateTime(order.created_at) }}</dd></div>
+        <div v-if="order.paid_at"><dt class="text-gray-500 dark:text-gray-400">付款时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ shopBeijingDateTime(order.paid_at) }}</dd></div>
+        <div v-if="order.input_submitted_at"><dt class="text-gray-500 dark:text-gray-400">资料提交时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ shopBeijingDateTime(order.input_submitted_at) }}</dd></div>
+        <div v-if="order.completed_at"><dt class="text-gray-500 dark:text-gray-400">完成时间</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ shopBeijingDateTime(order.completed_at) }}</dd></div>
         <div v-if="showNotification && order.fulfillment_status !== 'COMPLETED'"><dt class="text-gray-500 dark:text-gray-400">邮件通知</dt><dd class="mt-1 text-gray-700 dark:text-gray-300">{{ shopNotificationLabels[order.email_status] }}</dd></div>
       </dl>
     </details>

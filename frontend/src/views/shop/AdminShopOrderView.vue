@@ -11,6 +11,7 @@ import { useStepUp, isStepUpCancelled } from '@/composables/useStepUp'
 import { shopAPI } from '@/api/shop'
 import { shopDeliveryLabel, shopNotificationLabels, type ShopAction, type ShopOrderDetail } from '@/types/shop'
 import { parseShopAccountDelivery } from '@/utils/shopAccountDelivery'
+import { shopBeijingDateTime } from '@/components/shop/shopDateTime'
 const route = useRoute()
 const stepUp = useStepUp()
 const order = ref<ShopOrderDetail | null>(null)
@@ -120,9 +121,9 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
                 <dt class="text-gray-500 dark:text-gray-400">用户 ID</dt><dd class="break-all text-gray-800 dark:text-gray-200">{{ order.user_id }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">买家邮箱</dt><dd class="break-all text-gray-800 dark:text-gray-200">{{ order.user_email || '未提供' }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">履约模式</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopDeliveryLabel(order.product) }}</dd>
-                <dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ new Date(order.created_at).toLocaleString('zh-CN') }}</dd>
-                <dt v-if="order.paid_at" class="text-gray-500 dark:text-gray-400">付款时间</dt><dd v-if="order.paid_at" class="text-gray-800 dark:text-gray-200">{{ new Date(order.paid_at).toLocaleString('zh-CN') }}</dd>
-                <dt v-if="order.completed_at" class="text-gray-500 dark:text-gray-400">完成时间</dt><dd v-if="order.completed_at" class="text-gray-800 dark:text-gray-200">{{ new Date(order.completed_at).toLocaleString('zh-CN') }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopBeijingDateTime(order.created_at) }}</dd>
+                <dt v-if="order.paid_at" class="text-gray-500 dark:text-gray-400">付款时间</dt><dd v-if="order.paid_at" class="text-gray-800 dark:text-gray-200">{{ shopBeijingDateTime(order.paid_at) }}</dd>
+                <dt v-if="order.completed_at" class="text-gray-500 dark:text-gray-400">完成时间</dt><dd v-if="order.completed_at" class="text-gray-800 dark:text-gray-200">{{ shopBeijingDateTime(order.completed_at) }}</dd>
               </dl>
               </section>
             </details>
@@ -133,7 +134,7 @@ onBeforeUnmount(() => { generation++; delivery.value = ''; note.value = ''; orde
               </div>
               <dl class="mt-4 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
                 <dt class="text-gray-500 dark:text-gray-400">目标账号</dt><dd class="break-all font-medium text-gray-900 dark:text-gray-100">{{ order.input_account || '尚未识别' }}</dd>
-                <dt class="text-gray-500 dark:text-gray-400">提交时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ order.input_submitted_at ? new Date(order.input_submitted_at).toLocaleString('zh-CN') : '尚未提交' }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">提交时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ order.input_submitted_at ? shopBeijingDateTime(order.input_submitted_at) : '尚未提交' }}</dd>
               </dl>
               <div class="mt-4"><ShopSessionCheck v-if="order.input_check" :check="order.input_check" /><p v-else class="rounded-lg bg-gray-50 p-3 text-sm text-gray-600 dark:bg-gray-950 dark:text-gray-300">暂无初步检查结果。</p></div>
               <p v-if="order.can_start" class="mt-4 text-xs leading-5 text-gray-500 dark:text-gray-400">执行代充前先开始处理，锁定买家已提交的资料。</p>

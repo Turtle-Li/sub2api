@@ -4,6 +4,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import { shopAPI } from '@/api/shop'
 import { shopStatusLabels, type ShopOrderDetail } from '@/types/shop'
+import { shopBeijingDateTime } from '@/components/shop/shopDateTime'
 const orders = ref<ShopOrderDetail[]>([])
 const status = ref('')
 const page = ref(1)
@@ -93,7 +94,7 @@ watch(page, load, { immediate: true })
                     <p class="font-medium text-gray-800 dark:text-gray-200">#{{ order.order_id }}</p>
                     <p class="mt-1 max-w-36 truncate text-xs text-gray-500 dark:text-gray-400" :title="order.out_trade_no">{{ order.out_trade_no }}</p>
                   </td>
-                  <td class="px-3 py-3.5 text-xs leading-5 text-gray-600 dark:text-gray-300">{{ new Date(order.created_at).toLocaleString('zh-CN') }}</td>
+                  <td class="px-3 py-3.5 text-xs leading-5 text-gray-600 dark:text-gray-300">{{ shopBeijingDateTime(order.created_at) }}</td>
                   <td class="px-3 py-3.5 font-medium text-gray-900 dark:text-gray-100">¥{{ order.pay_amount.toFixed(2) }}</td>
                   <td class="whitespace-nowrap px-3 py-3.5"><OrderStatusBadge :status="order.payment_status" /></td>
                   <td class="px-3 py-3.5">
@@ -118,7 +119,7 @@ watch(page, load, { immediate: true })
               </div>
               <dl class="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
                 <dt class="text-gray-500 dark:text-gray-400">买家</dt><dd class="min-w-0 break-all text-gray-800 dark:text-gray-200">{{ order.user_email || `用户 #${order.user_id}` }}</dd>
-                <dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ new Date(order.created_at).toLocaleString('zh-CN') }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">创建时间</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopBeijingDateTime(order.created_at) }}</dd>
                 <dt class="text-gray-500 dark:text-gray-400">支付状态</dt><dd><OrderStatusBadge :status="order.payment_status" /></dd>
                 <dt class="text-gray-500 dark:text-gray-400">履约状态</dt><dd class="text-gray-800 dark:text-gray-200">{{ shopStatusLabels[order.fulfillment_status] }}</dd>
               </dl>

@@ -75,7 +75,7 @@ apiClient.defaults.adapter = async config => {
       revision: completed ? 3 : 2, input_revision: 0, input_account: '', created_at: stamp, paid_at: stamp, status_note: '',
       email_status: 'NOT_SENT', admin_notification_status: 'SENT', can_submit: false, can_start: false,
       can_complete: false, can_reveal_input: false, delivery_kind: 'text',
-      delivery_content: completed ? manual ? 'synthetic@example.invalid----synthetic-password' : 'DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com/v1\nAPI Key：sk-synthetic-preview-only\n有效期：1天（自付款起算）' : '',
+      delivery_content: completed ? manual ? 'synthetic@example.invalid----synthetic-password' : 'DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com:24443/v1\nAPI Key：sk-synthetic-preview-only\n有效期：1天（自付款起算）' : '',
       automation: manual ? undefined : { status: review ? 'REVIEW_REQUIRED' : completed ? 'SUCCEEDED' : 'RUNNING', result_kind: 'text' },
       daypass_checkout: id === 1284 ? { action: 'new' } : undefined,
     } satisfies ShopOrderDetail

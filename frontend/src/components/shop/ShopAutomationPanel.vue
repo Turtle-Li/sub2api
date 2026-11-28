@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { shopAutomationLabels, type ShopAutomationStatus } from '@/types/shop'
+import { shopBeijingDateTime } from '@/components/shop/shopDateTime'
 defineProps<{ automation: ShopAutomationStatus; busy: boolean }>()
 defineEmits<{ retry: []; revoke: [] }>()
 </script>
@@ -9,7 +10,7 @@ defineEmits<{ retry: []; revoke: [] }>()
     <p class="mt-2 text-sm font-medium text-gray-800 dark:text-gray-200">{{ shopAutomationLabels[automation.status] }}</p>
     <dl class="mt-4 space-y-2 text-sm">
       <div class="flex justify-between gap-3"><dt class="text-gray-500 dark:text-gray-400">已尝试</dt><dd class="text-gray-900 dark:text-gray-100">{{ automation.attempts ?? 0 }} 次</dd></div>
-      <div v-if="automation.next_attempt_at && automation.status === 'PENDING'" class="flex flex-col gap-1"><dt class="text-gray-500 dark:text-gray-400">下次尝试</dt><dd class="text-gray-900 dark:text-gray-100">{{ new Date(automation.next_attempt_at).toLocaleString('zh-CN') }}</dd></div>
+      <div v-if="automation.next_attempt_at && automation.status === 'PENDING'" class="flex flex-col gap-1"><dt class="text-gray-500 dark:text-gray-400">下次尝试</dt><dd class="text-gray-900 dark:text-gray-100">{{ shopBeijingDateTime(automation.next_attempt_at) }}</dd></div>
       <div v-if="automation.error_kind" class="flex flex-col gap-1"><dt class="text-gray-500 dark:text-gray-400">待处理原因</dt><dd class="break-all text-gray-900 dark:text-gray-100">{{ automation.error_kind }}</dd></div>
     </dl>
     <p v-if="automation.revoke_required" class="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:bg-amber-950 dark:text-amber-200">退款前请先撤销此订单的授权，并确认状态为“授权已撤销”。撤销不会自动退款。</p>

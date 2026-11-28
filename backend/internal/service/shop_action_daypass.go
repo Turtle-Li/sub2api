@@ -68,9 +68,9 @@ func (a *shopDaypassAdapter) Execute(ctx context.Context, r shopaction.Request) 
 	if !validShopDaypassGrant(binding, grant, int64(sku.Duration)) || grant.TokenID <= 0 || grant.Key == "" {
 		return result, &shopaction.Failure{Kind: "RESULT_INVALID"}
 	}
-	content := fmt.Sprintf("DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com/v1\nAPI Key：%s\n有效期：%d 天（自付款起算）\n%s\n模型：DeepSeek 系列（以 /v1/models 为准）\n%d并发；同一Key同时只能使用同一IP，停止调用15分钟后可切换网络。", grant.Key, sku.selection().DurationDays, shopDeliveryExpiry(time.Unix(grant.ExpiresAt, 0)), sku.Concurrency)
+	content := fmt.Sprintf("DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com:24443/v1\nAPI Key：%s\n有效期：%d 天（自付款起算）\n%s\n模型：DeepSeek 系列（以 /v1/models 为准）\n%d并发；同一Key同时只能使用同一IP，停止调用15分钟后可切换网络。", grant.Key, sku.selection().DurationDays, shopDeliveryExpiry(time.Unix(grant.ExpiresAt, 0)), sku.Concurrency)
 	if a.buyer != nil {
-		content = fmt.Sprintf("DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com/v1\nAPI Key：%s\n本单时长：%d 天\n本单生效：%s（北京时间 UTC+8）\n%s\n本单档位：%d 并发。后续续费继续使用这把 Key。\n模型：DeepSeek 系列（以 /v1/models 为准）", grant.Key, sku.selection().DurationDays,
+		content = fmt.Sprintf("DeepSeek API 不限量订阅卡\nBase URL：https://ds.turtleligpt.com:24443/v1\nAPI Key：%s\n本单时长：%d 天\n本单生效：%s（北京时间 UTC+8）\n%s\n本单档位：%d 并发。后续续费继续使用这把 Key。\n模型：DeepSeek 系列（以 /v1/models 为准）", grant.Key, sku.selection().DurationDays,
 			time.Unix(grant.StartsAt, 0).In(shopDeliveryBeijing).Format(shopDeliveryTimeLayout), shopDeliveryExpiry(time.Unix(grant.ExpiresAt, 0)), sku.Concurrency)
 	}
 	return shopaction.Result{Version: 1, ActionID: r.ActionID, OrderID: r.Order.ID, Status: "completed", ReceiptID: strconv.Itoa(grant.TokenID), Delivery: shopaction.Delivery{Kind: "text", Content: content}}, nil
